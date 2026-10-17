@@ -77,6 +77,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlin.math.roundToInt
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -176,7 +177,14 @@ class DescribeViewModel @Inject constructor(
         val mine = ++attempt
         _phase.value = DescribePhase.Estimating
         viewModelScope.launch {
-            val result = ai.estimate(description, origin.value, clarification)
+            val result = try {
+                ai.estimate(description, origin.value, clarification)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Whatever went wrong, the description is kept.
+                EstimateResult.Failed(AiStatus.UNEXPECTED, requestId = null)
+            }
             if (mine != attempt) return@launch
             when (result) {
                 is EstimateResult.Estimated -> _phase.value = DescribePhase.Review(

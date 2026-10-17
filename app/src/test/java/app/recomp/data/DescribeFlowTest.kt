@@ -107,6 +107,16 @@ class DescribeFlowTest {
     }
 
     @Test
+    fun `an estimate that throws still keeps the description as a draft`() = runBlocking {
+        app.estimator.next = { throw IllegalStateException("boom") }
+        val vm = viewModel()
+        vm.setText("2 phulka")
+        vm.estimate()
+        eventually { vm.outcome.value }
+        assertEquals(AiStatus.UNEXPECTED, drafts().single().reason)
+    }
+
+    @Test
     fun `Cancel goes back to the text and keeps nothing, but the request is still logged`() = runBlocking {
         val hold = CompletableDeferred<Unit>()
         app.estimator.hold = hold

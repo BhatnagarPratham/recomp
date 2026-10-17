@@ -26,6 +26,7 @@ object AiText {
         AiStatus.BAD_REQUEST -> "Claude couldn't take this request"
         AiStatus.TIMEOUT -> "Claude didn't answer in time"
         AiStatus.NETWORK -> "Couldn't reach Claude"
+        AiStatus.UNEXPECTED -> "Something went wrong sending it"
     }
 
     /** Why Describe it can't estimate right now, or null when it can (PRD §7.7 *Not ready*). */

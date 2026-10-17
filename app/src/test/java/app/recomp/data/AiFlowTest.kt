@@ -1,5 +1,6 @@
 package app.recomp.data
 
+import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.CustomFood
 import app.recomp.data.repo.EstimateResult
@@ -147,7 +148,7 @@ class AiFlowTest {
             app.estimator.next = { FakeEstimator.reply(status, attempts = attempts) }
             val result = ai.estimate("dal", Origin.HOME)
             assertTrue("$status", result is EstimateResult.Failed && result.status == status)
-            val row = ai.request((result as EstimateResult.Failed).requestId)!!
+            val row = ai.request((result as EstimateResult.Failed).requestId!!)!!
             assertEquals(status, row.status)
             assertEquals(1_234L, row.latencyMs)
         }
@@ -162,7 +163,7 @@ class AiFlowTest {
         app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item(grams = 0.0), item(name = "Salad", grams = -1.0))) }
         val result = ai.estimate("salad", Origin.HOME)
         assertTrue(result is EstimateResult.Failed && result.status == AiStatus.INVALID)
-        assertEquals(AiStatus.INVALID, ai.request((result as EstimateResult.Failed).requestId)!!.status)
+        assertEquals(AiStatus.INVALID, ai.request((result as EstimateResult.Failed).requestId!!)!!.status)
     }
 
     @Test
@@ -335,6 +336,31 @@ class AiFlowTest {
         } catch (e: IllegalArgumentException) {
             // expected
         }
+    }
+
+    @Test
+    fun `a key with anything but printable ASCII is refused`() = runBlocking {
+        // A zero-width space, a BOM, an en dash, a space, an accent: OkHttp would reject any of them in the request
+        // header, with the whole key in its error message.
+        listOf("test\u200Bkey", "\uFEFFtest-key", "test\u2013key", "test key", "t\u00E9st-key", " ").forEach { bad ->
+            try {
+                ai.saveKey(bad)
+                throw AssertionError("saved a key with ${bad.map { it.code }}")
+            } catch (e: IllegalArgumentException) {
+                // expected
+            }
+        }
+        assertFalse(app.keys.hasKey.first())
+        assertTrue(AiKeyStore.looksLikeKey("test-KEY_09.~"))
+    }
+
+    @Test
+    fun `an estimator that throws comes back as a logged failure, never an exception`() = runBlocking {
+        ready()
+        app.estimator.next = { throw IllegalStateException("not the key") }
+        val result = ai.estimate("dal", Origin.HOME)
+        assertTrue(result is EstimateResult.Failed && result.status == AiStatus.UNEXPECTED)
+        assertEquals(AiStatus.UNEXPECTED, ai.request((result as EstimateResult.Failed).requestId!!)!!.status)
     }
 
     @Test

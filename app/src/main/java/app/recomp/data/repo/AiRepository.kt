@@ -17,6 +17,7 @@ import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.CheckedMeal
 import app.recomp.domain.ai.Clarification
+import app.recomp.domain.ai.EstimatorReply
 import app.recomp.domain.ai.MealCheck
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealPrompt
@@ -48,7 +49,7 @@ data class AiSpend(val month: LocalDate, val costUsd: Double, val requests: Int)
 sealed interface EstimateResult {
     data class Estimated(val meal: CheckedMeal, val requestId: Long) : EstimateResult
     data class NotReady(val state: AiState) : EstimateResult
-    data class Failed(val status: AiStatus, val requestId: Long) : EstimateResult
+    data class Failed(val status: AiStatus, val requestId: Long?) : EstimateResult
 }
 
 /**
@@ -101,7 +102,12 @@ class AiRepository @Inject constructor(
         if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
         val key = keys.key() ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY)
         val model = prefs.ai.first().model
-        val reply = estimator.estimate(MealRequest(key, model, systemPrompt(), MealPrompt.user(text, origin, clarification)))
+        val reply = try {
+            estimator.estimate(MealRequest(key, model, systemPrompt(), MealPrompt.user(text, origin, clarification)))
+        } catch (e: Exception) {
+            // The estimator returns its failures; anything thrown is a bug, which still mustn't lose the description.
+            EstimatorReply(AiStatus.UNEXPECTED, null, model.id, emptyList(), latencyMs = 0, responseText = null, detail = e.javaClass.simpleName)
+        }
         val checked = reply.estimate?.takeIf { reply.status == AiStatus.OK }?.let(MealCheck::check)
         val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty()) AiStatus.INVALID else reply.status
         val id = aiDao.insertRequest(

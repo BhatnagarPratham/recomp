@@ -225,6 +225,16 @@ class ClaudeMealEstimatorTest {
     }
 
     @Test
+    fun `a key OkHttp can't put in a header fails quietly, without the key in what's kept`() = runBlocking {
+        server.enqueue(message())
+        val r = estimator.estimate(MealRequest("test\u200Bkey", AiModel.OPUS_5_5, "SYSTEM PROMPT", "Meal: dal"))
+        assertEquals(AiStatus.UNEXPECTED, r.status)
+        assertEquals(0, server.requestCount)
+        assertFalse(r.toString().contains("test"))
+        assertTrue(r.attempts.isEmpty())
+    }
+
+    @Test
     fun `the default timeout is 20 seconds`() {
         assertEquals(Duration.ofSeconds(20), ClaudeMealEstimator.TIMEOUT)
         assertEquals(AiStatus.BILLING, ClaudeMealEstimator.statusFor(402))

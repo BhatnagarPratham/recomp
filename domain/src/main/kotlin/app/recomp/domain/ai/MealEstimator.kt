@@ -16,6 +16,9 @@ enum class AiStatus {
     BAD_REQUEST,
     TIMEOUT,
     NETWORK,
+
+    /** Anything else that went wrong sending the request; only the exception's class name is kept. */
+    UNEXPECTED,
 }
 
 /**

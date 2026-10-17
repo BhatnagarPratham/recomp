@@ -78,7 +78,7 @@ class AiKeyStore @Inject constructor(
 
     suspend fun save(apiKey: String) {
         val trimmed = apiKey.trim()
-        require(trimmed.isNotEmpty() && trimmed.none(Char::isWhitespace)) { "Not an API key" }
+        require(looksLikeKey(trimmed)) { "Not an API key" }
         val sealed = withContext(Dispatchers.IO) { cipher.encrypt(trimmed.toByteArray(Charsets.UTF_8), AD) }
         store.edit { it[KEY] = Base64.encodeToString(sealed, Base64.NO_WRAP) }
     }
@@ -87,14 +87,23 @@ class AiKeyStore @Inject constructor(
         store.edit { it.remove(KEY) }
     }
 
+    /** A stored key that no longer decrypts, or that a build before this check let through, reads as no key. */
     private fun decryptOrNull(stored: String): String? = runCatching {
         String(cipher.decrypt(Base64.decode(stored, Base64.NO_WRAP), AD), Charsets.UTF_8)
-    }.getOrNull()?.takeIf { it.isNotEmpty() }
+    }.getOrNull()?.takeIf(::looksLikeKey)
 
-    private companion object {
-        val KEY = stringPreferencesKey("anthropic_api_key")
+    companion object {
+        private val KEY = stringPreferencesKey("anthropic_api_key")
+
+        /**
+         * Printable ASCII with no spaces, which is all an API key is made of. Anything else, such as a zero-width
+         * space, a BOM or an en dash picked up in a copy, would make OkHttp reject the request header with the
+         * whole key in its error message.
+         */
+        fun looksLikeKey(key: String): Boolean = key.isNotEmpty() && key.all { it in '!'..'~' }
+
 
         /** Binds the ciphertext to what it is, so it can't be swapped in for another secret. */
-        val AD = "recomp:anthropic_api_key".toByteArray(Charsets.UTF_8)
+        private val AD = "recomp:anthropic_api_key".toByteArray(Charsets.UTF_8)
     }
 }

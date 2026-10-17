@@ -8,6 +8,7 @@ import app.recomp.domain.ai.MealEstimate
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealRequest
 import app.recomp.domain.ai.TokenUsage
+import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
 import com.anthropic.errors.AnthropicException
@@ -30,6 +31,7 @@ import java.io.InterruptedIOException
 import java.time.Duration
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -133,13 +135,14 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
         fun failure(status: AiStatus, e: Throwable) =
             EstimatorReply(status, null, request.model.id, emptyList(), elapsedMs(), responseText = null, detail = e.javaClass.simpleName)
 
-        val client = AnthropicOkHttpClient.builder()
-            .apiKey(request.apiKey)
-            .timeout(timeout)
-            .maxRetries(1)
-            .apply { baseUrl?.let { baseUrl(it) } }
-            .build()
+        var client: AnthropicClient? = null
         try {
+            client = AnthropicOkHttpClient.builder()
+                .apiKey(request.apiKey)
+                .timeout(timeout)
+                .maxRetries(1)
+                .apply { baseUrl?.let { baseUrl(it) } }
+                .build()
             reply(client.beta().messages().create(params(request)), request, elapsedMs())
         } catch (e: UnauthorizedException) {
             failure(AiStatus.AUTH, e)
@@ -158,8 +161,13 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
         } catch (e: AnthropicException) {
             // The response arrived but didn't fit the SDK's models.
             failure(AiStatus.INVALID, e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Never let an exception escape: some carry request headers, the key among them, in their message.
+            failure(AiStatus.UNEXPECTED, e)
         } finally {
-            client.close()
+            client?.close()
         }
     }
 
