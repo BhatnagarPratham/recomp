@@ -9,7 +9,7 @@ import app.recomp.data.db.RoutineEntity
 import app.recomp.data.db.RoutineExerciseEntity
 import app.recomp.data.db.WorkoutDao
 import app.recomp.data.prefs.ExtraSchedule
-import app.recomp.data.prefs.TrainingPrefs
+import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.prefs.TrainingSettings
 import app.recomp.data.seed.ExerciseSeed
 import app.recomp.data.seed.SeedData
@@ -60,9 +60,10 @@ class TrainingRepository @Inject constructor(
     private val routineDao: RoutineDao,
     private val workoutDao: WorkoutDao,
     private val seeds: SeedSource,
-    private val prefs: TrainingPrefs,
+    private val prefs: SettingsPrefs,
 ) {
-    val settings: Flow<TrainingSettings> = prefs.settings
+    /** The training part of the persona (PS-03). */
+    val settings: Flow<TrainingSettings> = prefs.training
 
     fun observeLibrary(): Flow<List<ExerciseEntity>> = exerciseDao.observeActive()
     fun observeExercise(id: Long): Flow<ExerciseEntity?> = exerciseDao.observe(id)
@@ -82,7 +83,7 @@ class TrainingRepository @Inject constructor(
 
     /** Inserts any bundled exercise that isn't in the library yet. Safe to call on every launch. */
     suspend fun ensureLibrarySeeded() {
-        val policy = policy(prefs.current().experience)
+        val policy = policy(prefs.currentTraining().experience)
         val present = exerciseDao.seeded().mapNotNull { it.seedKey }.toSet()
         val missing = seeds.exercises().filter { it.key !in present }
         if (missing.isNotEmpty()) exerciseDao.insertAll(missing.map { it.toEntity(policy) })
@@ -93,7 +94,7 @@ class TrainingRepository @Inject constructor(
     suspend fun walkthrough(split: SplitTemplate): List<WalkthroughItem> {
         ensureLibrarySeeded()
         val bySeed = exerciseDao.seeded().associateBy { it.seedKey!! }
-        val current = prefs.current()
+        val current = prefs.currentTraining()
         val inRotation = routineDao.rotation().associateWith { routineDao.exercises(it.id).map { row -> row.exercise } }
 
         if (split == SplitTemplate.CUSTOM) {
@@ -127,7 +128,7 @@ class TrainingRepository @Inject constructor(
      */
     suspend fun applySetup(setup: TrainingSetup) {
         ensureLibrarySeeded()
-        val before = prefs.current()
+        val before = prefs.currentTraining()
         val newPolicy = policy(setup.experience)
         val extraIds = db.withTransaction {
             if (before.experience != setup.experience) {
@@ -147,7 +148,7 @@ class TrainingRepository @Inject constructor(
             }
             saveExtras(setup.extras)
         }
-        prefs.update {
+        prefs.updatePersona {
             it.copy(
                 split = setup.split,
                 experience = setup.experience,
@@ -196,7 +197,7 @@ class TrainingRepository @Inject constructor(
     }
 
     private suspend fun swapChoicesInPlace(choices: Map<String, Long>) {
-        val template = seeds.templates().associateBy { it.split }[prefs.current().split] ?: return
+        val template = seeds.templates().associateBy { it.split }[prefs.currentTraining().split] ?: return
         val bySeed = exerciseDao.seeded().associateBy { it.seedKey!! }
         val slotOptions = template.routines.flatMap { it.exercises }.associate { entry ->
             entry.exercise to entry.options.mapNotNull { bySeed[it]?.id }.toSet()
@@ -284,7 +285,7 @@ class TrainingRepository @Inject constructor(
      * and the equipment's default increment; everything is editable afterwards (EX-03).
      */
     suspend fun createCustomExercise(name: String, mechanic: Mechanic, equipment: Equipment): Long {
-        val policy = policy(prefs.current().experience)
+        val policy = policy(prefs.currentTraining().experience)
         val reps = policy.repsFor(if (mechanic == Mechanic.COMPOUND) RepClass.COMPOUND else RepClass.ISOLATION)
         return exerciseDao.insert(
             ExerciseEntity(
@@ -307,7 +308,7 @@ class TrainingRepository @Inject constructor(
 
     suspend fun updateExercise(exercise: ExerciseEntity) = exerciseDao.update(exercise)
 
-    suspend fun setKeepScreenOn(on: Boolean) = prefs.update { it.copy(keepScreenOn = on) }
+    suspend fun setKeepScreenOn(on: Boolean) = prefs.setKeepScreenOn(on)
 
     companion object {
         /** PRD §7.3: templates default to 3 working sets per exercise. */

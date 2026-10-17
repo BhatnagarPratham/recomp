@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v0.7, 2026-10-17. Implements [PRD.md](PRD.md) v0.7. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v0.8, 2026-10-17. Implements [PRD.md](PRD.md) v0.8. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -58,7 +58,7 @@
 
 ```
 app/src/main/java/…/recomp/
-  ui/{today,workout,routines,exercises,nutrition,body,progress,settings,components,theme}
+  ui/{onboarding,today,workout,routines,exercises,nutrition,body,progress,settings,components,theme}
   data/{db,repo,seed,ai,food,health,backup,prefs}
   workout/ActiveWorkoutService.kt, RestTimer.kt
   assets/seed/{exercises,split_templates}.json
@@ -122,8 +122,9 @@ food_log            id, log_date, meal_slot, food_id?, name, quantity, unit_labe
 meal_draft          id, created_at, log_date, meal_slot, text, photo_path?, origin  -- AI-02: estimate later
 saved_meal          id, name, default_slot, use_count
 saved_meal_item     id, saved_meal_id, food_id, quantity, unit_label, grams
-nutrition_target    id, effective_from, kcal, protein_g, fat_g, carbs_g, tdee_estimate,
-                    reason(INITIAL|CHECKIN|MANUAL)
+nutrition_target    id, effective_from (unique: one version per day), goal, kcal, protein_g, fat_g, carbs_g,
+                    tdee_estimate, bmr_kcal, reason(INITIAL|CHECKIN|MANUAL), created_at
+                                          -- protein_g is the full target; the ramp (§5.3) is applied on read
 daily_activity      log_date (PK), steps?, steps_synced_at?, sleep_hours?   -- steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cost_usd, status, response_json   -- AI-03 spend + debugging
@@ -131,7 +132,15 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 
 **Seed data.** The ~80-exercise library and the split templates are JSON assets, parsed with kotlinx.serialization. Seeding runs on every launch and inserts only exercises whose `seed_key` is missing, so a fork can add exercises and existing installs pick them up. Each seed entry has a rep class (`COMPOUND | ISOLATION | HIGH_REP`, PRD §4.3) that sets its default rep range from the experience policy. Templates reference exercises by seed key and list the walkthrough's alternatives.
 
-**Settings** live in DataStore: the persona (§5.0, serialized), day boundary, primary weight source, usual scan slot, extra-session schedule, AI mode (`OFF|ON`), AI model, monthly AI cap, reminder times, and the protein ramp state. Until M3 builds the persona, M1 keeps a `TrainingSettings` JSON (split, experience, strength days per week, extra-session schedules, keep-screen-on) under one key. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
+**Settings** live in DataStore, one key each:
+- `persona`: the persona (§5.0) as JSON, including the goal plan, the training part (split, experience, strength days, extra-session schedules by routine id) and `onboarded_on`. Never body data, so PS-06 can export it as is.
+- `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
+- `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
+- Later: usual scan slot, AI mode (`OFF|ON`), AI model, monthly AI cap and reminder times.
+
+M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
+
+A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet`.
 
@@ -143,21 +152,30 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 
 ```kotlin
 data class Persona(
-    val goal: GoalPlan,                // policy + pace + optional finish line + start date (§5.3, §5.7, §5.8)
-    val experience: ExperiencePolicy,  // BEGINNER | INTERMEDIATE | ADVANCED (below)
+    val goal: GoalPlan,                // policy + pace + goal weight + finish line + start date (§5.3, §5.7, §5.8)
+    val experience: Experience,        // BEGINNER | INTERMEDIATE | ADVANCED; ExperiencePolicy.defaultFor (below)
     val diet: Diet,                    // VEGAN | LACTO_VEGETARIAN | EGGETARIAN | PESCATARIAN | NON_VEGETARIAN
     val region: FoodRegion,            // INDIAN | INTERNATIONAL: food database, portion units, AI conventions
     val split: SplitTemplate,          // PPL | FULL_BODY_AB | UPPER_LOWER | CUSTOM: seeds routines
-    val extras: List<ExtraSession>,    // e.g. yoga class on Saturdays
+    val strengthDaysPerWeek: Int,
+    val extras: List<ExtraSession>,    // name, kind and weekdays, e.g. a yoga class on Saturdays
     val weightSource: WeightSource,    // HOME_SCALE | SCAN | GYM_SCALE
-    val units: Units,                  // METRIC | IMPERIAL (display only)
+    val units: Units,                  // METRIC | IMPERIAL (display only; metric only until v1.1)
+    val proteinRamp: Boolean,          // NU-03; defaults on for vegan, lacto-vegetarian and eggetarian
 )
 
 data class GoalPlan(
     val policy: GoalPolicy,            // FAT_LOSS | RECOMP | MAINTAIN | LEAN_BULK with editable rate and protein
-    val pace: Pace?,                   // GENTLE | STANDARD | AGGRESSIVE; null = custom values under Advanced
-    val finishLine: FinishLine?,       // TargetWeight | TargetBodyFatPct | ByDate, or none
+    val pace: Pace?,                   // GENTLE | STANDARD | AGGRESSIVE; null for Maintain or custom values under Advanced
+    val goalWeightKg: Double?,         // the one goal weight: protein's reference weight whatever the finish line
+    val finishLine: FinishLine?,       // GoalWeight | BodyFat(pct) | ByDate(date); null = none
     val startedOn: LocalDate,
+    val aggressiveAcknowledged: Boolean,
+)
+
+data class Profile(                    // body data (PR-01); kept apart from the persona so PS-06 never exports it
+    val sex: Sex, val birthDate: LocalDate, val heightCm: Double, val weightKg: Double,
+    val activity: ActivityLevel,       // SEDENTARY ×1.2 | MODERATE ×1.375 (default) | ACTIVE ×1.55
 )
 
 data class ExperiencePolicy(
@@ -169,13 +187,16 @@ data class ExperiencePolicy(
 )
 ```
 
+- `Profile.weightKg` is the current weight typed in onboarding or Settings. M4's weigh-ins replace it with the trend weight (§5.2).
+- **Onboarding draft.** Presets and onboarding work on a `PersonaDraft` whose fields are nullable. A preset's *Asked* values are null, and the review step can't finish until each is set. `PersonaDraft.complete()` gives the `Persona`.
+
 | Experience | Compound / isolation / high-rep reps | Stall window | Double jump | Deload |
 |------------|--------------------------------------|--------------|-------------|--------|
 | Beginner | 8–12 / 10–15 / 12–20 | 3 | Yes | On a stall only |
 | Intermediate | 6–10 / 10–15 / 12–20 | 4 | No | Every 6–8 weeks |
 | Advanced | 5–8 / 8–12 / 10–15 | 5 | No | Every 4–6 weeks |
 
-- **Presets** bundle a full `Persona`. They're Kotlin objects in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code.
+- **Presets** bundle a `PersonaDraft` (PRD §4.4). They're Kotlin objects (`Presets`) in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
 - **Who reads the persona:**
   - Calorie and protein targets read `goal` (§5.3).
   - The progression engine reads `experience` (§5.1).
@@ -183,7 +204,8 @@ data class ExperiencePolicy(
   - AI prompts are built from `diet` and `region` (§6.2).
   - The weekly plan reads `split` and `extras`.
 - **No other code branches on persona values.**
-- **Persona changes take effect from that day on.** A new `nutrition_target` row is written, and history is never rewritten (PS-02).
+- **Persona changes take effect from that day on.** A change that moves the targets writes a `nutrition_target` row effective today; a second change the same day replaces that row. Earlier rows are never rewritten (PS-02).
+- **Experience, split and extras** change through Training setup (`TrainingRepository.applySetup`), because they also re-apply rep ranges and rebuild or swap routines.
 
 ### 5.1 Progression engine (PO-01 to PO-08)
 
@@ -221,7 +243,7 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 - **Steps.** `INCREASE` adds one increment to the top load. `DELOAD` takes 90% of the top load and rounds *down* to a multiple of the increment. Targets list one rep count per target set; `ADD_REPS` pads a short last exposure with its last set's reps.
 - **Stall metric.** The best Epley score over every working set, with no rep cap. It's a poor absolute 1RM above 12 reps, but as a progress measure it's consistent between sessions and rises with reps; excluding or capping high-rep sets made 12–20 rep work look stalled while reps climbed. Bodyweight sets use reps. Displayed e1RMs and E1RM PRs still use sets of 12 reps or fewer.
 - **Hold and Deload (PO-05).** Both store a reset point on the exercise: the start of the session where you chose. After a *Deload*, stall detection runs only on exposures after the reset, with the usual rule. After a *Hold*, the card returns once at least `window` exposures follow the reset and none beats the best from before it.
-- **In a deficit.** `ctx.inDeficit` is false until M3 has nutrition targets to compare with TDEE (`TODO(M3)`).
+- **In a deficit.** `ctx.inDeficit` compares the target in force today with the TDEE estimate stored on the same `nutrition_target` row: true when the target sits below the ±5% maintenance band around TDEE (§5.3). With no target yet, it's false.
 - **Rounding.** `roundToStep` uses the exercise's increment as the equipment step (e.g. dumbbells at 2.5 kg). With 1.25 kg plates, the barbell step is 2.5 kg total. Load is always per dumbbell, never the pair.
 - **Estimated 1RM** uses Epley: `load × (1 + reps / 30)`. It's computed only for sets of 12 reps or fewer. Higher-rep sets still count for rep PRs.
 - **PRs** are computed once, when the workout finishes, and written to `personal_record`. At most one PR of each type per exercise per session.
@@ -280,15 +302,25 @@ Implemented in `NutritionCalculator` and `GoalPolicy` (`:domain`).
 
 **Exercise calories are never added to the food budget.** The activity factor, and later the adaptive TDEE, already include training.
 
+**Inputs from the persona.** `TargetInputs.from(profile, goalPlan, today)` takes age on today's date, height, current weight, the activity factor, the goal policy and `goalWeightKg`. Lean mass is null until M4 records scans (IB-05).
+
+**Overrides (PR-02).** `TargetOverrides(kcal?, proteinG?, fatG?)` replace the computed value for that macro and stay until reset. Carbs always fill the remaining calories and are never overridden. An overridden `kcal` is still held at the floor. When `kcal` is overridden but fat isn't, fat is recomputed from the new `kcal`. Carbs never go below 0.
+
+**Explanation.** `NutritionTargets` also returns what each number came from: the BMR formula, the activity factor, whether the deficit cap or the floor applied, the reference weight and whether it's the goal weight, and whether fat came from its 25%-of-calories share or its 0.6 g/kg floor. Each number on the Targets screen is one sentence built from these.
+
+**Maintenance band and "in a deficit".** `EnergyBalance.band(kcal)` is ±5% of a number, rounded to 10. It gives Maintain's range on Today (PRD §4.8). `EnergyBalance.inDeficit(target, tdee)` is true when the target is below the band around TDEE, so rounding never counts as a deficit.
+
 **Protein ramp (NU-03).** The first 7 days are a baseline week, which needs at least 5 logged days. During it, protein is shown but has no target. After that:
 
 ```
-target(week n) = min(full_target, baseline_mean + 15 g × n)
+target(week n) = min(full_target, baseline_mean + 15 g × n)     // week 1 starts the day after the baseline week
 ```
 
-- On by default for vegan and vegetarian diets.
-- The ramp state lives in DataStore.
-- Editing the full target doesn't reset the ramp. Turning the ramp off jumps straight to the full target.
+- On by default for vegan, lacto-vegetarian and eggetarian diets.
+- **Finding the baseline** (`ProteinRamp.baseline`): only days on or after `count_from` (the day the ramp was turned on) count. The window starts on the first day with food logged and runs 7 days. A finished window with 5 or more logged days is the baseline, and its mean protein over logged days is locked into the ramp state. A finished window with fewer slides to the next logged day. A window that hasn't finished is *measuring*. No logged day yet is *not started*: Today shows the full target with "the ramp starts when you log food".
+- The ramp state lives in DataStore (`protein_ramp`: `count_from`, plus `baseline_end` and `baseline_mean_g` once locked).
+- Editing the full target doesn't reset the ramp. Turning the ramp off jumps straight to the full target; turning it on again starts a fresh baseline from that day.
+- A baseline mean at or above the full target goes straight to the full target.
 
 ### 5.4 Adaptive maintenance (NU-05, P1)
 
@@ -342,11 +374,13 @@ LOSE_FAT      → underweight ? MAINTAIN : FAT_LOSS
 BOTH          → underweight ? MAINTAIN
               : (trainingAge < 1 year || highFat) ? RECOMP
               : LEAN_BULK   (reason: "recomposition is slow for lean, trained lifters; bulk now, cut later")
-BUILD_MUSCLE  → veryHighFat ? RECOMP : LEAN_BULK
+BUILD_MUSCLE  → (veryHighFat && !underweight) ? RECOMP : LEAN_BULK   // RECOMP is a deficit, so never below BMI 18.5
 MAINTAIN      → MAINTAIN
 ```
 
-- **Output:** `Recommendation(goal, reasonKey)`. The reason is a short template with the deciding inputs filled in.
+- **Output:** `GoalAdvice(goal, reason, basis)`. `reason` is one of `UNDERWEIGHT | LOSE_FAT | BOTH_NEW_TO_LIFTING | BOTH_HIGHER_FAT | BOTH_LEAN_AND_TRAINED | MUSCLE_HIGH_FAT | MUSCLE | STAY`; `basis` says whether body fat or BMI decided it, with the value. The UI turns them into a one-line template.
+- **Body fat** comes from a scan in the last 60 days (M4), or from a number typed in the third question. A typed number is used for this suggestion only and never stored. Otherwise BMI decides.
+- **Training age** is the experience level: under a year is `BEGINNER`. The answer also pre-fills the persona's experience.
 - **With AI on (GL-03):** Claude maps the free text to `{intent, follow_up_question?}` with a hand-written JSON schema (§6.2). The rules above then decide. AI never picks the goal directly, so the outcome is testable and identical offline.
 - **Thresholds** live in one table in `:domain`, so they're easy to tune.
 
@@ -354,19 +388,38 @@ MAINTAIN      → MAINTAIN
 
 ```
 projection_kg_per_week ≈ adjustment × 7 / 7700          // shown as approximate
-weeks_to_finish        ≈ |trend − target| / |projection|  // recomputed weekly from the trend
+weeks_to_finish        ≈ |trend − target| / |projection|  // recomputed weekly from the trend; none if moving away
 reached                = trend crosses the target weight or body-fat %, or the date passes
 
 maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached ∧ no break in the last 12 weeks
 ```
 
-**Guardrails** are checked whenever a goal, pace or profile changes:
-- Below BMI 18.5, deficit goals are rejected and the suggestion is Maintain.
-- Under 18, the pace is clamped to Gentle.
-- An Aggressive pace needs one acknowledgement of a warning.
-- The intake floor (§5.3) always applies.
+- **The pace step** shows each pace's projection in kg a week, plus when the goal weight would be reached ("around mid-March"), using the suggested goal weight until you change it. For a date finish line it shows the expected change by that date.
+- **Suggested goal weight** (`GoalWeights.suggest`): the BMI-25 weight for your height; if your BMI is already 25 or less, 5% below your current weight but not below BMI 20, and never above your current weight. Rounded to the nearest kg. A scan-based suggestion (IB-05) replaces it once scans exist.
+- **Default finish lines:** fat loss and recomp reach the goal weight; lean bulk ends on a date 16 weeks out; Maintain has none.
 
-Each rejected or clamped choice carries a reason string for the UI.
+**Guardrails** (`Guardrails.apply(profile, plan, today)`) are checked whenever a goal, pace or profile changes:
+- Below BMI 18.5, deficit goals are rejected and the suggestion is Maintain.
+- Under 18, the pace is clamped to Gentle, and a custom loss rate to Gentle's rate.
+- An Aggressive pace needs one acknowledgement of a warning, stored on the goal plan.
+- The intake floor (§5.3) always applies, overrides included.
+
+Each rejected or clamped choice carries a `GuardrailNote` for the UI. A profile change in Settings that makes a deficit goal unavailable (e.g. a lower weight) switches the plan to Maintain, and the before-and-after preview says why.
+
+### 5.9 Today's numbers (GL-07, GL-10, PRD §4.8)
+
+```
+main number, by goal:
+    FAT_LOSS   calories left        = kcal_target − kcal_eaten        // below zero reads "over", never styled as a failure
+    RECOMP     protein left         = protein_today − protein_eaten   // protein_today follows the ramp; none while measuring
+    MAINTAIN   calories within band = band(kcal_target) − kcal_eaten  // "in range" once inside it
+    LEAN_BULK  calories still to eat = max(0, kcal_target − kcal_eaten)
+7-day average = mean over logged days in [today − 7, today − 1] of kcal and protein, against the mean of those days' targets
+```
+
+- Today's log date rolls over at the day boundary while the screen is open (`DayBoundary.observeToday`, which also re-checks every minute).
+- The secondary line shows the other of calories and protein. The average line shows how many days were logged, and is replaced by "appears once you log food" when none were.
+- Food logging arrives in M3b. Until then intake is 0 for every day (`NutritionRepository.intake`, `TODO(M3b)`), so Today shows the full targets and no average.
 
 ## 6. Key technical flows
 
@@ -555,7 +608,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | Layer | What | How |
 |-------|------|-----|
 | Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
-| Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds) | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
+| Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), onboarding and Settings saves (target versions, overrides, same-day replace), the `training` → `persona` DataStore migration, migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds) | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
 | AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit. The eval runs manually before changing the model or prompt. |
 | UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
 | Manual | A gym dogfood checklist before each release | |
@@ -572,7 +625,9 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M0: Setup and spikes** | Project skeleton, theme, navigation, Room, Hilt, CI, privacy pre-commit hook. **Spikes:** (a) the Anthropic Java SDK running on Android, including R8 keep rules; (b) foreground service type and lock-screen rest timer on a real phone; (c) whether Google Fit's steps show up in Health Connect; (d) licensing and format of the IFCT and INDB food data; (e) which records the InBody app writes to Health Connect. Goal-driven `NutritionCalculator`. | — |
 | **M1: Training core** | Exercise seed data with your PPL routine pre-loaded, onboarding equipment check, rotation, active workout (prefill, steppers, RIR, rest timer, service, resume), summary, yoga log | EX, RT, WL, YG P0, PR-04 |
 | **M2: Progression** | `ExperiencePolicy`, engine and its tests, targets in the workout UI, live feedback, PRs, stall card, exercise history | PO P0, HM-02 |
-| **M3: Personas and nutrition core** | `Persona` and `GoalPlan` models, presets and onboarding (PS-01 to PS-03), the goal flow with cards, guided suggestion, pace, finish line and guardrails (GL P0), and a goal-driven Today screen; targets from goal policies with the protein ramp; the INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. `AiGate` with AI Describe it, drafts and the spend cap. | PS, PR, NU, AI P0 |
+| **M3a: Personas and targets** | `Persona` and `GoalPlan` models, presets and onboarding (PS-01 to PS-03), the goal flow with cards, guided suggestion, pace, finish line and guardrails (GL P0), Settings, versioned targets (Room v4) with overrides and the protein ramp, "day starts at", and a goal-driven Today screen; M1's training setup folded in; `inDeficit` wired into progression. | PS, PR-01 to PR-03, GL P0, NU-01 to NU-04 |
+| **M3b: Food logging** | The INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. | NU-10 to NU-16 |
+| **M3c: AI logging** | `AiGate` with AI Describe it, drafts and the spend cap. | NU-17, AI P0 |
 | **M4: Body, Today and data** | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
 | **M5+: v1.1** | Adaptive target with weekly check-in and review, Will it fit?, label scan, local parser, AI meal photos, the share target (§6.7) with InBody import from screenshots and Health Connect, recomp chart and InBody-based targets, steps through Health Connect, sleep in the check-in, barcode, charts, reminders, widget, auto-backup | P1 |
 
@@ -606,6 +661,17 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 - Exercise history listed both sessions with the PR badge.
 
 The stall card needs four or more stalled sessions, so it's covered by tests only.
+
+**M3a results (2026-10-17, reference phone on Android 15, release build over M2 data):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M2 | ✅ The `training` settings moved into the persona and migration 3→4 ran. The first launch opened onboarding with the training setup kept: 7 steps, no equipment step. |
+| Onboarding | ✅ The three questions (both, under a year, BMI estimate) suggested a recomp with its reason. Pace cards showed projections, and Aggressive showed its warning. The finish line pre-filled the suggested goal weight. The review kept the existing Saturday yoga class. Targets for TRD vector A's inputs matched the golden vector: 2,090 kcal, 125 g protein, 58 g fat, 267 g carbs. |
+| Today | ✅ Protein left as recomp's main number, with the ramp note and the 7-day average line; the rotation carried on. |
+| Settings | ✅ A body-data change previewed 2,090 → 2,070 kcal and saved; changing it back replaced the same day's version. A protein override saved and reset. Settings → Goal to Maintain showed the ±5% range on Today, then back to recomp. |
+| Reinstall | ✅ Onboarding stayed done. |
+| Not run on the phone | A fresh install's equipment step and a split change, because both rebuild the phone's routines. The repository tests cover them. |
 
 ## 11. Risks and mitigations
 

@@ -21,8 +21,9 @@ import kotlinx.serialization.json.Json
         SetEntryEntity::class,
         YogaDetailEntity::class,
         PersonalRecordEntity::class,
+        NutritionTargetEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -30,10 +31,11 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun exerciseDao(): ExerciseDao
     abstract fun routineDao(): RoutineDao
     abstract fun workoutDao(): WorkoutDao
+    abstract fun nutritionDao(): NutritionDao
 
     companion object {
         const val NAME = "recomp.db"
-        val MIGRATIONS = arrayOf(Migrations.MIGRATION_1_2, Migrations.MIGRATION_2_3)
+        val MIGRATIONS = arrayOf(Migrations.MIGRATION_1_2, Migrations.MIGRATION_2_3, Migrations.MIGRATION_3_4)
     }
 }
 

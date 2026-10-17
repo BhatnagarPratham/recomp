@@ -81,4 +81,17 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_personal_record_session_id` ON `personal_record` (`session_id`)")
         }
     }
+
+    /** M3a, personas and targets: versioned daily targets (PS-02). SQL from schemas/4.json. */
+    val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `nutrition_target` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`effective_from` TEXT NOT NULL, `goal` TEXT NOT NULL, `kcal` INTEGER NOT NULL, `protein_g` INTEGER NOT NULL, " +
+                    "`fat_g` INTEGER NOT NULL, `carbs_g` INTEGER NOT NULL, `tdee_estimate` INTEGER NOT NULL, `bmr_kcal` INTEGER NOT NULL, " +
+                    "`reason` TEXT NOT NULL, `created_at` INTEGER NOT NULL)",
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_nutrition_target_effective_from` ON `nutrition_target` (`effective_from`)")
+        }
+    }
 }

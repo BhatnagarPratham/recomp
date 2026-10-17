@@ -3,6 +3,7 @@ package app.recomp.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.WorkoutSessionEntity
+import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.workout.RestTimer
@@ -10,9 +11,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** "Resume workout?" (WL-06, TRD §6.1). [stale] sessions are more than 4 hours old. */
@@ -29,13 +33,30 @@ sealed interface AppNav {
     data class Summary(val sessionId: Long) : AppNav
 }
 
-/** Activity-wide work: seeding the library, the resume prompt, and opening the workout from its notification. */
+/**
+ * Activity-wide work: seeding the library, whether onboarding has run, the resume prompt, and opening the
+ * workout from its notification.
+ */
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val training: TrainingRepository,
     private val workouts: WorkoutRepository,
     private val restTimer: RestTimer,
+    personas: PersonaRepository,
 ) : ViewModel() {
+    /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
+    val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val unreadableSeen = MutableStateFlow(false)
+
+    /** Settings that couldn't be read, shown once per launch. Their raw values are kept aside. */
+    val unreadable: StateFlow<List<String>> = combine(personas.unreadable, unreadableSeen) { keys, seen -> if (seen) emptyList() else keys }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun dismissUnreadable() {
+        unreadableSeen.value = true
+    }
+
     private var resumeChecked = false
     private val _prompt = MutableStateFlow<ResumePrompt?>(null)
     val prompt: StateFlow<ResumePrompt?> = _prompt

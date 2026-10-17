@@ -37,17 +37,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
+import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PreviewLine
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutAlreadyActiveException
 import app.recomp.data.repo.WorkoutRepository
+import app.recomp.data.repo.TodayNutrition
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
+import app.recomp.domain.nutrition.MainNumber
+import app.recomp.domain.nutrition.ProteinGoal
 import app.recomp.domain.training.WeekProgress
 import app.recomp.domain.training.WeeklyPlan
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.extra.ExtraLogSheet
+import app.recomp.ui.onboarding.GoalText
 import app.recomp.workout.ActiveWorkoutService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
@@ -88,9 +93,18 @@ class TodayViewModel @Inject constructor(
     private val training: TrainingRepository,
     private val workouts: WorkoutRepository,
     private val progression: ProgressionRepository,
+    nutrition: NutritionRepository,
 ) : ViewModel() {
-    /** The log date (PR-03 day boundary), which everything on Today is keyed to, header included. */
-    val today: LocalDate = workouts.today()
+    /** GL-07, GL-10: the goal's main number and the 7-day average. */
+    val food: StateFlow<TodayNutrition?> = nutrition.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** The log date (PR-03 day boundary), which everything on Today is keyed to, header included. It rolls over while open. */
+    val today: StateFlow<LocalDate> = workouts.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LocalDate.now())
+
+    init {
+        viewModelScope.launch { nutrition.lockRampBaseline() }
+    }
+
 
     private val active: Flow<ActiveCard?> = workouts.observeActive().flatMapLatest { session ->
         if (session == null) {
@@ -114,7 +128,9 @@ class TodayViewModel @Inject constructor(
         session?.let { LastCard(it.id, it.routineId?.let { id -> workouts.routine(id)?.name } ?: "Workout", it.logDate) }
     }
 
-    private val extras = combine(training.settings, training.observeExtras(), workouts.observeWeek(today)) { settings, extras, week ->
+    private val week = workouts.observeToday().flatMapLatest { today -> workouts.observeWeek(today).map { today to it } }
+
+    private val extras = combine(training.settings, training.observeExtras(), week) { settings, extras, (today, week) ->
         val plans = settings.extras.map { it.toPlan() }
         val due = WeeklyPlan.dueToday(today, week, plans).toSet()
         Triple(
@@ -153,16 +169,17 @@ class TodayViewModel @Inject constructor(
     fun logExtra(routine: RoutineEntity, entry: ExtraEntry) = viewModelScope.launch { workouts.logExtra(routine, entry) }
 }
 
-/** Today (HM-01, M1 part): next workout or the active one, extra sessions due, weekly plan progress. */
+/** Today (HM-01): the goal's main number, next workout or the active one, extra sessions due, weekly plan progress. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TodayScreen(
     onOpenWorkout: (Long) -> Unit,
     onOpenSummary: (Long) -> Unit,
-    onOpenSetup: () -> Unit,
     viewModel: TodayViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val food by viewModel.food.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingStart by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -197,20 +214,12 @@ fun TodayScreen(
     ) {
         Text("Today", style = MaterialTheme.typography.headlineMedium)
         Text(
-            viewModel.today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
+            today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (!ui.loaded) return@Column
 
-        if (!ui.setupDone) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Set up your training", style = MaterialTheme.typography.titleMedium)
-                    Text("Pick a split and your experience, then confirm the equipment at your gym.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = onOpenSetup, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Set up") }
-                }
-            }
-        }
+        food?.let { NutritionCard(it) }
 
         val active = ui.active
         if (active != null) {
@@ -313,4 +322,70 @@ fun TodayScreen(
             viewModel.logExtra(routine, saved)
         }
     }
+}
+
+/**
+ * The goal's main number (GL-07, PRD §4.8), protein first among the rest (NU-02), and the 7-day average
+ * (GL-10). Being over a target is a plain number, never failure styling.
+ * TODO(M3b): food logging adds a "Log food" entry here and fills in what you've eaten.
+ */
+@Composable
+private fun NutritionCard(n: TodayNutrition) {
+    val t = n.target
+    val (label, value, detail) = when (val m = n.main) {
+        is MainNumber.CaloriesLeft -> Triple(
+            "Calories left",
+            if (m.left >= 0) GoalText.kcal(m.left) else "${GoalText.kcal(-m.left)} over",
+            "of ${GoalText.kcal(m.target)}",
+        )
+        is MainNumber.ProteinLeft -> if (m.target == null) {
+            Triple("Protein so far", "${m.eaten} g", "Measuring what you usually eat this week, so there's no target yet.")
+        } else {
+            Triple("Protein left", "${m.left} g", "of ${m.target} g" + rampNote(n.protein))
+        }
+        is MainNumber.CaloriesInRange -> Triple(
+            "Calories within your range",
+            when {
+                m.inRange -> "In range"
+                m.aboveBy > 0 -> "${GoalText.kcal(m.aboveBy)} over the range"
+                else -> "${GoalText.n(m.belowBy)}–${GoalText.kcal(m.band.last - m.eaten)} to go"
+            },
+            "Range ${GoalText.n(m.band.first)}–${GoalText.kcal(m.band.last)}",
+        )
+        is MainNumber.CaloriesToEat -> Triple(
+            "Calories still to eat",
+            if (m.left > 0) GoalText.kcal(m.left) else "Target reached",
+            "of ${GoalText.kcal(m.target)}",
+        )
+    }
+    val proteinTarget = n.protein.todayG
+    val others = buildList {
+        if (n.main !is MainNumber.ProteinLeft) add(if (proteinTarget != null) "Protein ${(proteinTarget - n.eaten.proteinG).coerceAtLeast(0)} g left" else "Protein ${n.eaten.proteinG} g")
+        if (n.main is MainNumber.ProteinLeft) add("Calories ${GoalText.kcal(t.kcal - n.eaten.kcal)} left")
+        add("fat ${t.fatG} g")
+        add("carbs ${t.carbsG} g")
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(others.joinToString(" · "), style = MaterialTheme.typography.bodyLarge)
+            val week = n.week
+            Text(
+                if (week == null) "7-day average appears once you log food."
+                else "7-day average: ${GoalText.n(week.kcal)} of ${GoalText.kcal(week.kcalTarget)}" +
+                    (week.proteinTargetG?.let { " · protein ${week.proteinG} of $it g" } ?: " · protein ${week.proteinG} g") +
+                    " · ${week.daysLogged} ${if (week.daysLogged == 1) "day" else "days"} logged",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun rampNote(goal: ProteinGoal): String = when (goal) {
+    is ProteinGoal.NotStarted -> ". The protein ramp starts when you log food."
+    is ProteinGoal.Ramping -> " this week, rising to ${goal.fullG} g (ramp week ${goal.week})."
+    else -> ""
 }

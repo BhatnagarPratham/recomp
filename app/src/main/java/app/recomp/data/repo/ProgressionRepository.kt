@@ -8,8 +8,11 @@ import app.recomp.data.db.ExposureSetRow
 import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.WorkoutDao
-import app.recomp.data.prefs.TrainingPrefs
+import app.recomp.data.db.NutritionDao
+import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.domain.model.SetType
+import app.recomp.domain.nutrition.EnergyBalance
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.ExerciseConfig
@@ -52,7 +55,9 @@ class ProgressionRepository @Inject constructor(
     private val workoutDao: WorkoutDao,
     private val exerciseDao: ExerciseDao,
     private val routineDao: RoutineDao,
-    private val prefs: TrainingPrefs,
+    private val prefs: SettingsPrefs,
+    private val nutritionDao: NutritionDao,
+    private val days: DayBoundary,
 ) {
     /** Completed exposures of an exercise, newest first, as of [asOf] (a session start time). */
     suspend fun history(exerciseId: Long, limit: Int = HISTORY_LIMIT, asOf: Long = Long.MAX_VALUE): List<Exposure> =
@@ -64,17 +69,23 @@ class ProgressionRepository @Inject constructor(
     private fun List<ExposureSetRow>.groupExposures(): List<Pair<ExposureSetRow, List<ExposureSetRow>>> =
         groupBy { it.set.sessionExerciseId }.values.map { it.first() to it }
 
-    private suspend fun context(exercise: ExerciseEntity) = ProgressionContext(
-        experience = ExperiencePolicy.defaultFor(prefs.current().experience),
+    /** [asOf] replays an old workout, so the deficit check uses the target in force then. */
+    private suspend fun context(exercise: ExerciseEntity, asOf: Long = Long.MAX_VALUE) = ProgressionContext(
+        experience = ExperiencePolicy.defaultFor(prefs.currentTraining().experience),
+        inDeficit = inDeficit(if (asOf == Long.MAX_VALUE) System.currentTimeMillis() else asOf),
         stallReset = exercise.stallResetAt?.let { StallReset(it, exercise.stallResetKeepsBaseline) },
     )
+
+    /** TRD §5.1: the target in force at [now] against the TDEE estimate stored with it. False until there's a target. */
+    suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
+        nutritionDao.targetOn(days.of(now))?.let { EnergyBalance.inDeficit(it.kcal, it.tdeeEstimate) } ?: false
 
     /** [asOf] limits history to sessions started by then, e.g. to replay what an old workout implied. */
     suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int, asOf: Long = Long.MAX_VALUE): Recommendation =
         ProgressionEngine.recommend(
             ExerciseConfig(repMin, repMax, targetSets, exercise.incrementG, exercise.loadType),
             history(exercise.id, asOf = asOf),
-            context(exercise),
+            context(exercise, asOf),
         )
 
     // Stall choices (PO-05). Both reset stall detection from the start of today's session.

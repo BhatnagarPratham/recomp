@@ -44,7 +44,7 @@ data class StallReset(val at: Long, val keepsBaseline: Boolean)
 
 data class ProgressionContext(
     val experience: ExperiencePolicy,
-    /** TODO(M3): true when the calorie target is below estimated TDEE. False until nutrition targets exist. */
+    /** True when today's calorie target is below the maintenance band around TDEE (TRD §5.1); false with no target. */
     val inDeficit: Boolean = false,
     val stallReset: StallReset? = null,
 )

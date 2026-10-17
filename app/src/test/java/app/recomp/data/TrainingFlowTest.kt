@@ -293,7 +293,7 @@ class TrainingFlowTest {
         workouts.logExtra(yoga, WorkoutRepository.ExtraEntry("Hatha", 60, 3, "hips tight"), now = 10_000_000)
         val prefill = workouts.lastExtra(yoga.id)
         assertEquals(WorkoutRepository.ExtraEntry("Hatha", 60, 3, "hips tight"), prefill)
-        val week = workouts.observeWeek(workouts.today(10_000_000)).first()
+        val week = workouts.observeWeek(workouts.today(now = 10_000_000)).first()
         assertEquals(SessionKind.YOGA, week.single().kind)
         // The "last workout" card is for strength sessions only.
         assertNull(workouts.observeLatestStrength().first())
