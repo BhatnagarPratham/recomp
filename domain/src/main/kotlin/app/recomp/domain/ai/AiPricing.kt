@@ -46,4 +46,15 @@ object AiPricing {
 
     /** Every attempt of one request, each at its own model's rates: a declined attempt and its fallback both count. */
     fun cost(attempts: List<TokenUsage>): Double = attempts.sumOf(::cost)
+
+    /** Prompt tokens beyond the text itself: the output schema and the API's own framing. */
+    const val PROMPT_OVERHEAD_TOKENS = 1_500L
+
+    /**
+     * The most a request can cost when its usage is unknown: its prompt at 3 characters a token (text averages
+     * nearer 4, so this overcounts) plus the overhead, and every output token it was allowed. Reserved before a
+     * request is sent, and kept for one that was sent but never answered, which the server may still have billed.
+     */
+    fun upperBound(model: String, promptChars: Int, maxOutputTokens: Long): TokenUsage =
+        TokenUsage(model, inputTokens = (promptChars + 2) / 3 + PROMPT_OVERHEAD_TOKENS, outputTokens = maxOutputTokens)
 }

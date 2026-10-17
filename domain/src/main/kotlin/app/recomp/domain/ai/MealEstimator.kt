@@ -5,6 +5,8 @@ package app.recomp.domain.ai
  * `reason` when it wasn't [OK].
  */
 enum class AiStatus {
+    /** Sent and not yet settled: the row holds an upper-bound cost until the reply arrives (or forever, if the app died). */
+    PENDING,
     OK,
     REFUSAL,
     MAX_TOKENS,
@@ -27,12 +29,25 @@ enum class AiStatus {
  */
 class MealRequest(val apiKey: String, val model: AiModel, val system: String, val user: String) {
     override fun toString() = "MealRequest(model=$model)"
+
+    /** Characters of prompt, for an upper-bound cost before the real usage is known. */
+    val promptChars: Int get() = system.length + user.length
+
+    /** What this request could cost at most: [AiPricing.upperBound] at [MAX_OUTPUT_TOKENS]. */
+    val upperBound: TokenUsage get() = AiPricing.upperBound(model.id, promptChars, MAX_OUTPUT_TOKENS)
+
+    companion object {
+        /** `max_tokens`: room for the thinking and a long meal (TRD §6.2). */
+        const val MAX_OUTPUT_TOKENS = 8_000L
+    }
 }
 
 /**
  * One request's outcome. [estimate] is set only when [status] is [AiStatus.OK]. [attempts] holds every
  * attempt's tokens (a refused one and its fallback), [servedBy] the model that produced the reply, and
- * [responseText] the raw reply text for `ai_request_log.response_json`.
+ * [responseText] the raw reply text for `ai_request_log.response_json`. When the request was sent but no reply
+ * came (a timeout, a dropped connection), the server may still have done and billed the work: [attempts] then
+ * holds the request's upper bound, since the real usage is unknown.
  */
 data class EstimatorReply(
     val status: AiStatus,

@@ -28,11 +28,17 @@ import com.anthropic.models.beta.messages.BetaStopReason
 import com.anthropic.models.beta.messages.BetaTextBlockParam
 import com.anthropic.models.beta.messages.MessageCreateParams
 import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.Duration
 import javax.inject.Inject
 import javax.inject.Singleton
+import javax.net.ssl.SSLHandshakeException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -120,8 +126,9 @@ object MealSchema {
 /**
  * Describe it through the Anthropic Java SDK (TRD §6.2): structured output with [MealSchema], adaptive thinking at
  * effort `low`, a cached system prompt, and the server-side refusal fallback where the model has one. Each attempt
- * times out after 20 s, with one retry. Errors come back as an [AiStatus], never as an exception, and the key is
- * held only for the request.
+ * times out after 20 s. One retry, and only when the request clearly wasn't processed (429, 5xx, no connection):
+ * a timed-out request may still be running, and billed, on the server, so it isn't sent again. Errors come back as
+ * an [AiStatus], never as an exception, and the key is held only for the request.
  */
 @Singleton
 class ClaudeMealEstimator @Inject constructor() : MealEstimator {
@@ -132,18 +139,26 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
     override suspend fun estimate(request: MealRequest): EstimatorReply = withContext(Dispatchers.IO) {
         val started = System.nanoTime()
         fun elapsedMs() = (System.nanoTime() - started) / 1_000_000
-        fun failure(status: AiStatus, e: Throwable) =
-            EstimatorReply(status, null, request.model.id, emptyList(), elapsedMs(), responseText = null, detail = e.javaClass.simpleName)
+        /** [maybeBilled]: sent, but no reply came, so the request's upper bound stands in for its unknown usage. */
+        fun failure(status: AiStatus, e: Throwable, maybeBilled: Boolean = false) = EstimatorReply(
+            status, null, request.model.id, if (maybeBilled) listOf(request.upperBound) else emptyList(), elapsedMs(),
+            responseText = null, detail = e.javaClass.simpleName,
+        )
+        fun ioFailure(e: Throwable) = when {
+            notSent(e) -> failure(AiStatus.NETWORK, e)
+            e.causes().any { it is InterruptedIOException } -> failure(AiStatus.TIMEOUT, e, maybeBilled = true)
+            else -> failure(AiStatus.NETWORK, e, maybeBilled = true)
+        }
 
         var client: AnthropicClient? = null
         try {
             client = AnthropicOkHttpClient.builder()
                 .apiKey(request.apiKey)
                 .timeout(timeout)
-                .maxRetries(1)
+                .maxRetries(0)
                 .apply { baseUrl?.let { baseUrl(it) } }
                 .build()
-            reply(client.beta().messages().create(params(request)), request, elapsedMs())
+            reply(send(client, request), request, elapsedMs())
         } catch (e: UnauthorizedException) {
             failure(AiStatus.AUTH, e)
         } catch (e: PermissionDeniedException) {
@@ -155,9 +170,9 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
         } catch (e: AnthropicServiceException) {
             failure(statusFor(e.statusCode()), e)
         } catch (e: AnthropicIoException) {
-            failure(if (e.causes().any { it is InterruptedIOException }) AiStatus.TIMEOUT else AiStatus.NETWORK, e)
+            ioFailure(e)
         } catch (e: AnthropicRetryableException) {
-            failure(if (e.causes().any { it is InterruptedIOException }) AiStatus.TIMEOUT else AiStatus.NETWORK, e)
+            ioFailure(e)
         } catch (e: AnthropicException) {
             // The response arrived but didn't fit the SDK's models.
             failure(AiStatus.INVALID, e)
@@ -168,6 +183,21 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
             failure(AiStatus.UNEXPECTED, e)
         } finally {
             client?.close()
+        }
+    }
+
+    /** Sends the request, once more if the first attempt clearly wasn't processed. Throws the last attempt's error. */
+    private suspend fun send(client: AnthropicClient, request: MealRequest): BetaMessage {
+        val params = params(request)
+        var attempt = 1
+        while (true) {
+            try {
+                return client.beta().messages().create(params)
+            } catch (e: Exception) {
+                if (attempt >= MAX_ATTEMPTS || !unprocessed(e)) throw e
+                delay(retryDelayMs(e))
+                attempt++
+            }
         }
     }
 
@@ -250,8 +280,36 @@ class ClaudeMealEstimator @Inject constructor() : MealEstimator {
 
     companion object {
         val TIMEOUT: Duration = Duration.ofSeconds(20)
-        const val MAX_TOKENS = 8_000L
+        const val MAX_TOKENS = MealRequest.MAX_OUTPUT_TOKENS
         const val FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+        /** The first attempt and one retry. */
+        const val MAX_ATTEMPTS = 2
+
+        /** The longest a retry waits, whatever `retry-after` asks, so a request stays well inside its time budget. */
+        const val MAX_RETRY_WAIT_MS = 2_000L
+        private const val DEFAULT_RETRY_WAIT_MS = 500L
+
+        /** Errors where the server did no billable work: rate-limited, overloaded or failing, or never reached. */
+        fun unprocessed(e: Throwable): Boolean = when (e) {
+            is RateLimitException, is InternalServerException -> true
+            is AnthropicServiceException -> e.statusCode() == 429 || e.statusCode() >= 500
+            is AnthropicIoException, is AnthropicRetryableException -> notSent(e)
+            else -> false
+        }
+
+        /** The connection never got as far as sending: no route, no host, refused, or the TLS handshake failed. */
+        fun notSent(e: Throwable): Boolean = e.causes().any {
+            it is ConnectException || it is UnknownHostException || it is NoRouteToHostException || it is SSLHandshakeException ||
+                (it is SocketTimeoutException && it.message.orEmpty().contains("connect", ignoreCase = true))
+        }
+
+        private fun retryDelayMs(e: Throwable): Long {
+            val headers = (e as? AnthropicServiceException)?.headers()
+            val asked = headers?.values("retry-after-ms")?.firstOrNull()?.toDoubleOrNull()?.toLong()
+                ?: headers?.values("retry-after")?.firstOrNull()?.toDoubleOrNull()?.times(1_000)?.toLong()
+            return (asked ?: DEFAULT_RETRY_WAIT_MS).coerceIn(0, MAX_RETRY_WAIT_MS)
+        }
 
         /** An HTTP status the SDK has no dedicated exception for. */
         fun statusFor(code: Int): AiStatus = when {

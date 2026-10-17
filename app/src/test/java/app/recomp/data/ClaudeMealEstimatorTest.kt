@@ -202,26 +202,42 @@ class ClaudeMealEstimatorTest {
     }
 
     @Test
-    fun `a request that doesn't answer in time times out, after one retry`() = runBlocking {
+    fun `a timed-out request isn't sent again, and counts at its upper bound`() = runBlocking {
         estimator.timeout = Duration.ofMillis(500)
-        repeat(2) { server.enqueue(message().setHeadersDelay(3, TimeUnit.SECONDS)) }
+        server.enqueue(message().setHeadersDelay(3, TimeUnit.SECONDS))
         val started = System.nanoTime()
         val r = estimator.estimate(request())
         assertEquals(AiStatus.TIMEOUT, r.status)
-        assertEquals(2, server.requestCount)
+        assertEquals("the server may still be working on it, so it isn't sent twice", 1, server.requestCount)
         assertTrue("gave up well before the server answered", (System.nanoTime() - started) / 1_000_000 < 3_000)
+        // The usage is unknown and may have been billed: the prompt and every allowed output token stand in for it.
+        assertEquals(listOf(request().upperBound), r.attempts)
+        assertEquals(ClaudeMealEstimator.MAX_TOKENS, r.attempts.single().outputTokens)
     }
 
     @Test
-    fun `a connection that drops is a network error`() = runBlocking {
-        repeat(2) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
-        assertEquals(AiStatus.NETWORK, estimator.estimate(request()).status)
+    fun `a connection dropped after sending is a network error that may have been billed`() = runBlocking {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        val r = estimator.estimate(request())
+        assertEquals(AiStatus.NETWORK, r.status)
+        assertEquals(1, server.requestCount)
+        assertEquals(listOf(request().upperBound), r.attempts)
     }
 
     @Test
-    fun `no server at all is a network error`() = runBlocking {
+    fun `no server at all is a network error that costs nothing, after one retry`() = runBlocking {
         server.shutdown()
-        assertEquals(AiStatus.NETWORK, estimator.estimate(request()).status)
+        val r = estimator.estimate(request())
+        assertEquals(AiStatus.NETWORK, r.status)
+        assertTrue(r.attempts.isEmpty())
+    }
+
+    @Test
+    fun `only errors where nothing was processed are retried`() {
+        assertTrue(ClaudeMealEstimator.notSent(RuntimeException(java.net.ConnectException("refused"))))
+        assertTrue(ClaudeMealEstimator.notSent(RuntimeException(java.net.SocketTimeoutException("connect timed out"))))
+        assertFalse(ClaudeMealEstimator.notSent(RuntimeException(java.net.SocketTimeoutException("Read timed out"))))
+        assertFalse(ClaudeMealEstimator.unprocessed(IllegalStateException("anything else")))
     }
 
     @Test

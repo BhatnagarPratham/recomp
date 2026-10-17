@@ -67,6 +67,17 @@ class AiTest {
     }
 
     @Test
+    fun `a request's upper bound is its prompt at 3 characters a token, the overhead and every allowed output token`() {
+        val bound = AiPricing.upperBound("claude-opus-5-5", promptChars = 3_000, maxOutputTokens = 8_000)
+        assertEquals(1_000 + AiPricing.PROMPT_OVERHEAD_TOKENS, bound.inputTokens)
+        assertEquals(8_000L, bound.outputTokens)
+        assertEquals((2_500 * 4.0 + 8_000 * 20.0) / 1_000_000, AiPricing.cost(bound), 1e-12)
+        val request = MealRequest("dummy-key", AiModel.OPUS_5_5, "s".repeat(2_000), "u".repeat(1_000))
+        assertEquals(bound, request.upperBound)
+        assertEquals(MealRequest.MAX_OUTPUT_TOKENS, request.upperBound.outputTokens)
+    }
+
+    @Test
     fun `a model the table doesn't know is priced at its highest rates`() {
         val unknown = AiPricing.rates("claude-unknown-9")
         assertEquals(AiPricing.table.values.maxOf { it.input }, unknown.input, 0.0)

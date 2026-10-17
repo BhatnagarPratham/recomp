@@ -135,7 +135,8 @@ nutrition_target    id, effective_from (unique: one version per day), goal, kcal
 daily_activity      log_date (PK), steps?, steps_synced_at?, sleep_hours?   -- steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
-                    status (§6.2), latency_ms, response_json?   -- AI-03 spend + debugging; tokens summed over every attempt
+                    status (§6.2), latency_ms, response_json?   -- AI-03 spend + debugging; tokens summed over every attempt;
+                                          -- written PENDING at an upper-bound cost before sending, then settled
 ```
 
 **Seed data.** The ~80-exercise library and the split templates are JSON assets, parsed with kotlinx.serialization. Seeding runs on every launch and inserts only exercises whose `seed_key` is missing, so a fork can add exercises and existing installs pick them up. Each seed entry has a rep class (`COMPOUND | ISOLATION | HIGH_REP`, PRD §4.3) that sets its default rep range from the experience policy. Templates reference exercises by seed key and list the walkthrough's alternatives.
@@ -469,10 +470,11 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
 
 - **How the state is decided** (`AiGate.state` in `:domain`, first match wins): `ai_mode` off → `OFF`; no stored key → `NO_KEY`; this month's `cost_usd` sum at or above `ai_monthly_cap_usd` → `OVER_CAP`; no validated connection (the default network lacks `NET_CAPABILITY_INTERNET` or `NET_CAPABILITY_VALIDATED`) → `OFFLINE`; otherwise `READY`. "This month" is the local calendar month of `created_at`; `OVER_CAP` lifts on the 1st. `AiRepository.gate` is a Flow over the settings, the key store, the log and connectivity, so screens follow it live.
 - **Gate first.** Every AI entry point checks `AiGate`, and `AiRepository.estimate` checks it again just before sending, so nothing leaves the phone unless the state is `READY`. When it isn't, the UI shows the non-AI path instead: search, saved meals and quick add, with *Save draft* for the description (PRD §7.7, *Not ready*). AI buttons are hidden when the state is `OFF`.
-- **Failures.** Each attempt times out after 20 s, with one SDK retry (`maxRetries(1)`: the SDK retries timeouts, connection errors, 408, 409, 429 and 5xx, honouring `retry-after`), so the worst case is about 40 s. Every request is logged with its status. Any status but `OK` saves the input as a `meal_draft` with that status as its `reason` and drops you into the non-AI path. Logging is never blocked. *Cancel* only stops waiting: the request runs to completion in the background so its spend is still logged, and its result is discarded.
+- **Failures.** A request times out after 20 s. The client (not the SDK, whose retries are off) retries once, and only when the request clearly wasn't processed: a 429, a 5xx (including 529 overloaded), or a connection that was never made. It waits what `retry-after` asks, but at most 2 s. A timeout, or a connection dropped after sending, isn't retried: the server may still be working on the request, and billing it, so sending it again could pay twice. The worst case is therefore about 22 s. The first live requests' `latency_ms` will show whether 20 s is right; a long reply that would end in `max_tokens` shows up as a timeout until then. Every request is logged with its status. Any status but `OK` saves the input as a `meal_draft` with that status as its `reason` and drops you into the non-AI path. Logging is never blocked. *Cancel* only stops waiting: the request runs to completion in the background so its spend is still logged, and its result is discarded.
 
   | Status | From | The app says |
   |--------|------|--------------|
+  | `PENDING` | Logged before sending, settled when the reply comes; one the app died during stays `PENDING` | — |
   | `OK` | `end_turn` with at least one item that passes validation | — |
   | `REFUSAL` | `stop_reason: refusal` on the final response (after any server-side fallback) | Claude declined to estimate this |
   | `MAX_TOKENS` | `stop_reason: max_tokens` | The estimate was cut off |
@@ -482,11 +484,12 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
   | `RATE_LIMIT` | `RateLimitException` (429), after the retry | Claude is busy right now |
   | `SERVER` | `InternalServerException` (5xx, including 529 overloaded), after the retry | Claude is unavailable right now |
   | `BAD_REQUEST` | Any other 4xx | Claude couldn't take this request |
-  | `TIMEOUT` | `AnthropicIoException` caused by an `InterruptedIOException`, after the retry | Claude didn't answer in time |
-  | `NETWORK` | Any other `AnthropicIoException` | Couldn't reach Claude |
+  | `TIMEOUT` | `AnthropicIoException` caused by an `InterruptedIOException`; not retried, and costed at the request's upper bound | Claude didn't answer in time |
+  | `NETWORK` | Any other `AnthropicIoException`: retried once at no cost if the connection was never made (refused, no host, no route, TLS handshake), else costed at the upper bound | Couldn't reach Claude |
   | `UNEXPECTED` | Any other exception, caught so none escapes (some carry request headers, the key among them, in their message); only its class name is kept | Something went wrong sending it |
 - **Drafts** show up in their meal on that day's Food tab, with *Estimate now* once the gate is `READY` again. They're never sent automatically. Saving an estimate made from a draft deletes the draft.
 - **Spend.** `cost_usd` = Σ over every attempt in `usage.iterations` (a declined attempt and its fallback both count; without iterations, the top-level `usage`) of input × input rate + output × output rate + cache writes × 1.25 × input rate + cache reads × cache-read rate, each attempt at its own model's rates. `AiPricing` in `:domain` holds the table, updated by hand when prices change; a model it doesn't know is priced at the table's highest rates, so the cap errs on the early side. The monthly sum is checked against the cap before every call; a request that crosses the cap still completes, and the next one is paused.
+- **Reservation.** The gate check and a `PENDING` row are written together, under one lock, before the request is sent. The row is costed at the request's upper bound (`AiPricing.upperBound`: the prompt at 3 characters a token plus 1,500 tokens of schema and framing, and all 8,000 allowed output tokens; about $0.17 on Opus 5.5). So requests made at the same time each count the others' reservations and can't get past the cap together, and a request the app died during stays logged. The reply settles the row at its real usage. A request that was sent but never answered (a timeout, a dropped connection) keeps the upper bound, since the server may have billed it. This month's spend in Settings includes rows still pending.
 
   | Model ($ per MTok) | Input | Output | Cache read |
   |--------------------|-------|--------|------------|

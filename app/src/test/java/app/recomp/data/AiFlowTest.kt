@@ -22,7 +22,13 @@ import app.recomp.domain.persona.FoodRegion
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -120,6 +126,45 @@ class AiFlowTest {
         tryIt(AiState.OVER_CAP)
         assertTrue(app.estimator.requests.isEmpty())
         assertEquals(0, requests())
+    }
+
+    @Test
+    fun `requests made at the same time can't get past the cap`() = runBlocking {
+        ready()
+        ai.setMonthlyCap(0.05)
+        val hold = CompletableDeferred<Unit>()
+        app.estimator.hold = hold
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item())) }
+        val results = (1..3).map { async(Dispatchers.Default) { ai.estimate("dal", Origin.HOME) } }
+        // One goes out; its reservation already counts, so the other two find the cap reached.
+        withTimeout(5_000) { while (results.count { it.isCompleted } < 2) delay(10) }
+        assertEquals(1, app.estimator.requests.size)
+
+        val pending = app.db.openHelper.readableDatabase.query("SELECT status, cost_usd FROM ai_request_log").use { c ->
+            c.moveToFirst(); c.getString(0) to c.getDouble(1)
+        }
+        assertEquals(AiStatus.PENDING.name, pending.first)
+        assertTrue("reserved at the upper bound", pending.second > 0.1)
+        assertEquals(AiState.OVER_CAP, ai.state())
+
+        hold.complete(Unit)
+        val all = results.awaitAll()
+        assertEquals(1, all.count { it is EstimateResult.Estimated })
+        assertEquals(2, all.count { it == EstimateResult.NotReady(AiState.OVER_CAP) })
+        // Settled at what it really cost: 2,000 in and 1,000 out on Opus 5.5.
+        assertEquals(0.028, ai.spend.first().costUsd, 1e-9)
+        assertEquals(1, requests())
+    }
+
+    @Test
+    fun `a request that timed out keeps the cost the server may have billed`() = runBlocking {
+        ready()
+        app.estimator.next = { request -> FakeEstimator.reply(AiStatus.TIMEOUT, attempts = listOf(request.upperBound)) }
+        val result = ai.estimate("dal", Origin.HOME) as EstimateResult.Failed
+        val row = ai.request(result.requestId!!)!!
+        assertEquals(AiStatus.TIMEOUT, row.status)
+        assertEquals(8_000L, row.outputTokens)
+        assertTrue(row.costUsd > 0.16)
     }
 
     @Test

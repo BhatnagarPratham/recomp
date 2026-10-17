@@ -7,6 +7,7 @@ import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Update
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.food.Origin
@@ -30,9 +31,10 @@ data class MealDraftEntity(
 )
 
 /**
- * One AI request (AI-03 spend, and debugging). Tokens are summed over every attempt (a refused one and its
- * fallback); [costUsd] prices each attempt at its own model. [model] is the model that served the reply.
- * [responseJson] is the reply's text, never the prompt or the key.
+ * One AI request (AI-03 spend, and debugging). It's written as PENDING at the request's upper-bound cost before
+ * sending, then settled. Tokens are summed over every attempt (a refused one and its fallback); [costUsd] prices
+ * each attempt at its own model, or stays the upper bound for a request that was sent but never answered.
+ * [model] is the model that served the reply. [responseJson] is the reply's text, never the prompt or the key.
  */
 @Entity(tableName = "ai_request_log", indices = [Index("created_at")])
 data class AiRequestLogEntity(
@@ -63,6 +65,10 @@ interface AiDao {
 
     @Query("SELECT * FROM ai_request_log WHERE id = :id")
     suspend fun request(id: Long): AiRequestLogEntity?
+
+    /** Settles a PENDING row with the reply's real usage. */
+    @Update
+    suspend fun updateRequest(row: AiRequestLogEntity)
 
     /** Spend and request count since [fromMs] (the month's start, local time). */
     @Query("SELECT COALESCE(SUM(cost_usd), 0) AS cost_usd, COUNT(*) AS requests FROM ai_request_log WHERE created_at >= :fromMs")

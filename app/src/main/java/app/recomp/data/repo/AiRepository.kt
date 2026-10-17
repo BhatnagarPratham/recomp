@@ -37,6 +37,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** The gate as screens show it: the state, plus the cap and the day a reached cap lifts (PRD §7.7 *Not ready*). */
@@ -98,22 +100,25 @@ class AiRepository @Inject constructor(
      * (*Cancel*), so its spend is logged; the caller then just ignores the result.
      */
     suspend fun estimate(text: String, origin: Origin, clarification: Clarification? = null): EstimateResult = withContext(NonCancellable) {
-        val state = state()
-        if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
-        val key = keys.key() ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY)
-        val model = prefs.ai.first().model
+        // Check the gate and reserve the request's cost in one step, so requests made at the same time each see the
+        // others' reservations and the cap holds (AI-03).
+        val (request, pending) = sending.withLock {
+            val state = state()
+            if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
+            val key = keys.key() ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY)
+            val request = MealRequest(key, prefs.ai.first().model, systemPrompt(), MealPrompt.user(text, origin, clarification))
+            request to reserve(request)
+        }
         val reply = try {
-            estimator.estimate(MealRequest(key, model, systemPrompt(), MealPrompt.user(text, origin, clarification)))
+            estimator.estimate(request)
         } catch (e: Exception) {
             // The estimator returns its failures; anything thrown is a bug, which still mustn't lose the description.
-            EstimatorReply(AiStatus.UNEXPECTED, null, model.id, emptyList(), latencyMs = 0, responseText = null, detail = e.javaClass.simpleName)
+            EstimatorReply(AiStatus.UNEXPECTED, null, request.model.id, emptyList(), latencyMs = 0, responseText = null, detail = e.javaClass.simpleName)
         }
         val checked = reply.estimate?.takeIf { reply.status == AiStatus.OK }?.let(MealCheck::check)
         val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty()) AiStatus.INVALID else reply.status
-        val id = aiDao.insertRequest(
-            AiRequestLogEntity(
-                createdAt = clock.millis(),
-                kind = AiKind.MEAL_TEXT,
+        aiDao.updateRequest(
+            pending.copy(
                 model = reply.servedBy,
                 inputTokens = reply.attempts.sumOf { it.inputTokens },
                 outputTokens = reply.attempts.sumOf { it.outputTokens },
@@ -125,7 +130,32 @@ class AiRepository @Inject constructor(
                 responseJson = reply.responseText,
             ),
         )
-        if (status == AiStatus.OK && checked != null) EstimateResult.Estimated(checked, id) else EstimateResult.Failed(status, id)
+        if (status == AiStatus.OK && checked != null) EstimateResult.Estimated(checked, pending.id) else EstimateResult.Failed(status, pending.id)
+    }
+
+    /** Serializes the gate check with the reservation it leads to. */
+    private val sending = Mutex()
+
+    /**
+     * Logs the request as PENDING at its upper-bound cost before it's sent. Monthly spend counts it at once, and
+     * if the app dies mid-request the row stays, so a request the server may have billed is never missing.
+     */
+    private suspend fun reserve(request: MealRequest): AiRequestLogEntity {
+        val bound = request.upperBound
+        val row = AiRequestLogEntity(
+            createdAt = clock.millis(),
+            kind = AiKind.MEAL_TEXT,
+            model = request.model.id,
+            inputTokens = bound.inputTokens,
+            outputTokens = bound.outputTokens,
+            cacheReadTokens = 0,
+            cacheWriteTokens = 0,
+            costUsd = AiPricing.cost(bound),
+            status = AiStatus.PENDING,
+            latencyMs = 0,
+            responseJson = null,
+        )
+        return row.copy(id = aiDao.insertRequest(row))
     }
 
     /** The persona-built system prompt (TRD §6.2): diet and region rules, your household measures and your top own foods. */

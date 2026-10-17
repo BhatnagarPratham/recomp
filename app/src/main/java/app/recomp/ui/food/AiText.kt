@@ -16,6 +16,7 @@ object AiText {
     /** Why an estimate failed, as TRD §6.2's table words it. */
     fun reason(status: AiStatus): String = when (status) {
         AiStatus.OK -> "Estimated"
+        AiStatus.PENDING -> "Still waiting for Claude"
         AiStatus.REFUSAL -> "Claude declined to estimate this"
         AiStatus.MAX_TOKENS -> "The estimate was cut off"
         AiStatus.INVALID -> "Claude's reply couldn't be read"
