@@ -133,6 +133,17 @@ class ProgressionEngineTest {
     }
 
     @Test
+    fun `a session straddling 12 reps scores on its best set, so rising reps never look like a stall`() {
+        val straddle = Exposure(1, listOf(LoggedSet(SetType.WORKING, 10_000, 15), LoggedSet(SetType.WORKING, 10_000, 14), LoggedSet(SetType.WORKING, 10_000, 12)))
+        val above = Exposure(2, listOf(LoggedSet(SetType.WORKING, 10_000, 14), LoggedSet(SetType.WORKING, 10_000, 13), LoggedSet(SetType.WORKING, 10_000, 13)))
+        assertTrue(ProgressionEngine.score(straddle, LoadType.WEIGHTED) > ProgressionEngine.score(above, LoadType.WEIGHTED))
+        // Reps climbing above 12 at the same weight keep scoring higher.
+        val raise = ExerciseConfig(12, 20, 3, 2_500, LoadType.WEIGHTED)
+        val climbing = history(exposure(10_000, 13, 13, 13), exposure(10_000, 14, 13, 13), exposure(10_000, 15, 14, 13), exposure(10_000, 16, 15, 14))
+        assertFalse(ProgressionEngine.recommend(raise, climbing, beginner).stalled)
+    }
+
+    @Test
     fun `after a deload only sessions since the reset count`() {
         val before = listOf(exposure(50_000, 10, 10, 9), exposure(50_000, 10, 9, 9), exposure(50_000, 10, 9, 9), exposure(50_000, 10, 10, 9))
         val resetAt = clock

@@ -58,7 +58,7 @@ object ProgressionEngine {
     const val BIG_JUMP_RATIO = 0.10
     const val BIG_JUMP_EXTRA_REPS = 2
     const val DELOAD_FACTOR = 0.9
-    /** Estimated 1RM is only trusted up to this many reps (Epley). */
+    /** Estimated 1RM is only shown and used for PRs up to this many reps (Epley). */
     const val E1RM_MAX_REPS = 12
 
     /** @param history completed exposures, newest first. */
@@ -123,16 +123,17 @@ object ProgressionEngine {
     fun e1rmG(loadG: Int, reps: Int): Double = loadG * (1 + reps / 30.0)
 
     /**
-     * The stall metric: best estimated 1RM over working sets of up to 12 reps, falling back to every
-     * working set for high-rep work. Bodyweight uses reps.
+     * The stall metric: best Epley score over every working set, with no rep cap. Above 12 reps it's a
+     * poor absolute 1RM, but as a progress measure it's consistent between sessions and rises with
+     * reps, which high-rep work needs: excluding or capping sets above 12 makes a session that
+     * straddles 12 score on its weakest set, or makes 14 → 16 reps look flat. Bodyweight uses reps.
      */
     fun score(exposure: Exposure, loadType: LoadType): Double {
         val sets = exposure.working
         if (sets.isEmpty()) return 0.0
         if (loadType == LoadType.BODYWEIGHT) return sets.maxOf { it.reps }.toDouble()
-        val trusted = sets.filter { it.reps <= E1RM_MAX_REPS }.ifEmpty { sets }
         // Weighted bodyweight with no load yet scores by reps so it still shows progress.
-        return trusted.maxOf { s -> (s.loadG ?: 0).let { if (it > 0) e1rmG(it, s.reps) else s.reps.toDouble() } }
+        return sets.maxOf { s -> (s.loadG ?: 0).let { if (it > 0) e1rmG(it, s.reps) else s.reps.toDouble() } }
     }
 
     /**

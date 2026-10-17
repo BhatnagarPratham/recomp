@@ -219,14 +219,14 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 
 - **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load; with no load yet the jump ratio is unbounded, so the big-jump guard asks for `repMax + 2` before the first plate. `ASSISTED` (P1) progresses by *reducing* the assistance load; until then it's treated as weighted.
 - **Steps.** `INCREASE` adds one increment to the top load. `DELOAD` takes 90% of the top load and rounds *down* to a multiple of the increment. Targets list one rep count per target set; `ADD_REPS` pads a short last exposure with its last set's reps.
-- **Stall metric.** Best estimated 1RM over working sets of 12 reps or fewer, falling back to all working sets when none qualify (high-rep isolation work). Bodyweight sets use reps.
+- **Stall metric.** The best Epley score over every working set, with no rep cap. It's a poor absolute 1RM above 12 reps, but as a progress measure it's consistent between sessions and rises with reps; excluding or capping high-rep sets made 12–20 rep work look stalled while reps climbed. Bodyweight sets use reps. Displayed e1RMs and E1RM PRs still use sets of 12 reps or fewer.
 - **Hold and Deload (PO-05).** Both store a reset point on the exercise: the start of the session where you chose. After a *Deload*, stall detection runs only on exposures after the reset, with the usual rule. After a *Hold*, the card returns once at least `window` exposures follow the reset and none beats the best from before it.
 - **In a deficit.** `ctx.inDeficit` is false until M3 has nutrition targets to compare with TDEE (`TODO(M3)`).
 - **Rounding.** `roundToStep` uses the exercise's increment as the equipment step (e.g. dumbbells at 2.5 kg). With 1.25 kg plates, the barbell step is 2.5 kg total. Load is always per dumbbell, never the pair.
 - **Estimated 1RM** uses Epley: `load × (1 + reps / 30)`. It's computed only for sets of 12 reps or fewer. Higher-rep sets still count for rep PRs.
 - **PRs** are computed once, when the workout finishes, and written to `personal_record`. At most one PR of each type per exercise per session.
 - **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `baseline`). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
-- **Overrides (PO-07).** `user_overrode` is set when a ticked working set's load differs from the target load.
+- **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
 - **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
 
 ### 5.2 Weight trend (BM-01)

@@ -6,6 +6,7 @@ import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.ExerciseEntity
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.RoutineEntity
+import app.recomp.data.db.RoutineExerciseEntity
 import app.recomp.data.db.SessionExerciseEntity
 import app.recomp.data.db.SessionExerciseWithSets
 import app.recomp.data.db.SetEntryEntity
@@ -144,20 +145,32 @@ class WorkoutRepository @Inject constructor(
 
     // Sets
 
-    /**
-     * Ticking a set (WL-02, WL-06), written before the UI moves on. A working set at a load other than
-     * the target's records an override (PO-07).
-     */
+    /** Ticking a set (WL-02, WL-06), written before the UI moves on. */
     suspend fun completeSet(setId: Long, loadG: Int?, reps: Int, rir: Int?, now: Long = System.currentTimeMillis()) = db.withTransaction {
         workoutDao.completeSet(setId, loadG, reps, rir, now)
-        val set = workoutDao.set(setId) ?: return@withTransaction
-        if (set.setType != SetType.WORKING) return@withTransaction
-        val row = workoutDao.sessionExercise(set.sessionExerciseId) ?: return@withTransaction
-        val target = ProgressionRepository.decode(row.recommendationJson)?.loadG ?: return@withTransaction
-        if (loadG != target && !row.userOverrode) workoutDao.markOverrode(row.id)
+        workoutDao.set(setId)?.let { recomputeOverride(it.sessionExerciseId) }
     }
 
-    suspend fun uncompleteSet(setId: Long) = workoutDao.uncompleteSet(setId)
+    suspend fun uncompleteSet(setId: Long) = db.withTransaction {
+        workoutDao.uncompleteSet(setId)
+        workoutDao.set(setId)?.let { recomputeOverride(it.sessionExerciseId) }
+    }
+
+    /**
+     * PO-07: an override is a top completed working load other than the target's. Back-off sets below
+     * the top and unticked typos don't count, so it's recomputed on every change.
+     */
+    private suspend fun recomputeOverride(sessionExerciseId: Long) {
+        val row = workoutDao.sessionExercise(sessionExerciseId) ?: return
+        val target = ProgressionRepository.decode(row.recommendationJson)?.loadG
+        val top = workoutDao.completedSets(sessionExerciseId).filter { it.setType == SetType.WORKING }.maxOfOrNull { it.loadG ?: 0 }
+        val overrode = target != null && top != null && top != target
+        if (overrode != row.userOverrode) workoutDao.setOverrode(row.id, overrode)
+    }
+
+    /** The routine's own plan per exercise, which the next workout will start from. */
+    suspend fun routinePlan(routineId: Long): Map<Long, RoutineExerciseEntity> =
+        routineDao.exercises(routineId).associate { it.entry.exerciseId to it.entry }
 
     suspend fun setValues(setId: Long, loadG: Int?, reps: Int?) = workoutDao.setValues(setId, loadG, reps)
 
@@ -167,6 +180,7 @@ class WorkoutRepository @Inject constructor(
         val set = workoutDao.set(setId) ?: return@withTransaction
         workoutDao.setType(setId, type)
         adjustTargetSets(set.sessionExerciseId, before = set.setType, after = type)
+        recomputeOverride(set.sessionExerciseId)
     }
 
     /** Adds a working set. The exercise's target grows with it, so saving back to the template keeps it. */
@@ -179,6 +193,7 @@ class WorkoutRepository @Inject constructor(
         val set = workoutDao.set(setId) ?: return@withTransaction
         workoutDao.deleteSet(setId)
         adjustTargetSets(set.sessionExerciseId, before = set.setType, after = null)
+        recomputeOverride(set.sessionExerciseId)
     }
 
     private suspend fun adjustTargetSets(sessionExerciseId: Long, before: SetType?, after: SetType?) {
