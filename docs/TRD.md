@@ -689,7 +689,12 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   4. Write the safety copy: the current data, exported to `files/backups/before-import.zip`.
   5. In one Room transaction with `PRAGMA defer_foreign_keys = ON`: delete every user table's rows, copy every row from the scratch database by column name, rebuild each FTS index, and run `foreign_key_check` once more before the commit, so a broken link rolls back instead of failing the commit.
   6. Replace the `settings` DataStore with the backup's settings, keeping any setting that never leaves the device. The DataStore migrations (`LegacyTrainingMigration`) run on old settings first.
-- **Ordering.** The database is replaced before the settings, and the scratch database has already proved the backup valid. Restore runs to the end even if the screen goes away (`NonCancellable`). If the settings write fails after the database was replaced, the message says so and points to the safety copy, which is always there from step 4.
+- **Ordering.** The settings can't share the database's transaction, so the database is replaced first; the scratch database has already proved the backup valid. Restore runs to the end even if the screen goes away (`NonCancellable`).
+  - **An interrupted import.** Inside the transaction, just before the commit, the database header's `application_id` is set to a random token, and `files/backups/pending-settings.json` is written with that token and the backup's settings. The token commits or rolls back with the rows.
+  - **At launch,** `BackupManager.finishPendingRestore` looks for that file:
+    - when the header carries its token, the commit happened, so the settings are written now ("Finishing the last import");
+    - when it doesn't, nothing was replaced, and the file is dropped ("The last import didn't happen").
+  - **A failed settings write** keeps the file for the next launch. The message says the data was replaced, and points to the safety copy, which is always there from step 4.
 - Import is refused while a workout is ACTIVE on the phone. A backup taken during a workout restores it as active, and the resume prompt picks it up.
 - **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store (the `secrets` DataStore and Tink's keyset file), is left out by omission. Lint rejects an `<exclude>` outside an included path, so the key files can't also be excluded by name.
 

@@ -24,6 +24,7 @@ import app.recomp.data.prefs.SettingsPrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Base64
@@ -33,6 +34,7 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -65,6 +67,22 @@ data class BackupManifest(
 ) {
     fun count(table: String): Int = rows[table] ?: 0
 }
+
+/** What [BackupManager.finishPendingRestore] found at launch. */
+enum class PendingOutcome {
+    /** The database had been replaced; its settings are now written too. */
+    FINISHED,
+
+    /** The import stopped before its database commit, so nothing changed. */
+    NOT_APPLIED,
+
+    /** The database had been replaced, but the settings still couldn't be written. */
+    SETTINGS_FAILED,
+}
+
+/** An import whose settings are still to be written (TRD §6.5): its database token and the settings. */
+@Serializable
+internal data class PendingRestore(val token: Int, val settings: Map<String, SettingValue>, val exportedAt: Long)
 
 /** One setting with its DataStore type, so it comes back as the same kind of key. */
 @Serializable
@@ -158,6 +176,23 @@ class BackupManager @Inject constructor(
         if (db.workoutDao().active() != null) throw BackupException("Finish or discard the workout in progress first, then import.")
 
         writeSafetyCopy(now)
+        // The settings can't share the database's transaction, so the commit stamps the database with a token and
+        // a marker file holds that token and the settings. Until the settings are written, the next launch can
+        // tell whether the commit happened and finish the job (finishPendingRestore).
+        val token = Random.nextInt(1, Int.MAX_VALUE)
+        val pending = PendingRestore(token, encodeSettings(backup.settings), backup.manifest.exportedAt)
+        try {
+            restoreDatabase(backup, token, pending)
+        } catch (e: Throwable) {
+            pendingFile.delete()
+            throw e
+        }
+        finishSettings(pending)
+        deleteDatabaseFiles(backup.scratch)
+    }
+
+    /** Copies the scratch database over the live one in one transaction, stamped with [token] (TRD §6.5 step 5). */
+    private suspend fun restoreDatabase(backup: PreparedBackup, token: Int, pending: PendingRestore) {
         SQLiteDatabase.openDatabase(backup.scratch.path, null, SQLiteDatabase.OPEN_READONLY).use { source ->
             db.withTransaction {
                 val live = db.openHelper.writableDatabase
@@ -171,18 +206,58 @@ class BackupManager @Inject constructor(
                 DatabaseSnapshot.virtualTables(schema).forEach { live.execSQL("INSERT INTO `$it`(`$it`) VALUES('rebuild')") }
                 // Checked before the commit, so a broken link rolls back instead of failing the commit itself.
                 brokenLinks(live::query)?.let { throw BackupException.damaged("entries that point at rows it doesn't have ($it)") }
+                // The header's application_id commits (or rolls back) with the rows.
+                live.execSQL("PRAGMA application_id = $token")
+                writePending(pending)
             }
         }
+    }
+
+    /** Writes the backup's settings, then drops the marker. A failure keeps the marker for the next launch. */
+    private suspend fun finishSettings(pending: PendingRestore) {
         try {
-            prefs.replaceAll(backup.settings)
+            prefs.replaceAll(decodeSettings(pending.settings))
         } catch (e: Exception) {
             throw BackupException(
-                "Your data was replaced, but the settings couldn't be (${e.message ?: e.javaClass.simpleName}). Restore the data from before the import in Settings → Data.",
+                "Your data was replaced, but the settings couldn't be (${e.message ?: e.javaClass.simpleName}). " +
+                    "Recomp tries again the next time it starts; if that fails too, restore the data from before the import in Settings → Data.",
                 e,
             )
         }
-        deleteDatabaseFiles(backup.scratch)
+        pendingFile.delete()
     }
+
+    /**
+     * Run at launch (TRD §6.5): if an import was interrupted, finishes it when its database commit happened (the
+     * header carries its token) and drops it when it didn't. Null when there was nothing to do.
+     */
+    suspend fun finishPendingRestore(): PendingOutcome? = withContext(NonCancellable + Dispatchers.IO) {
+        val pending = readPending() ?: return@withContext null
+        val stamped = db.openHelper.writableDatabase.query("PRAGMA application_id").use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        if (stamped != pending.token) {
+            pendingFile.delete()
+            return@withContext PendingOutcome.NOT_APPLIED
+        }
+        try {
+            finishSettings(pending)
+            PendingOutcome.FINISHED
+        } catch (e: BackupException) {
+            PendingOutcome.SETTINGS_FAILED
+        }
+    }
+
+    internal val pendingFile: File get() = File(context.filesDir, "backups/pending-settings.json")
+
+    private fun writePending(pending: PendingRestore) {
+        pendingFile.parentFile!!.mkdirs()
+        FileOutputStream(pendingFile).use { out ->
+            out.write(json.encodeToString(pending).toByteArray())
+            out.fd.sync()
+        }
+    }
+
+    internal fun readPending(): PendingRestore? =
+        pendingFile.takeIf { it.isFile }?.let { runCatching { json.decodeFromString<PendingRestore>(it.readText()) }.getOrNull() ?: run { it.delete(); null } }
 
     /** When the safety copy was made, or null without one. */
     suspend fun safetyCopyDate(): Long? = withContext(Dispatchers.IO) {

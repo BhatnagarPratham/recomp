@@ -616,6 +616,7 @@ AI uses a Claude API key that each person brings. A claude.ai subscription login
   - Import is refused while a workout is in progress.
 - **Safety copy.** Just before replacing anything, the app saves the current data inside itself. There's one copy, and the next import replaces it. Settings → Data then offers **Restore the data from before the import**, with its date.
 - **Older backups and merging.** A backup from an older version is upgraded as it's imported. Import never merges: it always replaces.
+- **Interrupted imports.** If Recomp closes partway through an import, the next launch either finishes it (the data was already in place, so the settings follow) or says it didn't happen and nothing changed.
 - **Android's own backup** (Auto Backup and device transfer) includes only the database and the settings, never the AI key.
 
 ## 8. Design rationale: what matters most for body-composition goals

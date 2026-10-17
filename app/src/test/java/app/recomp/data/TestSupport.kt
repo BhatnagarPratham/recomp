@@ -2,7 +2,9 @@ package app.recomp.data
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.ai.AiKeyStore
@@ -33,11 +35,13 @@ import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealRequest
 import app.recomp.domain.ai.TokenUsage
 import java.io.File
+import java.io.IOException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -133,12 +137,23 @@ class FakeEstimator : MealEstimator {
     }
 }
 
+/** A settings store whose writes can be made to fail, as on a full disk. */
+class FlakyStore(private val inner: DataStore<Preferences>) : DataStore<Preferences> {
+    var failWrites = false
+    override val data: Flow<Preferences> = inner.data
+
+    override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+        if (failWrites) throw IOException("No space left on device")
+        return inner.updateData(transform)
+    }
+}
+
 /** A file-backed database and settings store, so a test can "kill the app" by closing and reopening. */
 class TestApp(private val dir: File) {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val dbFile = File(dir, "recomp-test.db")
-    /** The settings store itself, so a test can plant a key the app never writes there. */
-    val store = PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { File(dir, "settings.preferences_pb") }
+    /** The settings store itself, so a test can plant a key the app never writes there, or make its writes fail. */
+    val store = FlakyStore(PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { File(dir, "settings.preferences_pb") })
     val prefs = SettingsPrefs(store)
     val days = DayBoundary(prefs)
     val foodFiles = TestFoodFiles()

@@ -2,6 +2,8 @@ package app.recomp.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.recomp.data.backup.BackupManager
+import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.food.FoodSeeder
 import app.recomp.data.repo.PersonaRepository
@@ -45,6 +47,7 @@ class MainViewModel @Inject constructor(
     private val restTimer: RestTimer,
     personas: PersonaRepository,
     foodSeeder: FoodSeeder,
+    backups: BackupManager,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -65,7 +68,16 @@ class MainViewModel @Inject constructor(
     private val _nav = Channel<AppNav>(Channel.BUFFERED)
     val nav = _nav.receiveAsFlow()
 
+    /** An import interrupted last time, finished or dropped at this launch (TRD §6.5); shown once. */
+    private val _restoreNotice = MutableStateFlow<PendingOutcome?>(null)
+    val restoreNotice: StateFlow<PendingOutcome?> = _restoreNotice
+
+    fun dismissRestoreNotice() {
+        _restoreNotice.value = null
+    }
+
     init {
+        viewModelScope.launch { _restoreNotice.value = backups.finishPendingRestore() }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
     }

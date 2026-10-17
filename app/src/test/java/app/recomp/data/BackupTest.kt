@@ -1,5 +1,6 @@
 package app.recomp.data
 
+import android.database.sqlite.SQLiteDatabase
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.backup.BackupException
@@ -7,6 +8,8 @@ import app.recomp.data.backup.BackupManager
 import app.recomp.data.backup.BackupManifest
 import app.recomp.data.backup.DatabaseData
 import app.recomp.data.backup.DatabaseSnapshot
+import app.recomp.data.backup.PendingOutcome
+import app.recomp.data.backup.PendingRestore
 import app.recomp.data.backup.SchemaItem
 import app.recomp.data.backup.SettingValue
 import app.recomp.data.db.AiRequestLogEntity
@@ -359,6 +362,77 @@ class BackupTest {
         // The confirmation would show counts the file doesn't hold.
         assertTrue(refused(file(manifest.copy(rows = manifest.rows + ("workout_session" to 999)), data)).contains("doesn't match"))
         assertEquals(before, dump())
+    }
+
+    @Test
+    fun `a failure inside the restore transaction leaves everything untouched`() = runBlocking {
+        fill()
+        val backup = export()
+        app.body.logWeighIn(80_500, WeightSource.HOME_SCALE, System.currentTimeMillis())
+        val before = dump()
+        val prepared = app.backup.prepare(ByteArrayInputStream(backup))
+        // Damage the checked scratch database, so the last foreign-key check inside the transaction fails.
+        SQLiteDatabase.openDatabase(prepared.scratch.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("INSERT INTO body_weight (log_date, measured_at, weight_g, source, scan_id) VALUES ('2026-10-18', 1, 80000, 'SCAN', 999)")
+        }
+        val message = try {
+            app.backup.restore(prepared)
+            fail("Restored a broken database")
+            ""
+        } catch (e: BackupException) {
+            e.message!!
+        }
+        assertTrue(message, message.contains("point at rows"))
+        assertEquals(before, dump())
+        assertFalse(app.backup.pendingFile.exists())
+        assertNull(app.backup.finishPendingRestore())
+        // The connection isn't left inside a transaction.
+        assertTrue(app.body.logWeighIn(80_000, WeightSource.HOME_SCALE, System.currentTimeMillis()) > 0)
+    }
+
+    @Test
+    fun `settings that fail after the database is replaced are finished at the next launch`() = runBlocking {
+        fill()
+        val (tables, settings) = dump()
+        val backup = export()
+        app.body.logWaist(88.0, System.currentTimeMillis())
+        app.personas.setWeightSource(WeightSource.GYM_SCALE)
+
+        app.store.failWrites = true
+        val message = try {
+            app.backup.restore(app.backup.prepare(ByteArrayInputStream(backup)))
+            fail("The settings write didn't fail")
+            ""
+        } catch (e: BackupException) {
+            e.message!!
+        }
+        assertTrue(message, message.startsWith("Your data was replaced, but the settings couldn't be"))
+        // The database is the backup's; the settings aren't yet, and the marker says so.
+        assertEquals(tables, dump().first)
+        assertEquals(WeightSource.GYM_SCALE, app.prefs.currentPersona().weightSource)
+        assertTrue(app.backup.pendingFile.exists())
+
+        // Next launch, still failing: kept for later.
+        assertEquals(PendingOutcome.SETTINGS_FAILED, app.backup.finishPendingRestore())
+        assertTrue(app.backup.pendingFile.exists())
+
+        app.store.failWrites = false
+        app.restart()
+        assertEquals(PendingOutcome.FINISHED, app.backup.finishPendingRestore())
+        assertEquals(tables to settings, dump())
+        assertFalse(app.backup.pendingFile.exists())
+        assertNull(app.backup.finishPendingRestore())
+    }
+
+    @Test
+    fun `a marker from an import that never committed is dropped at launch`() = runBlocking {
+        fill()
+        val before = dump()
+        app.backup.pendingFile.parentFile!!.mkdirs()
+        app.backup.pendingFile.writeText(json.encodeToString(PendingRestore(token = 424_242, settings = emptyMap(), exportedAt = 1)))
+        assertEquals(PendingOutcome.NOT_APPLIED, app.backup.finishPendingRestore())
+        assertEquals(before, dump())
+        assertFalse(app.backup.pendingFile.exists())
     }
 
     @Test
