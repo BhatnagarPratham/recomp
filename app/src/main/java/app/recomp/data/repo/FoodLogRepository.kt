@@ -219,22 +219,29 @@ class FoodLogRepository @Inject constructor(
     }
 
     /**
-     * The learning loop: an AI-learned food at the edited item's values per 100 g, with its unit at the item's
-     * weight. One of the same name is updated rather than duplicated; its diet tag stays as it was.
+     * The learning loop (TRD §6.2): your edited item's values per 100 g, with its unit at the item's weight. One of
+     * your own foods of the same name is updated rather than duplicated: an AI-learned one takes the item's diet tag
+     * too, a custom one keeps the tag you gave it. Bundled foods are never changed, so an edited dish named like one
+     * becomes your AI-learned version beside it. The tag is what the item contains (the model's per-item diet, by
+     * its strictest ingredient), or [fallbackTag], your own-food tag, when the model gave none.
      */
-    private suspend fun learn(item: EstimatedItem, dietTag: FoodDiet, now: Long): Long {
+    private suspend fun learn(item: EstimatedItem, fallbackTag: FoodDiet, now: Long): Long {
         val per = item.per100g
         val name = item.name.trim()
-        val existing = foodDao.aiFoodNamed(name)
+        val existing = foodDao.ownFoodNamed(name)
         val id = if (existing != null) {
             foodDao.update(
-                existing.copy(name = name, kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG),
+                existing.copy(
+                    name = if (existing.source == FoodSource.AI) name else existing.name,
+                    diet = if (existing.source == FoodSource.AI) item.diet ?: existing.diet else existing.diet,
+                    kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG,
+                ),
             )
             existing.id
         } else {
             foodDao.insert(
                 FoodEntity(
-                    name = name, source = FoodSource.AI, diet = dietTag, kcal100g = per.kcal, protein100g = per.proteinG,
+                    name = name, source = FoodSource.AI, diet = item.diet ?: fallbackTag, kcal100g = per.kcal, protein100g = per.proteinG,
                     carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG, createdAt = now,
                 ),
             )

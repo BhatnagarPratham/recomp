@@ -1,5 +1,6 @@
 package app.recomp.domain.ai
 
+import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.Macros
 import app.recomp.domain.food.Per100g
 import kotlin.math.abs
@@ -20,6 +21,8 @@ data class EstimatedItem(
     val fiberG: Double,
     val confidence: Confidence,
     val assumptions: String,
+    /** What the item contains, by its strictest ingredient (TRD §6.4). Null when the model gave none it could read. */
+    val diet: FoodDiet? = null,
 ) {
     val macros: Macros get() = Macros(kcal, proteinG, carbsG, fatG, fiberG)
 

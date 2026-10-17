@@ -8,6 +8,7 @@ import app.recomp.domain.ai.MealEstimate
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealRequest
 import app.recomp.domain.ai.TokenUsage
+import app.recomp.domain.food.FoodDiet
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
@@ -67,9 +68,14 @@ object MealSchema {
             "fat_g" to number("Fat in grams"),
             "fiber_g" to number("Fibre in grams"),
             "confidence" to mapOf("type" to "string", "enum" to listOf("high", "medium", "low")),
+            "diet" to mapOf(
+                "type" to "string",
+                "enum" to listOf("vegan", "vegetarian", "egg", "fish", "meat"),
+                "description" to "By the strictest ingredient: vegetarian has dairy or honey, fish includes seafood",
+            ),
             "assumptions" to mapOf("type" to "string", "description" to "Size, recipe, oil or sugar assumed, in a few words"),
         ),
-        "required" to listOf("name", "quantity", "unit", "grams", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "confidence", "assumptions"),
+        "required" to listOf("name", "quantity", "unit", "grams", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "confidence", "assumptions", "diet"),
         "additionalProperties" to false,
     )
 
@@ -99,6 +105,7 @@ object MealSchema {
         @SerialName("fiber_g") val fiberG: Double = 0.0,
         val confidence: String = "medium",
         val assumptions: String = "",
+        val diet: String? = null,
     )
 
     @Serializable
@@ -116,6 +123,7 @@ object MealSchema {
                     proteinG = it.proteinG, carbsG = it.carbsG, fatG = it.fatG, fiberG = it.fiberG,
                     confidence = Confidence.entries.firstOrNull { c -> c.name.equals(it.confidence.trim(), ignoreCase = true) } ?: Confidence.MEDIUM,
                     assumptions = it.assumptions,
+                    diet = it.diet?.let { d -> FoodDiet.entries.firstOrNull { tag -> tag.name.equals(d.trim(), ignoreCase = true) } },
                 )
             },
             clarifyingQuestion = reply.clarifyingQuestion.trim().ifEmpty { null },

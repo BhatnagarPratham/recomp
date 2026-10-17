@@ -1,6 +1,7 @@
 package app.recomp.data
 
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.db.FoodEntity
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.CustomFood
 import app.recomp.data.repo.EstimateResult
@@ -309,6 +310,63 @@ class AiFlowTest {
         // Undo takes the rows and their use back.
         app.foodLog.undoInsert(again)
         assertEquals(1, app.db.foodDao().get(learned.id)!!.useCount)
+    }
+
+    @Test
+    fun `a learned food is tagged by what it contains, not by your diet`() = runBlocking {
+        // A lacto-vegetarian's edited chicken biryani is meat: it stays out of their search and their prompts.
+        val biryani = item(name = "Chicken biryani", grams = 300.0, quantity = 1.0, unit = "plate").copy(diet = FoodDiet.MEAT)
+        val rows = app.db.foodLogDao().get(app.foodLog.logAiMeal(date, "dinner", listOf(AiItemToLog(biryani, true)), Origin.ORDERED, 1, FoodDiet.VEGETARIAN))
+        assertEquals(FoodDiet.MEAT, app.db.foodDao().get(rows.single().foodId!!)!!.diet)
+        assertTrue(app.foods.search("biryani").isEmpty())
+        assertFalse(ai.systemPrompt().contains("Chicken biryani"))
+
+        // A meat eater's edited dal is vegan, so it would still show after a change of diet.
+        val dal = item(name = "Dal tadka", grams = 150.0).copy(diet = FoodDiet.VEGAN)
+        val dalId = app.db.foodLogDao().get(app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(dal, true)), Origin.HOME, 2, FoodDiet.MEAT)).single().foodId!!
+        assertEquals(FoodDiet.VEGAN, app.db.foodDao().get(dalId)!!.diet)
+
+        // Learned again with ghee, it's re-tagged; with no tag from the model, it keeps the one it had.
+        app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(dal.copy(diet = FoodDiet.VEGETARIAN, kcal = 250.0), true)), Origin.HOME, 3, FoodDiet.MEAT)
+        assertEquals(FoodDiet.VEGETARIAN, app.db.foodDao().get(dalId)!!.diet)
+        app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(dal.copy(diet = null, kcal = 260.0), true)), Origin.HOME, 4, FoodDiet.MEAT)
+        assertEquals(FoodDiet.VEGETARIAN, app.db.foodDao().get(dalId)!!.diet)
+
+        // With no tag at all, a new food falls back to your own-food tag.
+        val untagged = app.db.foodLogDao().get(app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(item(name = "Sprout salad"), true)), Origin.HOME, 5, FoodDiet.VEGETARIAN))
+        assertEquals(FoodDiet.VEGETARIAN, app.db.foodDao().get(untagged.single().foodId!!)!!.diet)
+    }
+
+    @Test
+    fun `a learned dish updates your own food of that name, and never a bundled one`() = runBlocking {
+        val shake = app.foods.createCustom(CustomFood("Protein shake", null, Per100g(80.0, 15.0, 3.0, 1.0), FoodDiet.VEGETARIAN, "glass" to 300.0))
+        val seedDal = app.db.foodDao().insert(
+            FoodEntity(
+                name = "Moong dal", source = FoodSource.SEED, sourceKey = "seed:test-dal", diet = FoodDiet.VEGAN,
+                kcal100g = 100.0, protein100g = 7.0, carbs100g = 15.0, fat100g = 1.0, fiber100g = 3.0, createdAt = 1,
+            ),
+        )
+        val shakeItem = item(name = "protein SHAKE", grams = 350.0, kcal = 300.0, protein = 52.0, quantity = 1.0, unit = "glass").copy(diet = FoodDiet.VEGAN)
+        val dalItem = item(name = "Moong dal", grams = 200.0, kcal = 240.0, quantity = 1.0, unit = "katori")
+        val rows = app.db.foodLogDao().get(
+            app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(shakeItem, true), AiItemToLog(dalItem, true)), Origin.HOME, 1, FoodDiet.VEGETARIAN),
+        )
+
+        // Your custom food takes your numbers, keeps its name and the tag you gave it, and gets no AI twin.
+        assertEquals(shake, rows[0].foodId)
+        val updated = app.db.foodDao().get(shake)!!
+        assertEquals("Protein shake", updated.name)
+        assertEquals(FoodSource.CUSTOM, updated.source)
+        assertEquals(FoodDiet.VEGETARIAN, updated.diet)
+        assertEquals(300.0 / 3.5, updated.kcal100g, 1e-9)
+        assertEquals(350.0, app.db.foodDao().units(shake).single { it.label == "glass" }.grams, 1e-9)
+
+        // The bundled dal is untouched; your version sits beside it as AI-learned.
+        assertEquals(100.0, app.db.foodDao().get(seedDal)!!.kcal100g, 0.0)
+        val learned = app.db.foodDao().get(rows[1].foodId!!)!!
+        assertEquals(FoodSource.AI, learned.source)
+        assertEquals(listOf(FoodSource.AI, FoodSource.SEED), app.foods.search("moong").map { it.food.source })
+        assertEquals(listOf(learned.id), app.db.foodDao().bySource(FoodSource.AI.name).map { it.id })
     }
 
     @Test

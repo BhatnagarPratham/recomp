@@ -31,6 +31,10 @@ object MealPrompt {
                 "confidence of high, medium or low, and a short note of the assumptions you made (size, recipe, oil, sugar).",
         )
         appendLine(
+            "Tag each item's diet by its strictest ingredient: vegan; vegetarian (has dairy or honey); egg; fish (fish or " +
+                "seafood); or meat.",
+        )
+        appendLine(
             "Keep each item's calories consistent with its macros (4 kcal per gram of protein and carbohydrate, 9 per gram " +
                 "of fat). Use typical values for the dish; never leave out an item because you're unsure, and use a lower " +
                 "confidence instead. Leave clarifying_question empty unless one answer would change the meal's total by more " +

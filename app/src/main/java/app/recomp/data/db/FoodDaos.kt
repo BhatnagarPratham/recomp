@@ -65,9 +65,17 @@ interface FoodDao {
     )
     suspend fun ownFoods(diets: List<String>, region: String, limit: Int): List<FoodEntity>
 
-    /** The learning loop's match: an unarchived AI-learned food of this name, ignoring case. */
-    @Query("SELECT * FROM food WHERE source = 'AI' AND archived = 0 AND name = :name COLLATE NOCASE ORDER BY id LIMIT 1")
-    suspend fun aiFoodNamed(name: String): FoodEntity?
+    /**
+     * The learning loop's match: one of your own unarchived foods (custom first, then AI-learned) of this name,
+     * ignoring case. Bundled foods never match, because they're never changed.
+     */
+    @Query(
+        """
+        SELECT * FROM food WHERE source IN ('CUSTOM', 'AI') AND archived = 0 AND name = :name COLLATE NOCASE
+        ORDER BY source = 'CUSTOM' DESC, id LIMIT 1
+        """,
+    )
+    suspend fun ownFoodNamed(name: String): FoodEntity?
 
     @Query("SELECT * FROM food WHERE id = :id")
     suspend fun get(id: Long): FoodEntity?

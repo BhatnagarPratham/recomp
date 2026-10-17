@@ -5,6 +5,7 @@ import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Confidence
 import app.recomp.domain.ai.MealRequest
+import app.recomp.domain.food.FoodDiet
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -45,7 +46,7 @@ class ClaudeMealEstimatorTest {
 
     private val reply = """
         {"items":[
-          {"name":"Phulka","quantity":2,"unit":"piece","grams":70,"kcal":210,"protein_g":6.5,"carbs_g":42,"fat_g":1.5,"fiber_g":4,"confidence":"high","assumptions":"no ghee"},
+          {"name":"Phulka","quantity":2,"unit":"piece","grams":70,"kcal":210,"protein_g":6.5,"carbs_g":42,"fat_g":1.5,"fiber_g":4,"confidence":"high","assumptions":"no ghee","diet":"vegan"},
           {"name":"Dal","quantity":1,"unit":"katori","grams":150,"kcal":170,"protein_g":9,"carbs_g":24,"fat_g":4,"fiber_g":5,"confidence":"Medium","assumptions":"","extra":"ignored"}
         ],"clarifying_question":"Was the dal tempered with ghee?"}
     """.trimIndent()
@@ -78,6 +79,8 @@ class ClaudeMealEstimatorTest {
         assertEquals(6.5, items[0].proteinG, 0.0)
         assertEquals(Confidence.HIGH, items[0].confidence)
         assertEquals(Confidence.MEDIUM, items[1].confidence)
+        assertEquals(FoodDiet.VEGAN, items[0].diet)
+        assertNull("no diet it could read", items[1].diet)
         assertEquals("Was the dal tempered with ghee?", r.estimate!!.clarifyingQuestion)
         assertEquals("claude-opus-5-5", r.servedBy)
         assertEquals(1200L, r.attempts.single().inputTokens)
@@ -113,7 +116,7 @@ class ClaudeMealEstimatorTest {
         assertEquals("false", schema.getValue("additionalProperties").jsonPrimitive.content)
         val item = schema.getValue("properties").jsonObject.getValue("items").jsonObject.getValue("items").jsonObject
         assertEquals(
-            listOf("name", "quantity", "unit", "grams", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "confidence", "assumptions"),
+            listOf("name", "quantity", "unit", "grams", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "confidence", "assumptions", "diet"),
             item.getValue("required").jsonArray.map { it.jsonPrimitive.content },
         )
 

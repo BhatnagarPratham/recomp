@@ -514,13 +514,13 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
   "items": [
     { "name": "Phulka", "quantity": 2, "unit": "piece", "grams": 70,
       "kcal": 210, "protein_g": 6.5, "carbs_g": 42, "fat_g": 1.5, "fiber_g": 4,
-      "confidence": "high", "assumptions": "medium size, no ghee" }
+      "confidence": "high", "assumptions": "medium size, no ghee", "diet": "vegan" }
   ],
   "clarifying_question": "Was the dal tempered with ghee?"
 }
 ```
 
-Every property is required, as structured outputs expect with `additionalProperties: false`; `clarifying_question` is `""` when there's none. `confidence` is an enum of `high`, `medium` and `low`. The meal schema is `MealSchema` in `data/ai`, and the reply is decoded with kotlinx.serialization, ignoring unknown keys.
+Every property is required, as structured outputs expect with `additionalProperties: false`; `clarifying_question` is `""` when there's none. `confidence` is an enum of `high`, `medium` and `low`. `diet` (vegan, vegetarian, egg, fish or meat) is what the item contains, by its strictest ingredient (§6.4); a value that can't be read is treated as unknown. The meal schema is `MealSchema` in `data/ai`, and the reply is decoded with kotlinx.serialization, ignoring unknown keys.
 
 **Model.** `claude-opus-5-5` with adaptive thinking at effort `low` (decided 2026-10-18), configurable in settings (`ai_model`: Opus 5.5, Sonnet 5.5 or Haiku 5.5). Splitting a meal into items is an extraction task, and `low` keeps a typical estimate to a few seconds, well inside the 20 s timeout and PRD §10's 45 s describe-and-review target. Thinking can't be disabled on Opus 5.5, so no `thinking` field is sent; `max_tokens` is 8,000, room for the thinking and a long meal. The eval set (§8) decides whether the effort or the model should change.
 
@@ -561,7 +561,10 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   - Totals are recomputed from the kept items; nothing from the model is summed as given.
   - `stop_reason` (`refusal`, `max_tokens`) is checked before content is read; errors are handled with the SDK's typed exceptions (table above); the server-side refusal fallback is on (above).
 - **Saving.** One `food_log` row per item in one transaction, `source = AI_TEXT`, with `ai_request_id` and the meal's origin. *Save + My meals* then saves those rows as a saved meal (NU-13).
-- **Learning loop.** An item whose name, grams or numbers you changed before saving becomes a `food(source = AI)`: values per 100 g from your item, the persona's own-food diet tag (`Diet.ownFoodTag`), no region, and its unit (unless grams) as a calibrated `food_unit` at grams ÷ quantity. An unarchived AI food with the same name (ignoring case) is updated instead of duplicated. The log row links to the food, so it's counted in use counts and appears in search, in future prompts and later in the local parser; repeat dishes converge on your numbers. Unedited items are logged with no food, from their snapshot.
+- **Learning loop.** An item whose name, grams or numbers you changed before saving becomes a `food(source = AI)`: values per 100 g from your item, no region, and its unit (unless grams) as a calibrated `food_unit` at grams ÷ quantity.
+  - **Diet tag:** the item's own `diet` from the reply, so a lacto-vegetarian's edited "chicken biryani" is `MEAT` and stays out of their search and prompts, and a meat eater's dal stays vegan. Only when the reply has no readable tag does the food fall back to the persona's own-food tag (`Diet.ownFoodTag`).
+  - **No duplicates of your foods:** one of your own unarchived foods with the same name (ignoring case; custom first, then AI-learned) is updated instead. An AI-learned food also takes the new diet tag (when there is one), so a wrong tag is corrected. A custom food keeps its name and the tag you gave it.
+  - **Bundled foods are never changed.** The basics and INDB are re-imported from their files, so an edited dish named like one becomes your AI-learned version beside it, marked *AI-learned* in search and ranked above it. The log row links to the food, so it's counted in use counts and appears in search, in future prompts and later in the local parser; repeat dishes converge on your numbers. Unedited items are logged with no food, from their snapshot.
 - **Privacy.** Sent: the meal text and origin (or a photo, label or InBody image in P1), your diet and region rules, your household measures, and your top 30 own foods (names, values and units). Never sent: your name, body data, targets or log history. The first estimate shows a one-time notice (`ai_notice_seen`).
 - **API key storage:**
   - Entered once in Settings → AI. Only printable ASCII without spaces is accepted, which is all a key is made of: a zero-width space, BOM or en dash picked up in a copy would make OkHttp reject the header with the whole key in its error message. A stored value that fails the same check reads as no key.

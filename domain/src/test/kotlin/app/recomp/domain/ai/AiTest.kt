@@ -155,6 +155,7 @@ class AiTest {
         assertTrue(veg.contains("vegetarian version of ambiguous dishes, such as biryani, momos"))
         assertTrue(veg.contains("phulka or roti, katori"))
         assertTrue(veg.contains("1 katori = 180 g; 1 glass = 250 g"))
+        assertTrue("each item is tagged by what it contains", veg.contains("Tag each item's diet by its strictest ingredient"))
         assertFalse(veg.contains("own foods"))
 
         val vegan = MealPrompt.system(Diet.VEGAN, FoodRegion.INTERNATIONAL, emptyMap(), emptyList())

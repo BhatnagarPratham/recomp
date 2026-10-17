@@ -443,7 +443,12 @@ private fun FoodRow(hit: FoodHit, onOpen: () -> Unit, onEdit: (() -> Unit)?, onH
     val food = hit.food
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).heightIn(min = 56.dp).clickable(onClickLabel = "Log ${food.name}", onClick = onOpen).padding(vertical = 8.dp)) {
-            Text(food.name + if (food.source == FoodSource.CUSTOM) " · yours" else "", style = MaterialTheme.typography.bodyLarge)
+            val mark = when (food.source) {
+                FoodSource.CUSTOM -> " · yours"
+                FoodSource.AI -> " · AI-learned"
+                else -> ""
+            }
+            Text(food.name + mark, style = MaterialTheme.typography.bodyLarge)
             Text(FoodText.serving(food, hit.serving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (food.caveat != null) Text("⚠ Frying oil counted in full; likely reads high", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         }
