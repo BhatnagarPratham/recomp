@@ -36,47 +36,48 @@ class IndbConverterTest {
 
     @Test
     fun `converts recipes with diet tags, serving units and the frying caveat`() {
+        // Invented rows laid out like INDB's: no real INDB values are committed (TRD §6.4).
         val n = nutrients(
-            listOf("ASC001", "Hot tea (Garam Chai)", "asc_manual", 16.144, 2.58, 0.388, 0.532, 0, "tea cup", 33.98, 0.8165),
-            listOf("ASC107", "Poori ", "asc_manual", 738.0, 40.0, 1.4, 78.0, 2.0, "poori", 922.5, 1.75),
-            listOf("ASC232", "Mutton yakhni", "asc_manual", 104.0, 3.0, 8.3, 6.0, 0, "bowl", 241.28, 19.3),
-            listOf("BFP030", "Cauliflower canjee", "bfp_manual", 7.0, 1.0, 0.4, 0.1, 0.5, "", 12.5, 0.7),
-            listOf("ASC079", "Clear tomato soup", "asc_manual", 80.0, 5.0, 1.0, 6.0, 1.0, "Tablespoon", 0, 0.2),
-            listOf("OSR001", "Broken row", "osr", null, 1.0, 1.0, 1.0, 0, "bowl", 1.0, 1.0),
+            listOf("TST001", "Test spiced milk  (Test doodh) ", "test", 40.0, 5.0, 2.0, 1.5, 0, "Tea Cup", 80.0, 4.0),
+            listOf("TST002", "Test fried bread ", "test", 600.0, 50.0, 5.0, 42.0, 2.0, "piece", 300.0, 2.5),
+            listOf("TST003", "Test meat stew", "test", 120.0, 3.0, 10.0, 7.0, 0, "bowl", 240.0, 20.0),
+            listOf("TST004", "Test vegetable broth", "test", 10.0, 1.0, 0.5, 0.2, 0.5, "", 25.0, 1.25),
+            listOf("TST005", "Test light soup", "test", 80.0, 5.0, 1.0, 6.0, 1.0, "Tablespoon", 0, 0.2),
+            listOf("TST006", "Broken row", "test", null, 1.0, 1.0, 1.0, 0, "bowl", 1.0, 1.0),
         )
         val r = recipes(
-            listOf("ASC001", "Hot tea", "Milk", "50", "ml", "L002", "Milk, whole, Cow", 50, "ml"),
-            listOf("ASC001", "Hot tea", "Sugar", "2", "tsp", "I502", "Sugar, white", 2, "tsp"),
-            listOf("ASC107", "Poori", "Atta", "100", "g", "A019", "Wheat flour, atta", 100, "g"),
-            listOf("ASC107", "Poori", "Fat", "for frying", "", "T508", "Oil, sunflower", 2, "C"),
-            listOf("ASC232", "Mutton yakhni", "Mutton", "250", "g", "O064", "MUTTON, muscle", 250, "g"),
-            listOf("BFP030", "Cauliflower canjee", "Cauliflower", "100", "g", "D036", "Cauliflower", 100, "g"),
-            listOf("ASC079", "Clear tomato soup", "Fat", "for frying", "", "T508", "Oil, sunflower", 2, "tbsp"),
+            listOf("TST001", "Test spiced milk", "Milk", "50", "ml", "L002", "Milk, whole", 50, "ml"),
+            listOf("TST001", "Test spiced milk", "Sugar", "2", "tsp", "I502", "Sugar, white", 2, "tsp"),
+            listOf("TST002", "Test fried bread", "Flour", "100", "g", "A019", "Wheat flour", 100, "g"),
+            listOf("TST002", "Test fried bread", "Fat", "for frying", "", "T508", "Oil, sunflower", 2, "C"),
+            listOf("TST003", "Test meat stew", "Mutton", "250", "g", "O064", "Mutton, muscle", 250, "g"),
+            listOf("TST004", "Test vegetable broth", "Cauliflower", "100", "g", "D036", "Cauliflower", 100, "g"),
+            listOf("TST005", "Test light soup", "Fat", "for frying", "", "T508", "Oil, sunflower", 2, "tbsp"),
         )
         val result = IndbConverter.convert(n, r)
-        assertEquals(listOf("OSR001"), result.skipped)
+        assertEquals(listOf("TST006"), result.skipped)
         val byKey = result.foods.associateBy { it.key }
 
-        val tea = byKey.getValue("indb:ASC001")
-        assertEquals(FoodDiet.VEGETARIAN, tea.diet)
-        assertEquals(FoodRegion.INDIAN, tea.region)
-        assertEquals("Hot tea (Garam Chai)", tea.name)
-        assertEquals(16.14, tea.per100g.kcal, 1e-9)
+        val milk = byKey.getValue("indb:TST001")
+        assertEquals(FoodDiet.VEGETARIAN, milk.diet)
+        assertEquals(FoodRegion.INDIAN, milk.region)
+        assertEquals("Test spiced milk (Test doodh)", milk.name)
+        assertEquals(40.0, milk.per100g.kcal, 1e-9)
         // grams = per-serving energy ÷ per-100 g energy × 100
-        assertEquals(listOf("tea cup" to 210.5), tea.units)
-        assertNull(tea.caveat)
+        assertEquals(listOf("tea cup" to 200.0), milk.units)
+        assertNull(milk.caveat)
 
-        val poori = byKey.getValue("indb:ASC107")
-        assertEquals("Poori", poori.name)
-        assertEquals(FoodDiet.VEGAN, poori.diet)
-        assertEquals(FoodCaveat.FRYING_OIL, poori.caveat)
-        assertEquals(listOf("poori" to 125.0), poori.units)
+        val bread = byKey.getValue("indb:TST002")
+        assertEquals("Test fried bread", bread.name)
+        assertEquals(FoodDiet.VEGAN, bread.diet)
+        assertEquals(FoodCaveat.FRYING_OIL, bread.caveat)
+        assertEquals(listOf("piece" to 50.0), bread.units)
 
-        assertEquals(FoodDiet.MEAT, byKey.getValue("indb:ASC232").diet)
+        assertEquals(FoodDiet.MEAT, byKey.getValue("indb:TST003").diet)
         // A blank serving unit is a "serving".
-        assertEquals(listOf("serving" to 178.6), byKey.getValue("indb:BFP030").units)
+        assertEquals(listOf("serving" to 250.0), byKey.getValue("indb:TST004").units)
         // Fried, but too light to be inflated by it; zero serving energy falls back to protein.
-        val soup = byKey.getValue("indb:ASC079")
+        val soup = byKey.getValue("indb:TST005")
         assertNull(soup.caveat)
         assertEquals(listOf("tbsp" to 20.0), soup.units)
 
@@ -108,7 +109,7 @@ class IndbConverterTest {
 
     @Test
     fun `a recipe with no ingredients is tagged meat, so only non-vegetarians see it`() {
-        val n = nutrients(listOf("ASC500", "Mystery dish", "asc", 100.0, 10.0, 5.0, 5.0, 1.0, "bowl", 200.0, 10.0))
+        val n = nutrients(listOf("TST301", "Test mystery dish", "test", 100.0, 10.0, 5.0, 5.0, 1.0, "bowl", 200.0, 10.0))
         val result = IndbConverter.convert(n, recipes())
         assertEquals(FoodDiet.MEAT, result.foods.single().diet)
     }
@@ -121,11 +122,11 @@ class IndbConverterTest {
 
     @Test
     fun `writes the food file with escaping and only the fields a food has`() {
-        val n = nutrients(listOf("ASC009", "Chai \"special\" \\ mix", "asc", 50.0, 5.0, 2.0, 2.0, 0, "cup", 100.0, 4.0))
-        val r = recipes(listOf("ASC009", "Chai", "Milk", "1", "C", "L002", "Milk", 1, "C"))
+        val n = nutrients(listOf("TST302", "Test \"special\" \\ mix", "test", 50.0, 5.0, 2.0, 2.0, 0, "cup", 100.0, 4.0))
+        val r = recipes(listOf("TST302", "Test mix", "Milk", "1", "C", "L002", "Milk", 1, "C"))
         val text = FoodFileWriter.write("indb-test", IndbConverter.convert(n, r).foods)
         assertTrue(text, text.startsWith("{\"version\":\"indb-test\",\"foods\":["))
-        assertTrue(text, text.contains("\"name\":\"Chai \\\"special\\\" \\\\ mix\""))
+        assertTrue(text, text.contains("\"name\":\"Test \\\"special\\\" \\\\ mix\""))
         assertTrue(text, text.contains("\"diet\":\"VEGETARIAN\",\"region\":\"INDIAN\",\"kcal\":50,\"protein\":2,\"carbs\":5,\"fat\":2,\"fiber\":0"))
         assertTrue(text, text.contains("\"units\":[{\"label\":\"cup\",\"grams\":200}]"))
         assertTrue(text, !text.contains("caveat"))

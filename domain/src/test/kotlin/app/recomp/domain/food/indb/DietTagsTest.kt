@@ -47,7 +47,7 @@ class DietTagsTest {
         assertEquals(FoodDiet.EGG, DietTags.ofIngredient(Ingredient(null, "Eggs, beaten")))
         assertEquals(FoodDiet.FISH, DietTags.ofIngredient(Ingredient(null, "Fish sauce")))
         // A sub-recipe or foreign code isn't an IFCT group letter.
-        assertEquals(FoodDiet.VEGETARIAN, DietTags.ofIngredient(Ingredient("ASC266X", "White sauce with milk")))
+        assertEquals(FoodDiet.VEGETARIAN, DietTags.ofIngredient(Ingredient("TST266X", "White sauce with milk")))
     }
 
     @Test

@@ -443,7 +443,7 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 - **Editing.** Tap an entry to change its amount, unit, origin or meal, or delete it with *Undo*.
 - **Diet filter (NU-11).** Search shows only the foods your diet allows: vegan foods for vegans, plus dairy for lacto-vegetarians, plus egg for eggetarians, plus fish but not meat for pescatarians, and everything for non-vegetarians. A food tagged wrongly can be hidden from its menu; Settings → Food → Hidden foods restores it.
 - **Region.** The Indian database (INDB) shows for the Indian region only. The protein-rich basics and your own foods show for both.
-- **Fried INDB recipes.** INDB counts all the oil used for deep frying as eaten, so about 120 fried recipes read two to three times too high (a poori at over 700 kcal per 100 g). They stay searchable with a warning that quick add or a custom food may be closer, and rank below other matches.
+- **Fried INDB recipes.** INDB counts all the oil used for deep frying as eaten, so about 120 fried recipes read two to three times too high. They stay searchable with a warning that quick add or a custom food may be closer, and rank below other matches.
 
 ### 7.8 Body metrics
 
