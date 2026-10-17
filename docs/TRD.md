@@ -740,6 +740,24 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Settings → Food | ✅ Meals, portion sizes and the food data note. |
 | Not run on the phone | Copy from another day (the phone had no earlier day with food) and the 7-day average with food; the repository tests cover both. The test entries and saved meal were deleted afterwards, and the test food hidden. |
 
+**M3c results (2026-10-18, reference phone on Android 15, release build over M3b data):** Describe it is text only; meal photos stay P1 (decided with the user). Tests cover:
+- `:domain`: every gate state and its order, pricing with cache tokens and fallback attempts, validation, and the prompt for each diet and region.
+- The Claude client against a local mock server:
+  - the request shape: the hand-written schema, effort `low`, the cached system prompt, and `fallbacks: "default"` for Opus but not Haiku;
+  - refusal, `max_tokens` and unreadable replies;
+  - 401, 402, 403 and 400 without a retry;
+  - 429 and 5xx retried once, a timeout after one retry, and dropped connections.
+- The repository: off, no key, over cap and offline never send; every failure is logged and costed; the cap lifts on the 1st; the prompt's own foods; saving with the learning loop; *Save + My meals*; drafts; the encrypted key.
+- The Describe screen: a failure keeps a draft, *Cancel* keeps nothing, *Save draft*, and *Estimate now* replaces its draft rather than adding one.
+- Migration 5→6.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M3b | ✅ Migration 5→6 ran with targets and food data intact. Settings gained an AI section, off by default. |
+| Settings → AI | ✅ The model picker shows each model's rough cost (Opus 5.5 about 3¢ an estimate, Sonnet 5.5 about 1¢, Haiku 5.5 under 0.1¢). The key field is masked, and a saved key reads *Saved · Replace*. |
+| Describe it with a dummy key | ✅ The privacy notice showed once, then "Estimating with Claude Opus 5.5…". The API's 401 came back as `AUTH`: the description became a draft in Snacks ("Your API key was rejected"), and the add-food screen was back with search, My meals and Quick add. *Estimate now* failed the same way, replaced the draft rather than adding one, and the Food tab said why. Settings showed $0.00 for 2 requests. The first run found that the outcome message never reached the screen it returned to (a screen's view model has a different saved-state handle from its nav entry); fixed and re-checked. |
+| No key | ✅ The button reads *Describe it · keep a draft*; the screen says why, offers *Add key*, and its action is *Save draft*. |
+| Not run on the phone | A real estimate, which needs your key. The offline and over-cap states (the tests cover them; the phone's airplane mode wasn't touched). Review edits and the learning loop (the tests cover them). The test draft was deleted and the dummy key removed; AI is left on with no key. |
 
 ## 11. Risks and mitigations
 
