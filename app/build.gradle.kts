@@ -72,7 +72,16 @@ val indbFiles = mapOf(
     "INDB.xlsx" to "65f91911de09ebdb4b80c4a3dc3ff372a35420e05444239d8df8a42e8b5b9ecf",
     "recipes.xlsx" to "5cc0e914c2660b165f25b539e12e7cfba092379a76504d8f068c0f23f7b64aff",
 )
-val bundleIndb = providers.gradleProperty("recomp.indb").orNull?.toBooleanStrictOrNull() ?: true
+// Only true or false: a mistyped opt-out must never quietly bundle the data.
+val bundleIndb = when (val raw = providers.gradleProperty("recomp.indb").orNull?.trim()) {
+    null -> true
+    else -> raw.lowercase().toBooleanStrictOrNull()
+        ?: throw GradleException("-Precomp.indb must be true or false, not \"$raw\". Use -Precomp.indb=false to build without INDB.")
+}
+logger.lifecycle(
+    if (bundleIndb) "Recomp: this build bundles INDB (personal use only; pass -Precomp.indb=false for an APK you share)."
+    else "Recomp: this build doesn't bundle INDB.",
+)
 
 /** Downloads INDB's files once into Gradle's user home, and only uses them when their SHA-256 matches. */
 abstract class DownloadIndb : DefaultTask() {
