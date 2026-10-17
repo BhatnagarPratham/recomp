@@ -436,6 +436,21 @@ class BackupTest {
     }
 
     @Test
+    fun `a file over the size budget is refused while it's read, before it's decoded`() = runBlocking {
+        fill()
+        val before = dump()
+        val good = entries(export())
+        app.backup.maxBytes = 64 * 1024
+        // Squeezes into a small zip, but would unpack to more than the budget.
+        val padded = """{"schema":[],"tables":{},"padding":"${"x".repeat(200 * 1024)}"}"""
+        assertEquals(BackupManager.TOO_BIG, refused(zip(BackupManager.MANIFEST to good.getValue(BackupManager.MANIFEST), BackupManager.DATABASE to padded)))
+        assertEquals(before, dump())
+        // A real backup fits easily.
+        app.backup.maxBytes = 4L * 1024 * 1024
+        app.backup.discard(app.backup.prepare(ByteArrayInputStream(export())))
+    }
+
+    @Test
     fun `the AI key never leaves its own store`() = runBlocking {
         fill()
         val planted = "planted-value-7310"

@@ -22,7 +22,6 @@ import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.readers
 import app.recomp.data.prefs.SettingsPrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -39,12 +38,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.json.encodeToStream
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -120,15 +122,15 @@ class BackupManager @Inject constructor(
         val data = db.withTransaction { DatabaseSnapshot.read(db.openHelper.writableDatabase::query) }
         val settings = encodeSettings(prefs.exportable())
         val manifest = BackupManifest(FORMAT, FORMAT_VERSION, schemaVersion(), now, appVersion(), data.tables.mapValues { it.value.rows.size })
+        // Each entry is written straight into the zip, never held as one big string.
         ZipOutputStream(out).use { zip ->
-            fun entry(name: String, text: String) {
-                zip.putNextEntry(ZipEntry(name))
-                zip.write(text.toByteArray())
-                zip.closeEntry()
-            }
-            entry(MANIFEST, json.encodeToString(manifest))
-            entry(DATABASE, json.encodeToString(data))
-            entry(SETTINGS, json.encodeToString(settings))
+            zip.putNextEntry(ZipEntry(MANIFEST))
+            json.encodeToStream(manifest, zip)
+            zip.putNextEntry(ZipEntry(DATABASE))
+            json.encodeToStream(data, zip)
+            zip.putNextEntry(ZipEntry(SETTINGS))
+            json.encodeToStream(settings, zip)
+            zip.closeEntry()
         }
         manifest
     }
@@ -140,15 +142,24 @@ class BackupManager @Inject constructor(
      * anything wrong with it shows before the phone's data is touched (TRD §6.5 steps 1 to 3).
      */
     suspend fun prepare(input: InputStream): PreparedBackup = withContext(Dispatchers.IO) {
-        val entries = input.use(::unzip)
-        val manifest = entries[MANIFEST]?.let { decode<BackupManifest>(it) }?.takeIf { it.format == FORMAT } ?: throw BackupException(NOT_A_BACKUP)
+        try {
+            prepareChecked(input)
+        } catch (e: OutOfMemoryError) {
+            // Only a file far bigger than any real backup gets here; nothing on the phone has changed yet.
+            throw BackupException(TOO_BIG)
+        }
+    }
+
+    private suspend fun prepareChecked(input: InputStream): PreparedBackup {
+        val entries = input.use { readZip(it) }
+        val manifest = entries.manifest?.takeIf { it.format == FORMAT } ?: throw BackupException(NOT_A_BACKUP)
         if (manifest.formatVersion > FORMAT_VERSION) throw BackupException("This backup's file format is newer than this version of Recomp understands. Update the app, then import it.")
         val current = schemaVersion()
         if (manifest.schemaVersion > current) throw BackupException("This backup was made by a newer version of Recomp. Update the app, then import it.")
         if (manifest.schemaVersion < 1) throw BackupException.damaged("no database version")
-        val data = decode<DatabaseData>(entries[DATABASE] ?: throw BackupException.damaged("no database"))
+        val data = entries.database ?: throw BackupException.damaged("no database")
         DatabaseSnapshot.validate(data, manifest.rows)
-        val settings = decodeSettings(entries[SETTINGS]?.let { decode<Map<String, SettingValue>>(it) } ?: emptyMap())
+        val settings = decodeSettings(entries.settings ?: emptyMap())
         prefs.problems(settings).takeIf { it.isNotEmpty() }?.let { throw BackupException.damaged("settings this version can't read (${it.joinToString()})") }
 
         val scratch = File(context.cacheDir, "restore/scratch.db")
@@ -162,7 +173,7 @@ class BackupManager @Inject constructor(
             deleteDatabaseFiles(scratch)
             throw e as? BackupException ?: BackupException("This backup couldn't be read: ${e.message ?: e.javaClass.simpleName}", e)
         }
-        PreparedBackup(manifest, settings, scratch)
+        return PreparedBackup(manifest, settings, scratch)
     }
 
     fun discard(backup: PreparedBackup) = deleteDatabaseFiles(backup.scratch)
@@ -262,7 +273,7 @@ class BackupManager @Inject constructor(
     /** When the safety copy was made, or null without one. */
     suspend fun safetyCopyDate(): Long? = withContext(Dispatchers.IO) {
         if (!safetyCopyFile.isFile) return@withContext null
-        runCatching { safetyCopyFile.inputStream().use { unzip(it, only = setOf(MANIFEST)) }[MANIFEST]?.let { decode<BackupManifest>(it).exportedAt } }.getOrNull()
+        runCatching { safetyCopyFile.inputStream().use { readZip(it, only = setOf(MANIFEST)) }.manifest?.exportedAt }.getOrNull()
     }
 
     suspend fun prepareSafetyCopy(): PreparedBackup = prepare(safetyCopyFile.inputStream())
@@ -371,34 +382,50 @@ class BackupManager @Inject constructor(
 
     // The zip and its JSON
 
-    /** The backup's entries ([only] those named, when given) as text. Others are skipped, never held in memory. */
-    private fun unzip(input: InputStream, only: Set<String> = ENTRIES): Map<String, String> = try {
-        val entries = mutableMapOf<String, String>()
-        var total = 0L
+    /** At most this much is read from a backup, across its entries (TRD §6.5). */
+    internal var maxBytes: Long = MAX_BYTES
+
+    /** A backup's entries, decoded straight from the zip with no copies as bytes or text. */
+    private class Contents(var manifest: BackupManifest? = null, var database: DatabaseData? = null, var settings: Map<String, SettingValue>? = null)
+
+    /** Reads [only] the named entries and skips the rest, stopping at [maxBytes]. */
+    private fun readZip(input: InputStream, only: Set<String> = ENTRIES): Contents = try {
+        val contents = Contents()
         ZipInputStream(input).use { zip ->
+            val budget = Budget(zip, maxBytes)
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name in only) {
-                    val bytes = ByteArrayOutputStream()
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = zip.read(buffer)
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_BYTES) throw BackupException("This file is too big to be a Recomp backup.")
-                        bytes.write(buffer, 0, n)
-                    }
-                    entries[entry.name] = bytes.toString(Charsets.UTF_8.name())
+                when (entry.name.takeIf { it in only }) {
+                    MANIFEST -> contents.manifest = decode(budget)
+                    DATABASE -> contents.database = decode(budget)
+                    SETTINGS -> contents.settings = decode(budget)
                 }
             }
         }
-        entries
+        contents
     } catch (e: ZipException) {
         throw BackupException(NOT_A_BACKUP, e)
     }
 
-    private inline fun <reified T> decode(text: String): T = try {
-        json.decodeFromString<T>(text)
+    /** Counts what's read across the zip's entries and refuses past [limit]. Never closes the zip. */
+    private class Budget(private val zip: InputStream, private val limit: Long) : InputStream() {
+        private var total = 0L
+
+        override fun read(): Int = zip.read().also { if (it >= 0) count(1) }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int = zip.read(b, off, len).also { if (it > 0) count(it.toLong()) }
+
+        private fun count(n: Long) {
+            total += n
+            if (total > limit) throw BackupException(TOO_BIG)
+        }
+
+        override fun close() = Unit
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private inline fun <reified T> decode(stream: InputStream): T = try {
+        json.decodeFromStream<T>(stream)
     } catch (e: SerializationException) {
         throw BackupException.damaged("a file it can't read", e)
     } catch (e: IllegalArgumentException) {
@@ -412,8 +439,9 @@ class BackupManager @Inject constructor(
         const val DATABASE = "database.json"
         const val SETTINGS = "settings.json"
         private val ENTRIES = setOf(MANIFEST, DATABASE, SETTINGS)
-        /** Far above any real backup (a year of use is a few MB), and small enough to read into memory. */
-        private const val MAX_BYTES = 64L * 1024 * 1024
+        /** Several times any real backup (a year of daily use is about 1 MB of JSON), and small enough to decode on a phone. */
+        private const val MAX_BYTES = 16L * 1024 * 1024
+        const val TOO_BIG = "This file is too big to be a Recomp backup."
         const val NOT_A_BACKUP = "This file isn't a Recomp backup."
 
         /** `recomp-backup-2026-10-18.zip`. */
