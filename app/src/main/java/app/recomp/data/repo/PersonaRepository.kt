@@ -53,6 +53,8 @@ data class TargetPreview(
     val after: NutritionTargets,
     val plan: GoalPlan,
     val notes: List<GuardrailNote>,
+    /** The body data the new targets use, with the trend weight once there is one (TRD §5.0). */
+    val profile: Profile,
 ) {
     val changes: Boolean
         get() = before == null || before.kcal != after.kcal || before.proteinG != after.proteinG ||
@@ -69,6 +71,7 @@ class PersonaRepository @Inject constructor(
     private val nutritionDao: NutritionDao,
     private val training: TrainingRepository,
     private val days: DayBoundary,
+    private val body: BodyRepository,
 ) {
     val stored: Flow<StoredPersona> = prefs.persona
     val profile: Flow<Profile?> = prefs.profile
@@ -90,6 +93,14 @@ class PersonaRepository @Inject constructor(
         NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today), overrides)
 
     suspend fun today(): LocalDate = days.today()
+
+    /** The trend weight, once the primary source has a weigh-in (TRD §5.0). */
+    suspend fun trendKg(): Double? = body.trendKg()
+
+    /** Body data as targets see it: the trend weight stands in for the typed one once there is one (TRD §5.0). */
+    suspend fun currentProfile(): Profile? = prefs.profile.first()?.let { withTrend(it) }
+
+    private suspend fun withTrend(profile: Profile): Profile = body.trendKg()?.let { profile.copy(weightKg = it) } ?: profile
 
     // Onboarding (PS-01)
 
@@ -136,7 +147,7 @@ class PersonaRepository @Inject constructor(
     suspend fun preview(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null): TargetPreview {
         val today = days.today()
         val stored = prefs.currentPersona()
-        val newProfile = profile ?: requireNotNull(prefs.profile.first()) { "No profile before onboarding" }
+        val newProfile = withTrend(profile ?: requireNotNull(prefs.profile.first()) { "No profile before onboarding" })
         val guarded = Guardrails.apply(newProfile, plan ?: requireNotNull(stored.goal).toPlan(), today)
         val newOverrides = overrides ?: prefs.overrides.first()
         return TargetPreview(
@@ -144,17 +155,21 @@ class PersonaRepository @Inject constructor(
             after = targetsFor(newProfile, guarded.plan, newOverrides, today),
             plan = guarded.plan,
             notes = guarded.notes,
+            profile = newProfile,
         )
     }
 
-    /** Saves a goal, body-data or override change and, if the targets moved, a new version from today. */
+    /**
+     * Saves a goal, body-data or override change and, if the targets moved, a new version from today. The
+     * stored body data then holds the weight those targets used, the trend weight once there is one.
+     */
     suspend fun save(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null, now: Long = System.currentTimeMillis()) {
         val p = preview(plan, profile, overrides)
         val today = days.of(now)
         if (p.changes) writeTarget(p.after, p.plan, today, TargetReason.MANUAL, now)
         prefs.edit {
             persona = this.persona.copy(goal = StoredGoal.of(p.plan))
-            if (profile != null) setProfile(profile)
+            if (profile != null || p.changes) setProfile(p.profile)
             if (overrides != null) setOverrides(overrides)
         }
     }

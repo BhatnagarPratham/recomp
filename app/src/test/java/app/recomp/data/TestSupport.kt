@@ -1,12 +1,14 @@
 package app.recomp.data
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.SecretCipher
+import app.recomp.data.backup.BackupManager
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.food.FoodFiles
 import app.recomp.data.food.FoodSeeder
@@ -14,6 +16,7 @@ import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.LegacyTrainingMigration
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.AiRepository
+import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.NutritionRepository
@@ -36,6 +39,36 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/** The exported schemas in app/schemas (TRD §4), for building a database as an older version left it. */
+object Schemas {
+    val dir = File("schemas/app.recomp.data.db.AppDatabase")
+
+    val current: Int get() = dir.listFiles()!!.maxOf { it.nameWithoutExtension.toInt() }
+
+    fun of(version: Int) = Json.parseToJsonElement(File(dir, "$version.json").readText()).jsonObject.getValue("database").jsonObject
+
+    /** Creates an empty database exactly as Room would have at [version], from the exported schema. */
+    fun createAt(version: Int, file: File): SQLiteDatabase {
+        val db = SQLiteDatabase.openOrCreateDatabase(file, null)
+        val s = of(version)
+        s.getValue("entities").jsonArray.forEach { entity ->
+            val e = entity.jsonObject
+            val table = e.getValue("tableName").jsonPrimitive.content
+            db.execSQL(e.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table))
+            e["indices"]?.jsonArray?.forEach { db.execSQL(it.jsonObject.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table)) }
+            // FTS tables keep their content table in sync with triggers (v5's food_fts).
+            e["contentSyncTriggers"]?.jsonArray?.forEach { db.execSQL(it.jsonPrimitive.content) }
+        }
+        s.getValue("setupQueries").jsonArray.forEach { db.execSQL(it.jsonPrimitive.content) }
+        db.version = version
+        return db
+    }
+}
 
 /** Reads the real seed files from the source tree; Gradle runs unit tests from the module directory. */
 object FileSeedSource : SeedSource {
@@ -104,7 +137,9 @@ class FakeEstimator : MealEstimator {
 class TestApp(private val dir: File) {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val dbFile = File(dir, "recomp-test.db")
-    val prefs = SettingsPrefs(PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { File(dir, "settings.preferences_pb") })
+    /** The settings store itself, so a test can plant a key the app never writes there. */
+    val store = PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { File(dir, "settings.preferences_pb") }
+    val prefs = SettingsPrefs(store)
     val days = DayBoundary(prefs)
     val foodFiles = TestFoodFiles()
     val cipher = FakeCipher()
@@ -133,6 +168,10 @@ class TestApp(private val dir: File) {
         private set
     lateinit var ai: AiRepository
         private set
+    lateinit var body: BodyRepository
+        private set
+    lateinit var backup: BackupManager
+        private set
 
     init {
         open()
@@ -146,12 +185,14 @@ class TestApp(private val dir: File) {
         training = TrainingRepository(db, db.exerciseDao(), db.routineDao(), db.workoutDao(), FileSeedSource, prefs)
         progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs, db.nutritionDao(), days)
         workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression, days)
-        personas = PersonaRepository(prefs, db.nutritionDao(), training, days)
+        body = BodyRepository(db, db.bodyDao(), db.workoutDao(), prefs, days)
+        personas = PersonaRepository(prefs, db.nutritionDao(), training, days, body)
         nutrition = NutritionRepository(db.nutritionDao(), db.foodLogDao(), prefs, days)
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
+        backup = BackupManager(context, db, prefs)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

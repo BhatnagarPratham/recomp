@@ -201,7 +201,7 @@ class OnboardingViewModel @Inject constructor(
         viewModelScope.launch {
             val today = personas.today()
             val stored = personas.stored.first()
-            val profile = personas.profile.first()
+            val profile = personas.currentProfile()
             val routines = training.observeExtras().first().associateBy { it.id }
             val extras = stored.extras.mapNotNull { s -> routines[s.routineId]?.let { ExtraDraft(it.id, it.name, it.kind, s.days) } }
             val plan = stored.goal?.toPlan()

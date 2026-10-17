@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SettingsStore
 import app.recomp.domain.ai.AiModel
+import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
 import app.recomp.domain.nutrition.Goal
@@ -198,6 +199,16 @@ data class AiSettings(
     val noticeSeen: Boolean = false,
 )
 
+/** The usual scan slot (IB-02) as stored under `scan_slot`: an ISO weekday and minutes after midnight. */
+@Serializable
+data class StoredScanSlot(val day: Int, val minutes: Int) {
+    fun toSlot() = ScanSlot(DayOfWeek.of(day), LocalTime.of(minutes / 60, minutes % 60))
+
+    companion object {
+        fun of(slot: ScanSlot) = StoredScanSlot(slot.day.value, slot.time.hour * 60 + slot.time.minute)
+    }
+}
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -223,6 +234,9 @@ internal object SettingsKeys {
     /** Household measures you calibrated, label → grams (NU-12). Missing labels use the region's defaults. */
     val PORTION_SIZES = stringPreferencesKey("portion_sizes")
 
+    /** IB-02: the usual scan weekday and time. */
+    val SCAN_SLOT = stringPreferencesKey("scan_slot")
+
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
 
@@ -241,6 +255,18 @@ internal object SettingsKeys {
 
     /** Where a value that no longer decodes is kept, untouched, before anything is written over it. */
     fun unreadableCopy(key: Preferences.Key<String>) = stringPreferencesKey("${key.name}_unreadable")
+
+    /**
+     * Settings that never leave the device in an export (TRD §6.5). Secrets live in their own store, never
+     * here; this list and [looksSecret] are the safety net if one ever lands in `settings`.
+     */
+    val NOT_EXPORTED: Set<String> = emptySet()
+
+    private val SECRET_NAME = Regex("(?i)(api[_-]?key|secret|token|password|keyset)")
+
+    fun looksSecret(name: String): Boolean = SECRET_NAME.containsMatchIn(name)
+
+    fun exported(name: String): Boolean = name !in NOT_EXPORTED && !looksSecret(name)
 }
 
 /**
@@ -307,6 +333,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         if (unreadable<StoredRamp>(SettingsKeys.PROTEIN_RAMP)) add(SettingsKeys.PROTEIN_RAMP)
         if (unreadable<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)) add(SettingsKeys.MEAL_SLOTS)
         if (unreadable<Map<String, Double>>(SettingsKeys.PORTION_SIZES)) add(SettingsKeys.PORTION_SIZES)
+        if (unreadable<StoredScanSlot>(SettingsKeys.SCAN_SLOT)) add(SettingsKeys.SCAN_SLOT)
     }
 
     /** Copies each unreadable value aside (once) before a write could replace it with a default. */
@@ -342,6 +369,35 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     /** NU-12: household measures you calibrated. */
     val portionSizes: Flow<Map<String, Double>> =
         store.data.map { it.decode<Map<String, Double>>(SettingsKeys.PORTION_SIZES) ?: emptyMap() }.distinctUntilChanged()
+
+    /** IB-02. Null until set; the first scan sets it. */
+    val scanSlot: Flow<ScanSlot?> = store.data.map { it.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.toSlot() }.distinctUntilChanged()
+
+    suspend fun setScanSlot(slot: ScanSlot) = store.edit { prefs ->
+        prefs.keepUnreadable()
+        prefs[SettingsKeys.SCAN_SLOT] = settingsJson.encodeToString(StoredScanSlot.of(slot))
+    }
+
+    /** Every setting an export carries (DA-01, TRD §6.5): all of them except the ones that stay on the device. */
+    suspend fun exportable(): Preferences {
+        val all = store.data.first()
+        return all.toMutablePreferences().apply { all.asMap().keys.filter { !SettingsKeys.exported(it.name) }.forEach { remove(it) } }.toPreferences()
+    }
+
+    /**
+     * Replaces every setting with [imported] (TRD §6.5), keeping the ones that never leave the device. Older
+     * backups get the same DataStore migrations an upgraded install does.
+     */
+    suspend fun replaceAll(imported: Preferences) {
+        var incoming = imported.toMutablePreferences().apply { imported.asMap().keys.filter { !SettingsKeys.exported(it.name) }.forEach { remove(it) } }.toPreferences()
+        if (LegacyTrainingMigration.shouldMigrate(incoming)) incoming = LegacyTrainingMigration.migrate(incoming)
+        store.edit { prefs ->
+            val kept = prefs.asMap().filterKeys { !SettingsKeys.exported(it.name) }
+            prefs.clear()
+            prefs += incoming
+            kept.forEach { (key, value) -> @Suppress("UNCHECKED_CAST") prefs[key as Preferences.Key<Any>] = value }
+        }
+    }
 
     suspend fun foodDataVersion(): String? = store.data.first()[SettingsKeys.FOOD_DATA_VERSION]
 

@@ -30,10 +30,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.prefs.StoredPersona
 import app.recomp.data.prefs.TrainingSettings
+import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TargetPreview
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.rampEnabled
+import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.nutrition.TargetOverrides
@@ -46,7 +48,10 @@ import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
 import app.recomp.ui.components.ChoiceChips
+import app.recomp.ui.body.BodyText
 import app.recomp.ui.components.DateDialog
+import app.recomp.ui.components.DayChips
+import app.recomp.ui.components.TimeDialog
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.SectionTitle
@@ -57,6 +62,7 @@ import app.recomp.ui.onboarding.GoalText
 import app.recomp.ui.onboarding.SwitchRow
 import app.recomp.ui.onboarding.TargetList
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -80,6 +86,9 @@ data class SettingsUi(
     val dayStart: LocalTime = LogDates.DEFAULT_DAY_START,
     val training: TrainingSettings = TrainingSettings(),
     val extraNames: List<String> = emptyList(),
+    /** The trend weight once the primary source has a weigh-in (TRD §5.0). */
+    val trendKg: Double? = null,
+    val scanSlot: ScanSlot? = null,
 )
 
 /** A change that moves the targets, waiting for you to confirm the before and after (PRD §7.1). */
@@ -89,6 +98,7 @@ data class PendingChange(val preview: TargetPreview, val profile: Profile?, val 
 class SettingsViewModel @Inject constructor(
     private val personas: PersonaRepository,
     training: TrainingRepository,
+    private val body: BodyRepository,
 ) : ViewModel() {
     private val today = MutableStateFlow(LocalDate.now())
 
@@ -96,12 +106,14 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { today.value = personas.today() }
     }
 
-    private val body = combine(personas.stored, personas.profile, personas.overrides, today) { stored, profile, overrides, day ->
+    private val about = combine(personas.stored, personas.profile, personas.overrides, today) { stored, profile, overrides, day ->
         val plan = stored.goal?.toPlan()
         Triple(stored, profile, Triple(plan, overrides, day))
     }
 
-    val ui: StateFlow<SettingsUi> = combine(body, personas.dayStart, training.settings, training.observeExtras()) { (stored, profile, rest), dayStart, settings, extras ->
+    private val bodyData = combine(body.observeTrend(), body.scanSlot) { trend, slot -> trend.trendKg to slot }
+
+    val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot) ->
         val (plan, overrides, day) = rest
         SettingsUi(
             loaded = true,
@@ -113,6 +125,8 @@ class SettingsViewModel @Inject constructor(
             dayStart = dayStart,
             training = settings,
             extraNames = extras.map { it.name },
+            trendKg = trendKg,
+            scanSlot = slot,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUi())
 
@@ -161,6 +175,7 @@ class SettingsViewModel @Inject constructor(
     fun setDiet(diet: Diet) = guarded { personas.setDiet(diet) }
     fun setRegion(region: FoodRegion) = guarded { personas.setRegion(region) }
     fun setWeightSource(source: WeightSource) = guarded { personas.setWeightSource(source) }
+    fun setScanSlot(slot: ScanSlot) = guarded { body.setScanSlot(slot) }
     fun setDayStart(time: LocalTime) = guarded { personas.setDayStart(time) }
     fun setRamp(on: Boolean) = guarded { personas.setProteinRamp(on) }
 }
@@ -175,6 +190,7 @@ private sealed interface Editing {
     data object Region : Editing
     data object Source : Editing
     data object DayStart : Editing
+    data object Slot : Editing
 }
 
 /** Settings (PS-02): every persona value, each change applying from today and never rewriting history. */
@@ -224,7 +240,20 @@ fun SettingsScreen(
             SettingRow("Sex", Labels.sex(profile.sex)) { editing = Editing.Sex }
             SettingRow("Date of birth", profile.birthDate.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG))) { editing = Editing.Birth }
             SettingRow("Height", "${GoalText.d(profile.heightCm)} cm") { editing = Editing.Height }
-            SettingRow("Current weight", "${GoalText.d(profile.weightKg)} kg") { editing = Editing.Weight }
+            val trend = ui.trendKg
+            if (trend == null) {
+                SettingRow("Current weight", "${GoalText.d(profile.weightKg)} kg") { editing = Editing.Weight }
+            } else {
+                // The trend stands in for a typed weight (TRD §5.0); tapping previews the targets at it.
+                SettingRow("Current weight", "${GoalText.d(trend)} kg · trend") { viewModel.changeProfile(profile) }
+                Text(
+                    "From your weigh-ins." + if (kotlin.math.abs(trend - profile.weightKg) >= 0.05) {
+                        " Your targets use ${GoalText.d(profile.weightKg)} kg until they're next recomputed; tap to see them at your trend."
+                    } else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             SettingRow("Activity", Labels.activity(profile.activity)) { editing = Editing.Activity }
         }
 
@@ -259,10 +288,14 @@ fun SettingsScreen(
 
         SectionTitle("Body data")
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
+        SettingRow("Usual scan slot", ui.scanSlot?.let(BodyText::slot) ?: "Set by your first scan") { editing = Editing.Slot }
         SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
 
         SectionTitle("Days")
         SettingRow("Day starts at", formatDayStart(ui.dayStart)) { editing = Editing.DayStart }
+
+        SectionTitle("Data")
+        DataSettings()
 
         SectionTitle("Developer")
         SettingRow("M0 spikes", "Health Connect check", onClick = onOpenDev)
@@ -313,6 +346,7 @@ fun SettingsScreen(
             editing = null
             viewModel.setWeightSource(it)
         }
+        Editing.Slot -> ScanSlotDialog(ui.scanSlot, onDismiss = { editing = null }) { editing = null; viewModel.setScanSlot(it) }
         Editing.DayStart -> ChoiceDialog(
             "Day starts at",
             LogDates.DAY_START_CHOICES,
@@ -410,4 +444,33 @@ private fun ChangeLine(label: String, before: Int?, after: Int, unit: String) {
         Text(label, Modifier.weight(1f))
         Text(if (before == null || before == after) "${GoalText.n(after)} $unit" else "${GoalText.n(before)} → ${GoalText.n(after)} $unit")
     }
+}
+
+/** IB-02's usual slot: a weekday (for the reminder) and the time of day the check uses. */
+@Composable
+private fun ScanSlotDialog(current: ScanSlot?, onDismiss: () -> Unit, onSave: (ScanSlot) -> Unit) {
+    var day by remember { mutableStateOf(current?.day ?: DayOfWeek.MONDAY) }
+    var time by remember { mutableStateOf(current?.time ?: LocalTime.of(10, 0)) }
+    var picking by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Usual scan slot") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DayChips(setOf(day.value), onToggle = { day = DayOfWeek.of(it) })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(BodyText.time(time), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { picking = true }) { Text("Change time") }
+                }
+                Text(
+                    "A scan counts as on protocol within 90 minutes of this time, at least 2 hours after eating, and before any workout.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(ScanSlot(day, time)) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+    if (picking) TimeDialog(time, onDismiss = { picking = false }) { picking = false; time = it }
 }

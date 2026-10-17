@@ -27,6 +27,8 @@ import app.recomp.ui.AppNav
 import app.recomp.ui.MainViewModel
 import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
+import app.recomp.ui.body.BodyScreen
+import app.recomp.ui.body.ScanScreen
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -57,6 +59,11 @@ import kotlinx.serialization.Serializable
 @Serializable data object FoodRoute
 
 @Serializable data object TrainRoute
+
+@Serializable data object BodyRoute
+
+/** A scan's form (IB-01); 0 is a new scan. */
+@Serializable data class ScanRoute(val scanId: Long = 0)
 
 @Serializable data object SettingsRoute
 
@@ -97,6 +104,7 @@ private val topLevel = listOf(
     TopLevel("Today", "◉", TodayRoute),
     TopLevel("Food", "◍", FoodRoute),
     TopLevel("Train", "▤", TrainRoute),
+    TopLevel("Body", "⚖", BodyRoute),
     TopLevel("Settings", "⚙", SettingsRoute),
 )
 
@@ -154,8 +162,11 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenWorkout = nav::openWorkout,
                     onOpenSummary = { nav.navigate(SummaryRoute(it)) },
                     onOpenFood = { nav.openTopLevel(FoodRoute) },
+                    onOpenBody = { nav.openTopLevel(BodyRoute) },
                 )
             }
+            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
+            composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
                 FoodScreen(
@@ -237,6 +248,7 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
             "protein_ramp" -> "the protein ramp's progress"
             "meal_slots" -> "your meal names"
             "portion_sizes" -> "your portion sizes"
+            "scan_slot" -> "your usual scan slot"
             else -> it
         }
     }

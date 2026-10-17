@@ -62,4 +62,23 @@ class WeeklyPlanTest {
         assertEquals(12..20, beginner.repsFor(RepClass.HIGH_REP))
         assertEquals(5..8, ExperiencePolicy.defaultFor(Experience.ADVANCED).repsFor(RepClass.COMPOUND))
     }
+    @Test
+    fun `rest day once today's strength is done or the week's strength days are reached`() {
+        fun strength(date: LocalDate) = PlanSession(date, SessionKind.STRENGTH, 1)
+        val monday = LocalDate.of(2026, 10, 12)
+        // Nothing yet: the next routine is up.
+        assertEquals(null, WeeklyPlan.restDay(wednesday, emptyList(), strengthTarget = 3))
+        // Trained today, even ad hoc.
+        assertEquals(RestReason.DONE_TODAY, WeeklyPlan.restDay(wednesday, listOf(PlanSession(wednesday, SessionKind.STRENGTH, null)), 3))
+        // A yoga class today isn't a strength day.
+        assertEquals(null, WeeklyPlan.restDay(wednesday, listOf(PlanSession(wednesday, SessionKind.YOGA, yoga)), 3))
+        // Two of three done this week, not today.
+        assertEquals(null, WeeklyPlan.restDay(wednesday, listOf(strength(monday), strength(monday.plusDays(1))), 3))
+        // The week's target is reached (last week's sessions don't count).
+        val week = listOf(strength(monday.minusDays(1)), strength(monday), strength(monday.plusDays(1)))
+        assertEquals(RestReason.WEEK_DONE, WeeklyPlan.restDay(wednesday, week, 2))
+        assertEquals(null, WeeklyPlan.restDay(wednesday, week, 3))
+        // Today wins when both hold.
+        assertEquals(RestReason.DONE_TODAY, WeeklyPlan.restDay(wednesday, week + strength(wednesday), 2))
+    }
 }

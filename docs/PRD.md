@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v0.9, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v1.0, 2026-10-18. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -262,7 +262,7 @@ Examples use the reference persona.
 - **First run** opens onboarding instead of Today. So does the first launch after upgrading from a version without a persona; the training settings you already had are carried over and pre-filled, and an unfinished workout can still be resumed.
 - **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1.
 
-**Settings (PS-02).** A bottom tab after Today, Food and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), AI (on or off, API key, model, this month's spend and the cap; §7.12), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
+**Settings (PS-02).** The last bottom tab, after Today, Food, Train and Body. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), AI (on or off, API key, model, this month's spend and the cap; §7.12), Body data (weight source, usual scan slot, units), Day starts at, Data (export and import, §7.14) and Developer (the M0 spike screen). Every row shows its current value.
 - **Targets can be overridden** (PR-02): calories, protein and fat. Carbs always fill the remaining calories. An overridden number is labelled *set by you* and stays until you reset it. Calories can't be set below the safety floor (§4.9).
 - **A change that moves your targets** (goal, pace, goal weight, body data, activity, an override) shows the old and new targets before it saves. Saving starts a new target version from today. Several saves on the same day replace that day's version; earlier days are never rewritten.
 
@@ -429,7 +429,7 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 | NU-23 | P1 | ★ **Evening protein nudge.** If you're well short of target at a set time, show how much is left and suggest 2–3 of *your own* frequent protein foods that fit your diet, ranked by protein per 100 kcal. |
 
 **Food logging in the app (M3b):**
-- **Food tab.** The bottom bar is Today · Food · Train · Settings. Food is the daily view (NU-16), and Today's nutrition card has *Log food*, which opens it. ‹ and › move between days. You can log on past days, not future ones.
+- **Food tab.** The bottom bar is Today · Food · Train · Body · Settings (Body from M4). Food is the daily view (NU-16), and Today's nutrition card has *Log food*, which opens it. ‹ and › move between days. You can log on past days, not future ones.
 - **Daily view (NU-16).** Calories and protein remaining against that day's targets, protein first. Protein follows the ramp (NU-03) and has no target during the baseline week. A macro split shows grams eaten against the protein, carbs and fat targets; fibre is shown without a target. Being over is a plain number, never failure styling. Each meal shows its calories and protein.
 - **Meals (NU-10).** Breakfast, Lunch, Snacks and Dinner. Settings → Food → Meals renames, adds, removes and reorders them. A removed meal keeps its past entries.
 - **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. With AI on, *Describe it* sits beside them (M3c, below).
@@ -466,6 +466,35 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 | BM-03 | P1 | Other tape measurements (chest, arms, thighs, hips). |
 | BM-04 | P1 | ★ Progress photos (front, side, back) stored privately on the device, with side-by-side comparison. |
 
+**Body in the app (M4):**
+- **Body tab.** The bottom bar is Today · Food · Train · Body · Settings. Body holds the weight chart, waist and scans.
+- **Weigh-in (BM-01, J5).** *Log weight*, on Today's weight card or in Body, opens a sheet:
+  - weight with −/+ 0.1 kg steppers (tap the value to type it), prefilled from your last weigh-in;
+  - source chips: Home scale, Gym scale and Scan, defaulting to your primary source;
+  - the day (today or an earlier one) and the time.
+
+  Every weigh-in is kept. Tap one to edit it, or delete it with *Undo*.
+- **Trend.**
+  - It uses only your primary source (Settings → Body data → Weight trend from), and only that source's first weigh-in of each day, because weight drifts up through the day.
+  - Other sources, and later weigh-ins on the same day, are plotted as hollow dots and kept out of the trend.
+  - The trend starts at your first weigh-in. Changing the primary source recomputes it from the new source.
+- **Chart.** Weigh-ins as dots and the trend as a line, over 4 weeks, 12 weeks or everything.
+- **Rate (BM-01).** Once the trend spans a week, Body and Today show the change over the last 7 days, in kg and as a percentage of body weight, next to the goal's pace:
+  - fat loss and recomp: their pace, e.g. −0.5% a week;
+  - lean bulk: 0.25–0.5% a week;
+  - Maintain: steady.
+
+  It's information only, never failure styling.
+- **Trend weight is your current weight.** Once your primary source has a weigh-in, Settings → About you shows the trend weight, marked *from your weigh-ins*, instead of a typed one.
+  - Targets don't move on their own. The next change that recomputes them uses the trend weight: any Settings change that moves the targets, and the weekly check-in (v1.1).
+  - Tapping the weight shows your targets at the trend weight, before and after, so you can update them on purpose.
+  - The usual before-and-after preview shows the effect.
+- **Waist (BM-02), weekly.** *Log waist* is a sheet:
+  - −/+ 0.5 cm, prefilled from last time;
+  - a one-line how-to: at the navel, standing relaxed, after breathing out.
+
+  Today's weight card offers it when your last waist is 7 or more days old. Body shows the latest waist, its change over 4 weeks, and the history.
+
 ### 7.9 Body-composition scans (optional)
 
 For personas with access to InBody or another bioimpedance (BIA) machine.
@@ -479,6 +508,25 @@ For personas with access to InBody or another bioimpedance (BIA) machine.
 | IB-05 | P1 | ★ **Scan-informed targets.** With a scan from the last 60 days, the app estimates BMR from your lean mass, which is more accurate than height-and-weight formulas. It can also suggest a goal weight for a target body-fat %: lean mass ÷ (1 − target %). |
 | IB-06 | P1 | ★ A reminder at your usual scan slot (weekly by default). |
 | IB-07 | P1 | **Auto-import through Health Connect** of what the InBody app writes there: weight, body fat % and BMR. Lean mass is derived from those. The app then asks only for the missing fields: skeletal muscle mass and visceral fat. |
+
+**Scans in the app (M4):**
+- **Who sees it.** Scans are optional and open to every persona. Body shows an empty state until the first one.
+- **The form.** *Log scan* opens it.
+  - At the top is the protocol (IB-02), e.g. "Usual slot Monday 10:00 · at least 2 h after eating · before any workout that day", with a live verdict.
+  - Fields: date and time (now by default, since scans are often typed in later), weight, skeletal muscle mass, body fat mass, visceral fat level, and body fat %. Body fat % is filled in from fat mass ÷ weight and can be edited.
+  - *More* adds the machine's BMR, the ECW/TBW ratio, its score, and segmental lean mass (each arm, the trunk, each leg).
+- **The protocol questions.**
+  - *Last ate:* under 2 h, 2–3 h, 3 h or more, or fasted overnight.
+  - *Trained before the scan today:* pre-set from the workout log (any session finished before the scan's time that day), and you can change it.
+- **On protocol (IB-02).** A scan is on protocol when it's within 90 minutes of your usual time of day, at least 2 hours after eating, and before any workout.
+  - Anything else is flagged *off protocol*, with the reasons, in the form and in the table.
+  - The verdict is saved with the scan, and editing the scan recomputes it.
+- **Usual slot.** It's a weekday and a time, under Settings → Body data → Usual scan slot.
+  - Your first scan sets it from its own day and time, and says so.
+  - The weekday is for the scan reminder (IB-06, P1). The check uses only the time of day.
+- **Linked weigh-in.** Saving a scan also records its weight as a *Scan* weigh-in, which feeds the trend when scans are your primary source. Editing or deleting the scan updates or removes that weigh-in.
+- **Scan table (HM-02).** Newest first, with date, weight, muscle, fat mass, body fat % and visceral fat. Off-protocol rows are marked. Tap a row to edit or delete it.
+  - Noise labels and the body-composition chart are IB-04 (P1).
 
 ### 7.10 Activity and recovery
 
@@ -498,6 +546,17 @@ For personas with access to InBody or another bioimpedance (BIA) machine.
 | HM-04 | P1 | Consistency calendar for workouts and logged days. No punishing streaks. |
 | HM-05 | P1 | ★ Home-screen widget: calories and protein left, plus the next workout. |
 | HM-06 | P2 | ★ AI weekly coach note: Claude reads the week's summary and writes 3 concrete suggestions for your goal. |
+
+**Today in the app (M4, HM-01).** From top to bottom:
+1. **The goal's main number,** protein, and the 7-day average line (§4.8).
+2. **The next workout, or a rest day.**
+   - Today says **Rest day** once you've finished a strength workout today, or once this week's strength days are done. It also says which ("Strength done for today", or "3 of 3 strength days done this week").
+   - The next routine stays below it, with a smaller *Start anyway*.
+3. **Extra sessions** scheduled today.
+4. **The weight card:** trend weight, the week's rate against the goal's pace, *Log weight*, and *Log waist* when it's due.
+   - Before the first weigh-in, it says the trend starts with your first weigh-in.
+   - Tapping the card opens Body.
+5. **Weekly plan progress** and the last workout.
 
 ### 7.12 AI features and the no-AI mode
 
@@ -546,6 +605,18 @@ AI uses a Claude API key that each person brings. A claude.ai subscription login
 | DA-03 | P1 | CSV export of workouts, the food log and scans. |
 | DA-04 | P1 | ★ Write workouts, nutrition and weight to Health Connect, so other apps can see them. |
 | DA-05 | P2 | Import history from other workout apps' CSV exports (Strong, Hevy). |
+
+**Export and import in the app (M4, DA-01):**
+- **Export all data** (Settings → Data) opens the system's save dialog with `recomp-backup-YYYY-MM-DD.zip`, so the file can go to Google Drive or any folder.
+  - It holds every table and every setting. It never holds the AI key.
+  - A message says what was saved.
+- **Import a backup** opens a file.
+  - The file is checked first: it must be a Recomp backup, undamaged, and not from a newer version.
+  - A confirmation then shows the backup's date and what it holds (workouts, food entries, weigh-ins, scans), and says everything on this phone will be replaced.
+  - Import is refused while a workout is in progress.
+- **Safety copy.** Just before replacing anything, the app saves the current data inside itself. There's one copy, and the next import replaces it. Settings → Data then offers **Restore the data from before the import**, with its date.
+- **Older backups and merging.** A backup from an older version is upgraded as it's imported. Import never merges: it always replaces.
+- **Android's own backup** (Auto Backup and device transfer) includes only the database and the settings, never the AI key.
 
 ## 8. Design rationale: what matters most for body-composition goals
 
