@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.util.Log
@@ -50,6 +51,7 @@ class ActiveWorkoutService : Service() {
     private var observing = false
     private var restJob: Job? = null
     private var scheduledRestEnd: Long? = null
+    private var restWakeLock: PowerManager.WakeLock? = null
     private var lastSnapshot: Snapshot? = null
 
     private data class Snapshot(
@@ -100,18 +102,41 @@ class ActiveWorkoutService : Service() {
             }
     }
 
+    /**
+     * `delay` counts uptime, which stops while the CPU sleeps, so a pocketed phone would alert late. A
+     * partial wake lock held for the rest keeps it on time; a foreground service's wake lock is honoured
+     * even in Doze, and rests are short, so no exact-alarm permission is needed.
+     */
     private fun scheduleRestAlert(rest: RestState?) {
         if (rest?.endsAt == scheduledRestEnd) return
         restJob?.cancel()
+        releaseRestWakeLock()
         scheduledRestEnd = rest?.endsAt
         if (rest == null) return
+        val wait = rest.endsAt - System.currentTimeMillis()
+        if (wait > 0) acquireRestWakeLock(wait + WAKE_LOCK_MARGIN_MS)
         restJob = scope.launch {
-            val wait = rest.endsAt - System.currentTimeMillis()
-            if (wait > 0) delay(wait)
-            // A rest that ended long ago (the process was dead) is cleared without an alert.
-            if (System.currentTimeMillis() - rest.endsAt < STALE_ALERT_MS) alertRestOver()
-            restTimer.clearIfEndsAt(rest.endsAt)
+            try {
+                if (wait > 0) delay(wait)
+                // A rest that ended long ago (the process was dead) is cleared without an alert.
+                if (System.currentTimeMillis() - rest.endsAt < STALE_ALERT_MS) alertRestOver()
+                restTimer.clearIfEndsAt(rest.endsAt)
+            } finally {
+                releaseRestWakeLock()
+            }
         }
+    }
+
+    private fun acquireRestWakeLock(timeoutMs: Long) {
+        val lock = restWakeLock ?: getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "recomp:rest-timer")
+            .apply { setReferenceCounted(false) }
+            .also { restWakeLock = it }
+        lock.acquire(timeoutMs)
+    }
+
+    private fun releaseRestWakeLock() {
+        restWakeLock?.takeIf { it.isHeld }?.release()
     }
 
     /** "Bench press · set 2 of 3" for the first exercise with an unticked set. */
@@ -198,6 +223,7 @@ class ActiveWorkoutService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        releaseRestWakeLock()
         scope.cancel()
         super.onDestroy()
     }
@@ -210,6 +236,7 @@ class ActiveWorkoutService : Service() {
         private const val ONGOING_ID = 1
         private const val REST_OVER_ID = 2
         private const val STALE_ALERT_MS = 60_000L
+        private const val WAKE_LOCK_MARGIN_MS = 10_000L
         const val EXTRA_REST_SECONDS = 30
 
         /** Whether the service is alive in this process; the workout screen vibrates itself when it isn't. */

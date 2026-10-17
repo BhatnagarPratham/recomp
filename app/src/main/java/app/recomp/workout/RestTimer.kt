@@ -38,12 +38,17 @@ class RestTimer @Inject constructor(@WorkoutStateStore private val store: DataSt
         }
     }
 
-    /** "+30 s": extends a running rest, or restarts one that has just ended. */
+    /** "+30 s": extends a running rest, or starts a fresh one of [seconds] if it has already ended. */
     suspend fun add(seconds: Int, now: Long = System.currentTimeMillis()) {
         store.edit {
-            val end = maxOf(it[endsAtKey] ?: now, now)
-            it[endsAtKey] = end + seconds * 1000L
-            it[totalKey] = (it[totalKey] ?: 0) + seconds
+            val end = it[endsAtKey]
+            if (end != null && end > now) {
+                it[endsAtKey] = end + seconds * 1000L
+                it[totalKey] = (it[totalKey] ?: 0) + seconds
+            } else {
+                it[endsAtKey] = now + seconds * 1000L
+                it[totalKey] = seconds
+            }
         }
     }
 
