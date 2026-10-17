@@ -49,9 +49,17 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 
-/** An extra session's schedule. [days] are ISO day numbers, Monday = 1. Its name and kind live on the routine. */
+/**
+ * An extra session's schedule. [days] are ISO day numbers, Monday = 1. Its name and kind live on the routine.
+ * The stored classes check their own values, so a value that can't become a plan never decodes: reads treat it
+ * as unreadable (TRD §4) and an import refuses it (§6.5), instead of the app crashing when it's used.
+ */
 @Serializable
 data class ExtraSchedule(val routineId: Long, val days: Set<Int> = emptySet()) {
+    init {
+        require(days.all { it in 1..7 }) { "Weekdays are 1 to 7, not $days" }
+    }
+
     fun toPlan() = ExtraPlan(routineId, days.map(DayOfWeek::of).toSet())
 }
 
@@ -83,6 +91,12 @@ data class StoredGoal(
     @Serializable(with = LocalDateIso::class) val startedOn: LocalDate,
     val aggressiveAcknowledged: Boolean = false,
 ) {
+    init {
+        // GoalPolicy's own rules: rates are magnitudes, and a policy can't both lose and gain.
+        GoalPolicy(goal, lossRatePctPerWeek, surplusFraction, proteinGPerKg)
+        require(proteinGPerKg.isFinite() && proteinGPerKg > 0) { "Protein per kg must be positive" }
+    }
+
     fun toPlan() = GoalPlan(
         policy = GoalPolicy(goal, lossRatePctPerWeek, surplusFraction, proteinGPerKg),
         pace = pace,
@@ -202,6 +216,10 @@ data class AiSettings(
 /** The usual scan slot (IB-02) as stored under `scan_slot`: an ISO weekday and minutes after midnight. */
 @Serializable
 data class StoredScanSlot(val day: Int, val minutes: Int) {
+    init {
+        require(day in 1..7 && minutes in 0 until 24 * 60) { "No such slot: day $day, minute $minutes" }
+    }
+
     fun toSlot() = ScanSlot(DayOfWeek.of(day), LocalTime.of(minutes / 60, minutes % 60))
 
     companion object {
@@ -402,7 +420,10 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
             if (wrongType(SettingsKeys.AI_MONTHLY_CAP_USD, Double::class)) add(SettingsKeys.AI_MONTHLY_CAP_USD.name)
             if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
-            if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it) })) add(SettingsKeys.PERSONA.name)
+            // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
+            if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
+                add(SettingsKeys.PERSONA.name)
+            }
             if (!decodes(SettingsKeys.PROFILE, { settingsJson.decodeFromString<StoredProfile>(it).toProfile() })) add(SettingsKeys.PROFILE.name)
             if (!decodes(SettingsKeys.TARGET_OVERRIDES, { settingsJson.decodeFromString<StoredOverrides>(it) })) add(SettingsKeys.TARGET_OVERRIDES.name)
             if (!decodes(SettingsKeys.PROTEIN_RAMP, { settingsJson.decodeFromString<StoredRamp>(it) })) add(SettingsKeys.PROTEIN_RAMP.name)

@@ -331,6 +331,9 @@ class BackupTest {
             "day_start_minutes" to SettingValue("int", JsonPrimitive(99_999)),
             "scan_slot" to SettingValue("string", JsonPrimitive("{\"day\":9,\"minutes\":600}")),
             "keep_screen_on" to SettingValue("string", JsonPrimitive("yes")),
+            // Decodes, but can't become a plan: a weekday 9, and a goal that loses at a negative rate.
+            "persona" to SettingValue("string", JsonPrimitive("""{"split":"PPL","extras":[{"routineId":3,"days":[9]}]}""")),
+            "persona" to SettingValue("string", JsonPrimitive("""{"split":"PPL","goal":{"goal":"FAT_LOSS","lossRatePctPerWeek":-0.5,"proteinGPerKg":2.0,"startedOn":"2026-10-01"}}""")),
         ).forEach { (key, bad) ->
             val message = refused(zip(BackupManager.MANIFEST to manifest, BackupManager.DATABASE to good.getValue(BackupManager.DATABASE), BackupManager.SETTINGS to json.encodeToString(settings + (key to bad))))
             assertTrue(message, message.contains(key))
