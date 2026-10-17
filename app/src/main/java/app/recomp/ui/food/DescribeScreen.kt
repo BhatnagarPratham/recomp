@@ -561,7 +561,7 @@ private fun ReviewStep(
             if (review.rejected.isNotEmpty()) {
                 item {
                     Text(
-                        "Left out, because Claude gave no weight: ${review.rejected.joinToString()}. Add them with search or quick add.",
+                        "Left out, because Claude gave no usable weight or amount: ${review.rejected.joinToString()}. Add them with search or quick add.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )

@@ -557,7 +557,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **User message:** which origin applies, the description, and, for a re-estimate, the question asked and your answer. Each estimate is a fresh single-turn request, so there's no history to keep byte-identical (preserved thinking never applies).
 - **Photos** are downscaled to about 1500 px on the long edge as JPEG before sending.
 - **Client-side validation** (`MealCheck` in `:domain`):
-  - Items with non-positive grams, or a negative or non-finite number, are rejected and named in a note. No item left is `INVALID`.
+  - Items with non-positive grams or quantity, or a negative or non-finite number, are rejected and named in a note. No item left is `INVALID`.
   - An item is flagged when its kcal is more than 15% away from `4P + 4C + 9F`, ignoring differences under 10 kcal so small garnishes don't flag.
   - Totals are recomputed from the kept items; nothing from the model is summed as given.
   - `stop_reason` (`refusal`, `max_tokens`) is checked before content is read; errors are handled with the SDK's typed exceptions (table above); the server-side refusal fallback is on (above).

@@ -65,10 +65,13 @@ object MealCheck {
     /** Differences below this many kcal never flag, so a garnish of 5 kcal against 4 doesn't. */
     const val MIN_GAP_KCAL = 10.0
 
-    /** Usable: a name, positive grams, and every number finite and not negative. */
+    /**
+     * Usable: a name, a positive weight and amount, and every number finite and not negative. A "0 piece · 120 g"
+     * row would log nonsense, and the learning loop couldn't work out what one piece weighs.
+     */
     fun usable(item: EstimatedItem): Boolean {
         val numbers = listOf(item.quantity, item.grams, item.kcal, item.proteinG, item.carbsG, item.fatG, item.fiberG)
-        return item.name.isNotBlank() && item.grams > 0 && numbers.all { it.isFinite() && it >= 0 }
+        return item.name.isNotBlank() && item.grams > 0 && item.quantity > 0 && numbers.all { it.isFinite() && it >= 0 }
     }
 
     /** Whether the item's calories disagree with its macros by more than 15% (and at least 10 kcal). */

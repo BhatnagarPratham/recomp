@@ -106,7 +106,7 @@ class AiTest {
     ) = EstimatedItem(name, quantity, "piece", grams, kcal, protein, carbs, fat, fiberG = 4.0, Confidence.HIGH, " medium size ")
 
     @Test
-    fun `items without a positive weight or with impossible numbers are rejected and named`() {
+    fun `items without a positive weight and amount, or with impossible numbers, are rejected and named`() {
         val estimate = MealEstimate(
             listOf(
                 item(),
@@ -114,13 +114,14 @@ class AiTest {
                 item(name = "Chaas", grams = -50.0),
                 item(name = "Pickle", fat = -1.0),
                 item(name = "Sauce", kcal = Double.NaN),
+                item(name = "Raita", quantity = 0.0),
                 item(name = " ", grams = 10.0),
             ),
             clarifyingQuestion = "  ",
         )
         val checked = MealCheck.check(estimate)
         assertEquals(listOf("Phulka"), checked.items.map { it.name })
-        assertEquals(listOf("Salad", "Chaas", "Pickle", "Sauce", "An unnamed item"), checked.rejected)
+        assertEquals(listOf("Salad", "Chaas", "Pickle", "Sauce", "Raita", "An unnamed item"), checked.rejected)
         assertEquals("medium size", checked.items.single().assumptions)
         assertNull(checked.clarifyingQuestion)
     }
