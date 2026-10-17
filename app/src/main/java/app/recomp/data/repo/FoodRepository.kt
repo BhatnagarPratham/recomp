@@ -93,6 +93,18 @@ class FoodRepository @Inject constructor(
         Portions.unitsFor(foodDao.units(foodId).map { it.label to it.grams }, household.first())
 
     /**
+     * The units an entry's edit sheet offers: its own unit at the weight it was logged with first, then the
+     * food's current units. A unit recalibrated since (or re-imported) never rewrites the entry (TRD §4).
+     */
+    suspend fun unitsForEntry(entry: FoodLogEntity): List<PortionUnit> {
+        val foodId = entry.foodId ?: return emptyList()
+        val grams = entry.grams ?: return emptyList()
+        val logged = PortionUnit(entry.unitLabel, if (entry.unitLabel == Portions.GRAMS) 1.0 else grams / entry.quantity, PortionUnit.Kind.OWN)
+        val current = units(foodId).filter { it.label != entry.unitLabel }
+        return if (entry.unitLabel == Portions.GRAMS) current + logged else listOf(logged) + current
+    }
+
+    /**
      * The portion sheet's prefill: what you logged for this food last time (amount, unit, origin) when
      * that unit still exists, else one of its own servings, else 100 g. Origin defaults to Home, or
      * Packaged for a food with a brand (NU-15).

@@ -127,6 +127,8 @@ class FoodViewModel @Inject constructor(
 
     suspend fun units(foodId: Long): List<PortionUnit> = foods.units(foodId)
 
+    suspend fun unitsForEntry(entry: FoodLogEntity): List<PortionUnit> = foods.unitsForEntry(entry)
+
     suspend fun calibrate(foodId: Long, label: String, grams: Double) = foods.calibrate(foodId, label, grams)
 
     fun update(id: Long, quantity: Double, unit: PortionUnit, origin: Origin, slot: String) = viewModelScope.launch { log.update(id, quantity, unit, origin, slot) }
@@ -185,10 +187,8 @@ fun FoodScreen(onAdd: (LocalDate, String) -> Unit, viewModel: FoodViewModel = hi
         editing = if (foodId == null || grams == null || viewModel.food(foodId) == null) {
             Editing.Quick(entry)
         } else {
-            val units = viewModel.units(foodId).let { list ->
-                // An entry's unit that no longer exists (a reset calibration) still shows at its logged weight.
-                if (list.any { it.label == entry.unitLabel }) list else listOf(PortionUnit(entry.unitLabel, grams / entry.quantity, PortionUnit.Kind.OWN)) + list
-            }
+            // The entry's unit at the weight it was logged with, so a later recalibration never rewrites it.
+            val units = viewModel.unitsForEntry(entry)
             val food = viewModel.food(foodId)!!
             Editing.Portion(entry, PortionSheetState(entry.name, food.caveat, units, entry.quantity, units.first { it.label == entry.unitLabel }, entry.origin, entry.mealSlot), foodId)
         }
@@ -242,6 +242,7 @@ fun FoodScreen(onAdd: (LocalDate, String) -> Unit, viewModel: FoodViewModel = hi
             macrosFor = { q, unit -> scaled(e.entry, q * unit.grams) },
             onCalibrate = { label, grams ->
                 scope.launch {
+                    // Changing the unit here is explicit, so this entry takes the new weight too.
                     viewModel.calibrate(e.foodId, label, grams)
                     editing = e.copy(state = e.state.copy(units = viewModel.units(e.foodId)))
                 }

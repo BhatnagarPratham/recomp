@@ -309,6 +309,34 @@ class FoodFlowTest {
     }
 
     @Test
+    fun `editing an entry after its unit is recalibrated keeps the logged weight`() = runBlocking {
+        persona(Diet.LACTO_VEGETARIAN)
+        seed()
+        val today = today()
+        val curd = named("Curd (dahi), whole milk")
+        val id = log.log(today, "lunch", curd, 1.0, foods.units(curd.id).first { it.label == "katori" }, Origin.HOME)
+        val before = log.entry(id)!!
+        assertEquals(150.0, before.grams!!, 0.0)
+
+        foods.setHouseholdMeasure("katori", 200.0)
+        val units = foods.unitsForEntry(before)
+        assertEquals("katori", units.first().label)
+        assertEquals(150.0, units.first().grams, 0.0)
+        assertEquals(1, units.count { it.label == "katori" })
+
+        // Only moving the entry leaves its amount and macros alone.
+        log.update(id, 1.0, units.first(), Origin.HOME, "dinner")
+        val moved = log.entry(id)!!
+        assertEquals("dinner", moved.mealSlot)
+        assertEquals(150.0, moved.grams!!, 0.0)
+        assertEquals(before.kcal, moved.kcal, 1e-9)
+
+        // A gram entry offers grams last, like every other food.
+        val gid = log.log(today, "lunch", curd, 120.0, g, Origin.HOME)
+        assertEquals("g", foods.unitsForEntry(log.entry(gid)!!).last().label)
+    }
+
+    @Test
     fun `a renamed meal keeps its entries and a removed one still shows where it has them`() = runBlocking {
         seed()
         persona(Diet.LACTO_VEGETARIAN)
