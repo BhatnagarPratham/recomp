@@ -21,8 +21,8 @@ object GoalText {
 
     fun kcal(value: Number) = "${n(value)} kcal"
 
-    /** One decimal, without a trailing ".0". */
-    fun d(value: Double): String = if (value % 1.0 == 0.0) value.toInt().toString() else "%.1f".format(value)
+    /** Up to two decimals, without trailing zeros: 0.25, 1.6, 78. */
+    fun d(value: Double): String = java.math.BigDecimal(value).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
     fun cardTitle(goal: Goal) = when (goal) {
         Goal.FAT_LOSS -> "Lose fat"

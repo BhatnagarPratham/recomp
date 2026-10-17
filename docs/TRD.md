@@ -659,6 +659,17 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 
 The stall card needs four or more stalled sessions, so it's covered by tests only.
 
+**M3a results (2026-10-17, reference phone on Android 15, release build over M2 data):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M2 | ✅ The `training` settings moved into the persona and migration 3→4 ran. The first launch opened onboarding with the training setup kept: 7 steps, no equipment step. |
+| Onboarding | ✅ The three questions (both, under a year, BMI estimate) suggested a recomp with its reason. Pace cards showed projections, and Aggressive showed its warning. The finish line pre-filled the suggested goal weight. The review kept the existing Saturday yoga class. Targets for TRD vector A's inputs matched the golden vector: 2,090 kcal, 125 g protein, 58 g fat, 267 g carbs. |
+| Today | ✅ Protein left as recomp's main number, with the ramp note and the 7-day average line; the rotation carried on. |
+| Settings | ✅ A body-data change previewed 2,090 → 2,070 kcal and saved; changing it back replaced the same day's version. A protein override saved and reset. Settings → Goal to Maintain showed the ±5% range on Today, then back to recomp. |
+| Reinstall | ✅ Onboarding stayed done. |
+| Not run on the phone | A fresh install's equipment step and a split change, because both rebuild the phone's routines. The repository tests cover them. |
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
