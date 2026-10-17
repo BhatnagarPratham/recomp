@@ -27,6 +27,9 @@ class LoadsTest {
         assertNull(Loads.parseKg(""))
         assertNull(Loads.parseKg("-5"))
         assertNull(Loads.parseKg("abc"))
+        assertEquals(1_000_000, Loads.parseKg("1000"))
+        assertNull(Loads.parseKg("1000.5"))
+        assertNull(Loads.parseKg("3000000")) // would overflow Int as grams
     }
 
     @Test

@@ -81,11 +81,21 @@ class SummaryViewModel @Inject constructor(
             val session = workouts.observeSession(sessionId).first()
             routineName.value = session?.routineId?.let { workouts.routine(it)?.name }
             differs.value = workouts.differsFromTemplate(sessionId)
-            // What changes next time: the engine's next target, now that this session is history.
+            // What changes next time: the next workout starts from the routine's plan, with history as of
+            // this session, so an old summary still shows what that workout implied.
+            val plan = session?.routineId?.let { workouts.routinePlan(it) }.orEmpty()
+            val asOf = session?.startedAt ?: Long.MAX_VALUE
             nextTime.value = workouts.observeSessionExercises(sessionId).first()
                 .filter { ex -> ex.sets.any { it.completedAt != null } }
                 .map { ex ->
-                    val rec = progression.recommend(ex.exercise, ex.entry.targetSets, ex.entry.repMin, ex.entry.repMax)
+                    val row = plan[ex.exercise.id]
+                    val rec = progression.recommend(
+                        ex.exercise,
+                        targetSets = row?.targetSets ?: ex.entry.targetSets,
+                        repMin = row?.repMin ?: ex.entry.repMin,
+                        repMax = row?.repMax ?: ex.entry.repMax,
+                        asOf = asOf,
+                    )
                     val top = ex.sets.filter { it.completedAt != null && it.setType == SetType.WORKING }.maxOfOrNull { it.loadG ?: 0 }
                     rec to Targets.nextTime(ex.exercise.name, rec, top)
                 }

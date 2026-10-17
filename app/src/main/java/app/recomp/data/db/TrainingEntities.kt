@@ -147,11 +147,13 @@ data class PersonalRecordEntity(
     @ColumnInfo(name = "achieved_at") val achievedAt: Long,
 )
 
-/** A completed exposure (TRD §4 hot query) with its session's start time. */
-data class ExposureRow(
-    @Embedded val entry: SessionExerciseEntity,
-    @ColumnInfo(name = "started_at") val startedAt: Long,
-    @ColumnInfo(name = "routine_id") val routineId: Long?,
+/** A completed set of an exposure (TRD §4 hot query), with its session's details. */
+data class ExposureSetRow(
+    @Embedded val set: SetEntryEntity,
+    @ColumnInfo(name = "x_session_id") val sessionId: Long,
+    @ColumnInfo(name = "x_started_at") val startedAt: Long,
+    @ColumnInfo(name = "x_log_date") val logDate: LocalDate,
+    @ColumnInfo(name = "x_routine_name") val routineName: String?,
 )
 
 data class RoutineExerciseWithExercise(

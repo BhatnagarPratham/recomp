@@ -310,11 +310,24 @@ class TrainingFlowTest {
     }
 
     @Test
-    fun `changing experience re-applies untouched rep ranges`() = runBlocking {
+    fun `changing experience re-applies untouched rep ranges in the library and the routines`() = runBlocking {
         setUpPpl(Experience.BEGINNER)
         val bench = exerciseId("Bench press")
+        val push = training.observeRotation().first().first()
+        val rows = training.observeRoutineExercises(push.id).first().map { it.entry }
+        // You edited the shoulder press's range; that one must stay.
+        training.saveRoutineExercises(push.id, rows.mapIndexed { i, r -> if (i == 1) r.copy(repMin = 6, repMax = 9) else r })
+
         setUpPpl(Experience.ADVANCED)
         val row = app.db.exerciseDao().get(bench)!!
         assertEquals(5 to 8, row.defaultRepMin to row.defaultRepMax)
+        val after = training.observeRoutineExercises(push.id).first().map { it.entry }
+        assertEquals(5 to 8, after[0].repMin to after[0].repMax) // bench, compound
+        assertEquals(6 to 9, after[1].repMin to after[1].repMax) // edited, kept
+        assertEquals(8 to 12, after[2].repMin to after[2].repMax) // pec deck, isolation
+        assertEquals(10 to 15, after.last().repMin to after.last().repMax) // lateral raise, high-rep
+        // A workout started now copies the new range.
+        val id = workouts.startRoutine(push.id)
+        assertEquals(5 to 8, workouts.observeSessionExercises(id).first()[0].entry.let { it.repMin to it.repMax })
     }
 }

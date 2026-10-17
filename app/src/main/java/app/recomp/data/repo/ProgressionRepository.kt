@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.ExerciseEntity
+import app.recomp.data.db.ExposureSetRow
 import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.WorkoutDao
@@ -25,9 +26,7 @@ import app.recomp.domain.progression.SessionSet
 import app.recomp.domain.progression.StallReset
 import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.Loads
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
@@ -60,27 +59,33 @@ class ProgressionRepository @Inject constructor(
     private val nutritionDao: NutritionDao,
     private val days: DayBoundary,
 ) {
-    /** Completed exposures of an exercise, newest first. */
-    suspend fun history(exerciseId: Long, limit: Int = HISTORY_LIMIT): List<Exposure> =
-        workoutDao.exposureRows(exerciseId, limit).map { row ->
-            Exposure(row.startedAt, workoutDao.completedSets(row.entry.id).map { it.toLogged() })
+    /** Completed exposures of an exercise, newest first, as of [asOf] (a session start time). */
+    suspend fun history(exerciseId: Long, limit: Int = HISTORY_LIMIT, asOf: Long = Long.MAX_VALUE): List<Exposure> =
+        workoutDao.exposureSets(exerciseId, limit, asOf).groupExposures().map { (first, sets) ->
+            Exposure(first.startedAt, sets.map { it.set.toLogged() })
         }
 
-    private suspend fun context(exercise: ExerciseEntity) = ProgressionContext(
+    /** Rows arrive grouped by exposure, newest first; keeps that order. */
+    private fun List<ExposureSetRow>.groupExposures(): List<Pair<ExposureSetRow, List<ExposureSetRow>>> =
+        groupBy { it.set.sessionExerciseId }.values.map { it.first() to it }
+
+    /** [asOf] replays an old workout, so the deficit check uses the target in force then. */
+    private suspend fun context(exercise: ExerciseEntity, asOf: Long = Long.MAX_VALUE) = ProgressionContext(
         experience = ExperiencePolicy.defaultFor(prefs.currentTraining().experience),
-        inDeficit = inDeficit(),
+        inDeficit = inDeficit(if (asOf == Long.MAX_VALUE) System.currentTimeMillis() else asOf),
         stallReset = exercise.stallResetAt?.let { StallReset(it, exercise.stallResetKeepsBaseline) },
     )
 
-    /** TRD §5.1: today's target against the TDEE estimate stored with it. False until there's a target. */
+    /** TRD §5.1: the target in force at [now] against the TDEE estimate stored with it. False until there's a target. */
     suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
         nutritionDao.targetOn(days.of(now))?.let { EnergyBalance.inDeficit(it.kcal, it.tdeeEstimate) } ?: false
 
-    suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int): Recommendation =
+    /** [asOf] limits history to sessions started by then, e.g. to replay what an old workout implied. */
+    suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int, asOf: Long = Long.MAX_VALUE): Recommendation =
         ProgressionEngine.recommend(
             ExerciseConfig(repMin, repMax, targetSets, exercise.incrementG, exercise.loadType),
-            history(exercise.id),
-            context(exercise),
+            history(exercise.id, asOf = asOf),
+            context(exercise, asOf),
         )
 
     // Stall choices (PO-05). Both reset stall detection from the start of today's session.
@@ -135,21 +140,19 @@ class ProgressionRepository @Inject constructor(
         PreviewLine(row.exercise.name, if (rec.action == Action.BASELINE) "first time" else Targets.describe(rec), rec.action == Action.INCREASE && rec.loadG != null)
     }
 
-    /** HM-02: every past session of an exercise, newest first. */
+    /** HM-02: every past session of an exercise, newest first, in two queries. */
     suspend fun exerciseHistory(exerciseId: Long): List<HistoryEntry> {
         val records = workoutDao.exerciseRecords(exerciseId).groupBy({ it.sessionId }, { it.type })
-        val zone = ZoneId.systemDefault()
-        return workoutDao.exposureRows(exerciseId, limit = FULL_HISTORY_LIMIT).map { row ->
-            val sets = workoutDao.completedSets(row.entry.id).map { it.toLogged() }
-            val session = workoutDao.session(row.entry.sessionId)
+        return workoutDao.exposureSets(exerciseId, limit = FULL_HISTORY_LIMIT).groupExposures().map { (first, rows) ->
+            val sets = rows.map { it.set.toLogged() }
             HistoryEntry(
-                sessionId = row.entry.sessionId,
-                date = session?.logDate ?: Instant.ofEpochMilli(row.startedAt).atZone(zone).toLocalDate(),
-                routineName = row.routineId?.let { routineDao.get(it)?.name },
+                sessionId = first.sessionId,
+                date = first.logDate,
+                routineName = first.routineName,
                 sets = Loads.describe(sets),
                 bestE1rmG = sets.filter { it.type != SetType.WARMUP && (it.loadG ?: 0) > 0 && it.reps in 1..ProgressionEngine.E1RM_MAX_REPS }
                     .maxOfOrNull { ProgressionEngine.e1rmG(it.loadG!!, it.reps) }?.toInt(),
-                records = records[row.entry.sessionId].orEmpty(),
+                records = records[first.sessionId].orEmpty(),
             )
         }
     }

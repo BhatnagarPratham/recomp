@@ -28,11 +28,15 @@ object Loads {
     fun formatKg(grams: Int): String =
         BigDecimal(grams).divide(BigDecimal(1000)).stripTrailingZeros().toPlainString()
 
-    /** "42.5" → 42500. Accepts a comma as the decimal mark. Null for blanks, negatives and junk. */
+    /** No lift or plate step is heavier; anything above is a typo that would poison targets and PRs. */
+    const val MAX_LOAD_G = 1_000_000
+
+    /** "42.5" → 42500. Accepts a comma as the decimal mark. Null for blanks, negatives, junk and over 1,000 kg. */
     fun parseKg(text: String): Int? {
         val kg = text.trim().replace(',', '.').toBigDecimalOrNull() ?: return null
         if (kg.signum() < 0) return null
-        return kg.multiply(BigDecimal(1000)).setScale(0, RoundingMode.HALF_UP).toInt()
+        val grams = kg.multiply(BigDecimal(1000)).setScale(0, RoundingMode.HALF_UP)
+        return grams.takeIf { it <= BigDecimal(MAX_LOAD_G) }?.intValueExact()
     }
 
     /** Weight stepper (WL-03): one increment up or down, never below zero. */

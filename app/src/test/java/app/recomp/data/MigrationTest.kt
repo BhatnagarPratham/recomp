@@ -108,7 +108,7 @@ class MigrationTest {
             val bench = room.exerciseDao().get(3)!!
             assertNull(bench.stallResetAt)
             assertEquals(false, bench.stallResetKeepsBaseline)
-            assertEquals(1, room.workoutDao().exposureRows(3, 10).size)
+            assertEquals(1, room.workoutDao().exposureSets(3, 10).size)
             assertEquals(emptyList<Any>(), room.workoutDao().exerciseRecords(3))
         }
         room.close()

@@ -98,6 +98,9 @@ class TodayViewModel @Inject constructor(
     /** GL-07, GL-10: the goal's main number and the 7-day average. */
     val food: StateFlow<TodayNutrition?> = nutrition.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** The log date (PR-03 day boundary), which everything on Today is keyed to, header included. It rolls over while open. */
+    val today: StateFlow<LocalDate> = workouts.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LocalDate.now())
+
     init {
         viewModelScope.launch { nutrition.lockRampBaseline() }
     }
@@ -176,6 +179,7 @@ fun TodayScreen(
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val food by viewModel.food.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingStart by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -210,7 +214,7 @@ fun TodayScreen(
     ) {
         Text("Today", style = MaterialTheme.typography.headlineMedium)
         Text(
-            LocalDate.now().format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
+            today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (!ui.loaded) return@Column

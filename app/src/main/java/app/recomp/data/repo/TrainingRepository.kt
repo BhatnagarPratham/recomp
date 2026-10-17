@@ -11,6 +11,7 @@ import app.recomp.data.db.WorkoutDao
 import app.recomp.data.prefs.ExtraSchedule
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.prefs.TrainingSettings
+import app.recomp.data.seed.ExerciseSeed
 import app.recomp.data.seed.SeedData
 import app.recomp.data.seed.SeedSource
 import app.recomp.domain.model.Equipment
@@ -132,7 +133,9 @@ class TrainingRepository @Inject constructor(
         val extraIds = db.withTransaction {
             if (before.experience != setup.experience) {
                 val seedsByKey = seeds.exercises().associateBy { it.key }
-                exerciseDao.updateAll(SeedData.reapplyRepRanges(exerciseDao.seeded(), seedsByKey, policy(before.experience), newPolicy))
+                val oldPolicy = policy(before.experience)
+                exerciseDao.updateAll(SeedData.reapplyRepRanges(exerciseDao.seeded(), seedsByKey, oldPolicy, newPolicy))
+                reapplyRoutineRanges(seedsByKey, oldPolicy, newPolicy)
             }
             setup.increments.forEach { (id, grams) ->
                 exerciseDao.get(id)?.takeIf { it.incrementG != grams }?.let { exerciseDao.update(it.copy(incrementG = grams)) }
@@ -152,6 +155,30 @@ class TrainingRepository @Inject constructor(
                 strengthDaysPerWeek = setup.strengthDaysPerWeek,
                 extras = setup.extras.zip(extraIds) { draft, id -> ExtraSchedule(id, draft.days) },
             )
+        }
+    }
+
+    /**
+     * PRD §4.3: a changed experience level moves every rep range you haven't edited, in routines too,
+     * since workouts copy their targets from the routine.
+     */
+    private suspend fun reapplyRoutineRanges(seedsByKey: Map<String, ExerciseSeed>, old: ExperiencePolicy, new: ExperiencePolicy) {
+        routineDao.rotation().forEach { routine ->
+            val rows = routineDao.exercises(routine.id)
+            var changed = false
+            val updated = rows.map { row ->
+                val repClass = row.exercise.seedKey?.let { seedsByKey[it]?.repClass }
+                    ?: if (row.exercise.mechanic == Mechanic.COMPOUND) RepClass.COMPOUND else RepClass.ISOLATION
+                val before = old.repsFor(repClass)
+                val after = new.repsFor(repClass)
+                if (before != after && row.entry.repMin == before.first && row.entry.repMax == before.last) {
+                    changed = true
+                    row.entry.copy(repMin = after.first, repMax = after.last)
+                } else {
+                    row.entry
+                }
+            }
+            if (changed) routineDao.replaceExercises(routine.id, updated)
         }
     }
 

@@ -76,15 +76,32 @@ class ProgressionFlowTest {
     }
 
     @Test
-    fun `a working set at another load than the target records an override`() = runBlocking {
+    fun `a top working load other than the target records an override, and only that`() = runBlocking {
         benchSession(40_000, 12, 12, 12) // next target: 42.5 × 8
         val id = app.workouts.startRoutine(push().id, now = clock + 86_400_000)
-        val bench = app.workouts.observeSessionExercises(id).first().first()
+        val sets = app.workouts.observeSessionExercises(id).first().first().sets.sortedBy { it.setIndex }
+        suspend fun overrode() = app.workouts.observeSessionExercises(id).first().first().entry.userOverrode
         assertEquals(42_500, benchRecommendation(id)!!.loadG)
-        app.workouts.completeSet(bench.sets[0].id, 42_500, 8, null)
-        assertFalse(app.workouts.observeSessionExercises(id).first().first().entry.userOverrode)
-        app.workouts.completeSet(bench.sets[1].id, 40_000, 10, null)
-        assertTrue(app.workouts.observeSessionExercises(id).first().first().entry.userOverrode)
+
+        app.workouts.completeSet(sets[0].id, 40_000, 10, null) // stayed at 40
+        assertTrue(overrode())
+        app.workouts.uncompleteSet(sets[0].id) // it was a typo
+        assertFalse(overrode())
+
+        app.workouts.completeSet(sets[0].id, 42_500, 8, null)
+        app.workouts.completeSet(sets[1].id, 40_000, 10, null) // a back-off set below the top
+        assertFalse(overrode())
+    }
+
+    @Test
+    fun `history as of a session ignores later sessions`() = runBlocking {
+        val first = benchSession(40_000, 12, 11, 10)
+        benchSession(40_000, 12, 12, 12)
+        val bench = app.workouts.observeSessionExercises(first).first().first().exercise
+        val startedAt = app.db.workoutDao().session(first)!!.startedAt
+        assertEquals(1, app.progression.history(bench.id, asOf = startedAt).size)
+        assertEquals(Action.ADD_REPS, app.progression.recommend(bench, 3, 8, 12, asOf = startedAt).action)
+        assertEquals(Action.INCREASE, app.progression.recommend(bench, 3, 8, 12).action)
     }
 
     @Test
