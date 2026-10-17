@@ -423,6 +423,39 @@ class FoodFlowTest {
     }
 
     @Test
+    fun `usage counts every portion, and Undo takes it back`() = runBlocking {
+        persona(Diet.LACTO_VEGETARIAN)
+        seed()
+        val today = today()
+        val paneer = named("Paneer")
+        val piece = foods.units(paneer.id).first { it.label == "piece" }
+        log.log(today, "breakfast", paneer, 2.0, piece, Origin.HOME, now = 1_000)
+        log.log(today, "breakfast", paneer, 1.0, piece, Origin.HOME, now = 2_000)
+        assertEquals(2, dao.get(paneer.id)!!.useCount)
+
+        // A saved meal holding paneer twice counts twice.
+        val mealId = log.saveMeal("Paneer twice", today, "breakfast")
+        val ids = log.logSavedMeal(mealId, today, "dinner", now = 5_000)
+        assertEquals(4, dao.get(paneer.id)!!.useCount)
+        assertEquals(5_000L, dao.get(paneer.id)!!.lastUsedAt)
+        assertEquals(1, log.observeSavedMeals().first().single().meal.useCount)
+
+        log.undoSavedMeal(mealId, ids)
+        val back = dao.get(paneer.id)!!
+        assertEquals(2, back.useCount)
+        assertEquals("last used falls back to the latest remaining entry", 2_000L, back.lastUsedAt)
+        assertEquals(0, log.observeSavedMeals().first().single().meal.useCount)
+
+        // An undone single log leaves a food as if it was never logged.
+        val curd = named("Curd (dahi), whole milk")
+        val id = log.log(today, "lunch", curd, 100.0, g, Origin.HOME)
+        log.undoInsert(listOf(id))
+        assertEquals(0, dao.get(curd.id)!!.useCount)
+        assertNull(dao.get(curd.id)!!.lastUsedAt)
+        assertEquals(listOf("Paneer"), foods.suggestions().hits.map { it.food.name })
+    }
+
+    @Test
     fun `copying a day or a meal adds beside what's there`() = runBlocking {
         persona(Diet.LACTO_VEGETARIAN)
         seed()

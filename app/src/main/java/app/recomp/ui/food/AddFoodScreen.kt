@@ -145,6 +145,8 @@ class AddFoodViewModel @Inject constructor(
 
     suspend fun undo(ids: List<Long>) = log.undoInsert(ids)
 
+    suspend fun undoMeal(mealId: Long, ids: List<Long>) = log.undoSavedMeal(mealId, ids)
+
     suspend fun hide(id: Long) = foods.hide(id).also { refresh() }
 
     suspend fun restore(id: Long) = foods.restore(id).also { refresh() }
@@ -265,7 +267,7 @@ fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewMode
                         onLog = {
                             scope.launch {
                                 val ids = viewModel.logMeal(m.meal.id)
-                                undoable("Added ${m.meal.name} · ${ids.size} ${if (ids.size == 1) "item" else "items"}") { viewModel.undo(ids) }
+                                undoable("Added ${m.meal.name} · ${ids.size} ${if (ids.size == 1) "item" else "items"}") { viewModel.undoMeal(m.meal.id, ids) }
                             }
                         },
                         onRename = { renaming = m },

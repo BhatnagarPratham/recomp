@@ -74,8 +74,19 @@ interface FoodDao {
     @Update
     suspend fun updateAll(foods: List<FoodEntity>)
 
-    @Query("UPDATE food SET use_count = use_count + 1, last_used_at = :at WHERE id IN (:ids)")
-    suspend fun markUsed(ids: List<Long>, at: Long)
+    /** [times] counts a food logged more than once in one go (a saved meal or a copied day). */
+    @Query("UPDATE food SET use_count = use_count + :times, last_used_at = :at WHERE id = :id")
+    suspend fun markUsed(id: Long, times: Int, at: Long)
+
+    /** Takes back an undone log: the count goes down, and "last used" falls back to the food's latest remaining entry. */
+    @Query(
+        """
+        UPDATE food SET use_count = max(0, use_count - :times),
+          last_used_at = (SELECT max(logged_at) FROM food_log WHERE food_id = :id)
+        WHERE id = :id
+        """,
+    )
+    suspend fun unmarkUsed(id: Long, times: Int)
 
     @Query("UPDATE food SET archived = :archived WHERE id = :id")
     suspend fun setArchived(id: Long, archived: Boolean)
@@ -185,4 +196,7 @@ interface SavedMealDao {
 
     @Query("UPDATE saved_meal SET use_count = use_count + 1, last_used_at = :at WHERE id = :id")
     suspend fun markUsed(id: Long, at: Long)
+
+    @Query("UPDATE saved_meal SET use_count = max(0, use_count - 1) WHERE id = :id")
+    suspend fun unmarkUsed(id: Long)
 }

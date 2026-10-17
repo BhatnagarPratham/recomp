@@ -76,7 +76,7 @@ class FoodLogRepository @Inject constructor(
         require(quantity > 0) { "Nothing to log" }
         val grams = quantity * unit.grams
         val id = foodLogDao.insert(entry(date, slot, food, quantity, unit.label, grams, origin, LogSource.MANUAL, now))
-        foodDao.markUsed(listOf(food.id), now)
+        markUsed(listOf(food.id), now)
         id
     }
 
@@ -155,8 +155,25 @@ class FoodLogRepository @Inject constructor(
         foodLogDao.insertAll(rows)
     }
 
-    /** *Undo* after a saved meal or a copy. */
-    suspend fun undoInsert(ids: List<Long>) = foodLogDao.delete(ids)
+    /**
+     * *Undo* after a log, a saved meal or a copy: the rows go, and so does the usage they added, so an undone
+     * mis-tap never lifts a food in Recent or search.
+     */
+    suspend fun undoInsert(ids: List<Long>) = db.withTransaction {
+        val rows = foodLogDao.get(ids)
+        foodLogDao.delete(ids)
+        rows.mapNotNull { it.foodId }.groupingBy { it }.eachCount().forEach { (foodId, times) -> foodDao.unmarkUsed(foodId, times) }
+    }
+
+    /** *Undo* after logging a saved meal, which also takes back the meal's own use. */
+    suspend fun undoSavedMeal(mealId: Long, ids: List<Long>) = db.withTransaction {
+        undoInsert(ids)
+        savedMealDao.unmarkUsed(mealId)
+    }
+
+    /** Counts each food once per entry, so a meal with two portions of it counts twice. */
+    private suspend fun markUsed(foodIds: List<Long>, now: Long) =
+        foodIds.groupingBy { it }.eachCount().forEach { (foodId, times) -> foodDao.markUsed(foodId, times, now) }
 
     // Saved meals (NU-13)
 
@@ -207,7 +224,7 @@ class FoodLogRepository @Inject constructor(
             }
         }
         val ids = foodLogDao.insertAll(rows)
-        foodDao.markUsed(foods.keys.toList(), now)
+        markUsed(rows.mapNotNull { it.foodId }.filter { it in foods }, now)
         savedMealDao.markUsed(mealId, now)
         ids
     }
@@ -235,7 +252,7 @@ class FoodLogRepository @Inject constructor(
             val ids = foodLogDao.insertAll(
                 rows.mapIndexed { i, r -> r.copy(id = 0, logDate = to, mealSlot = if (fromSlot != null) toSlot ?: r.mealSlot else r.mealSlot, loggedAt = now + i) },
             )
-            foodDao.markUsed(rows.mapNotNull { it.foodId }.distinct(), now)
+            markUsed(rows.mapNotNull { it.foodId }, now)
             ids
         }
 
