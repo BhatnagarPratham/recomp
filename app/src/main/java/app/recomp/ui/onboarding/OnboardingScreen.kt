@@ -109,6 +109,7 @@ fun OnboardingScreen(onDone: () -> Unit, onExit: () -> Unit, viewModel: Onboardi
             item { Text("", Modifier.padding(bottom = 8.dp)) }
         }
 
+        ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
         Row(
             Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),

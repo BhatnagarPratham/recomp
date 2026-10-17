@@ -176,6 +176,34 @@ fun RecompNavHost(main: MainViewModel) {
     }
 
     prompt?.let { ResumeDialog(it, onResume = main::resume, onFinish = main::finish, onDiscard = main::discard, onDismiss = main::dismissPrompt) }
+
+    val unreadable by main.unreadable.collectAsStateWithLifecycle()
+    if (unreadable.isNotEmpty()) UnreadableDialog(unreadable, onDismiss = main::dismissUnreadable)
+}
+
+/** Some settings no longer decode (TRD §4). They're kept aside unchanged, and the affected parts are set up again. */
+@Composable
+private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
+    val what = keys.map {
+        when (it) {
+            "persona" -> "your goal and persona"
+            "profile" -> "your body data"
+            "target_overrides" -> "the targets you set yourself"
+            "protein_ramp" -> "the protein ramp's progress"
+            else -> it
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Some settings couldn't be read") },
+        text = {
+            Text(
+                "This version couldn't read ${what.joinToString(" and ")}, perhaps because they were saved by a newer version. " +
+                    "They've been kept aside unchanged, and you can set them again now. Your workouts and history are untouched.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
 }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */

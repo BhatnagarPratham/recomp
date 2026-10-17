@@ -60,6 +60,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -116,12 +117,30 @@ class SettingsViewModel @Inject constructor(
     private val _pending = MutableStateFlow<PendingChange?>(null)
     val pending: StateFlow<PendingChange?> = _pending
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
+    fun dismissError() {
+        _error.value = null
+    }
+
+    /** A failed save leaves the old settings in place and says so, rather than crashing. */
+    private fun guarded(block: suspend () -> Unit) = viewModelScope.launch {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _error.value = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Your settings are unchanged."
+        }
+    }
+
     /** Body data and overrides move the targets, so they're previewed first; unchanged numbers save at once. */
     fun changeProfile(profile: Profile) = propose(profile = profile)
 
     fun changeOverrides(overrides: TargetOverrides) = propose(overrides = overrides)
 
-    private fun propose(profile: Profile? = null, overrides: TargetOverrides? = null) = viewModelScope.launch {
+    private fun propose(profile: Profile? = null, overrides: TargetOverrides? = null) = guarded {
         val preview = personas.preview(profile = profile, overrides = overrides)
         if (preview.changes) _pending.value = PendingChange(preview, profile, overrides)
         else personas.save(profile = profile, overrides = overrides)
@@ -130,18 +149,18 @@ class SettingsViewModel @Inject constructor(
     fun confirm() {
         val change = _pending.value ?: return
         _pending.value = null
-        viewModelScope.launch { personas.save(profile = change.profile, overrides = change.overrides) }
+        guarded { personas.save(profile = change.profile, overrides = change.overrides) }
     }
 
     fun cancel() {
         _pending.value = null
     }
 
-    fun setDiet(diet: Diet) = viewModelScope.launch { personas.setDiet(diet) }
-    fun setRegion(region: FoodRegion) = viewModelScope.launch { personas.setRegion(region) }
-    fun setWeightSource(source: WeightSource) = viewModelScope.launch { personas.setWeightSource(source) }
-    fun setDayStart(time: LocalTime) = viewModelScope.launch { personas.setDayStart(time) }
-    fun setRamp(on: Boolean) = viewModelScope.launch { personas.setProteinRamp(on) }
+    fun setDiet(diet: Diet) = guarded { personas.setDiet(diet) }
+    fun setRegion(region: FoodRegion) = guarded { personas.setRegion(region) }
+    fun setWeightSource(source: WeightSource) = guarded { personas.setWeightSource(source) }
+    fun setDayStart(time: LocalTime) = guarded { personas.setDayStart(time) }
+    fun setRamp(on: Boolean) = guarded { personas.setProteinRamp(on) }
 }
 
 private sealed interface Editing {
@@ -282,6 +301,16 @@ fun SettingsScreen(onOpenGoal: () -> Unit, onOpenTraining: () -> Unit, onOpenDev
     }
 
     pending?.let { change -> PreviewDialog(change.preview, onConfirm = viewModel::confirm, onDismiss = viewModel::cancel) }
+
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    error?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissError,
+            title = { Text("Not saved") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text("OK") } },
+        )
+    }
 }
 
 private fun finishLineText(plan: GoalPlan): String = when (val f = plan.finishLine) {

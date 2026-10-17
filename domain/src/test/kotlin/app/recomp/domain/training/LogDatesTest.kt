@@ -40,6 +40,14 @@ class LogDatesTest {
     }
 
     @Test
+    fun `the next boundary is the coming day start`() {
+        assertEquals(at(2026, 10, 17, 4, 0), LogDates.nextBoundary(at(2026, 10, 17, 1, 30), zone, fourAm))
+        assertEquals(at(2026, 10, 18, 4, 0), LogDates.nextBoundary(at(2026, 10, 17, 4, 0), zone, fourAm))
+        assertEquals(at(2026, 10, 18, 4, 0), LogDates.nextBoundary(at(2026, 10, 17, 23, 0), zone, fourAm))
+        assertEquals(at(2026, 10, 18, 0, 0), LogDates.nextBoundary(at(2026, 10, 17, 23, 0), zone, LocalTime.MIDNIGHT))
+    }
+
+    @Test
     fun `a midnight boundary is the plain calendar date`() {
         assertEquals(LocalDate.of(2026, 10, 17), LogDates.of(at(2026, 10, 17, 0, 10), zone, LocalTime.MIDNIGHT))
     }

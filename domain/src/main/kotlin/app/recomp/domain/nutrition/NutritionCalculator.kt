@@ -82,9 +82,9 @@ object NutritionCalculator {
         val tdee = bmr * input.activityFactor
         val adjustment = energyAdjustment(input.policy, tdee, input.trendWeightKg)
         val floor = floor(input.sex, bmr)
-        val computedKcal = roundToTen(max(tdee + adjustment, floor))
+        val computedKcal = KcalRounding.nearest(max(tdee + adjustment, floor))
         // An override is still held at the floor (PRD §4.9).
-        val kcal = overrides.kcal?.let { max(it, roundUpToTen(floor)) } ?: computedKcal
+        val kcal = overrides.kcal?.let { max(it, KcalRounding.up(floor)) } ?: computedKcal
 
         val referenceKg = input.goalWeightKg ?: input.trendWeightKg
         val protein = overrides.proteinG?.toDouble() ?: (input.policy.proteinGPerKg * referenceKg)
@@ -105,7 +105,7 @@ object NutritionCalculator {
             activityFactor = input.activityFactor,
             adjustmentCapped = adjustment != 0.0 && adjustment != uncappedAdjustment(input.policy, tdee, input.trendWeightKg),
             floored = overrides.kcal == null && tdee + adjustment < floor,
-            floorKcal = roundUpToTen(floor),
+            floorKcal = KcalRounding.up(floor),
             referenceKg = referenceKg,
             referenceIsGoalWeight = input.goalWeightKg != null,
             proteinGPerKg = input.policy.proteinGPerKg,
@@ -140,7 +140,4 @@ object NutritionCalculator {
 
     fun katchMcArdle(leanMassKg: Double): Double = 370 + 21.6 * leanMassKg
 
-    private fun roundToTen(kcal: Double): Int = (kcal / 10).roundToInt() * 10
-
-    private fun roundUpToTen(kcal: Double): Int = (kotlin.math.ceil(kcal / 10) * 10).toInt()
 }

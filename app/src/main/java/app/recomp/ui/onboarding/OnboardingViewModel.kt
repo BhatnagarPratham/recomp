@@ -41,6 +41,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.LocalTime
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -124,6 +125,8 @@ data class OnboardingUi(
     /** Settings → Goal: the targets in force before this change. */
     val before: NutritionTargetEntity? = null,
     val busy: Boolean = false,
+    /** Saving failed: the form stays as it is so you can try again. */
+    val error: String? = null,
     val done: Boolean = false,
 ) {
     val profile: Profile? get() = about.profile(today)
@@ -482,25 +485,37 @@ class OnboardingViewModel @Inject constructor(
         val ui = _ui.value
         val profile = ui.profile ?: return
         val plan = ui.plan ?: return
-        _ui.update { it.copy(busy = true) }
+        _ui.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
-            if (ui.mode == FlowMode.GOAL) {
-                personas.save(plan = plan)
-            } else {
-                personas.completeOnboarding(
-                    OnboardingResult(
-                        draft = ui.draft.copy(goal = plan),
-                        presetKey = ui.presetKey,
-                        extras = ui.extras.map { it.copy(name = it.name.trim().ifEmpty { Labels.kind(it.kind) }) },
-                        profile = profile,
-                        dayStart = ui.dayStart,
-                        overrides = ui.overrides,
-                        choices = if (ui.needsEquipment) ui.choices else emptyMap(),
-                        increments = if (ui.needsEquipment) ui.increments.filterKeys { id -> id in ui.choices.values } else emptyMap(),
-                    ),
-                )
+            try {
+                write(ui, profile, plan)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Safe to retry: the routines step re-applies in place, and the settings are written last.
+                _ui.update { it.copy(busy = false, error = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Nothing was lost; try again.") }
+                return@launch
             }
             _ui.update { it.copy(busy = false, done = true) }
+        }
+    }
+
+    private suspend fun write(ui: OnboardingUi, profile: Profile, plan: GoalPlan) {
+        if (ui.mode == FlowMode.GOAL) {
+            personas.save(plan = plan)
+        } else {
+            personas.completeOnboarding(
+                OnboardingResult(
+                    draft = ui.draft.copy(goal = plan),
+                    presetKey = ui.presetKey,
+                    extras = ui.extras.map { it.copy(name = it.name.trim().ifEmpty { Labels.kind(it.kind) }) },
+                    profile = profile,
+                    dayStart = ui.dayStart,
+                    overrides = ui.overrides,
+                    choices = if (ui.needsEquipment) ui.choices else emptyMap(),
+                    increments = if (ui.needsEquipment) ui.increments.filterKeys { id -> id in ui.choices.values } else emptyMap(),
+                ),
+            )
         }
     }
 

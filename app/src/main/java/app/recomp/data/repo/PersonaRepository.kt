@@ -76,6 +76,9 @@ class PersonaRepository @Inject constructor(
     val dayStart: Flow<LocalTime> = prefs.dayStart
     val onboarded: Flow<Boolean> = combine(prefs.persona, prefs.profile) { p, profile -> p.onboarded && profile != null }
 
+    /** Settings stored but no longer readable; they're kept aside, never overwritten (TRD §4). */
+    val unreadable: Flow<List<String>> = prefs.unreadable
+
     /** The domain persona, with extra sessions named from their routines. Null until onboarding finishes. */
     val persona: Flow<Persona?> = combine(prefs.persona, training.observeExtras()) { p, routines ->
         if (!p.onboarded) return@combine null

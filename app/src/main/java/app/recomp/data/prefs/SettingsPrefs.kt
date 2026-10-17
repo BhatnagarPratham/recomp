@@ -196,6 +196,9 @@ internal object SettingsKeys {
 
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
+
+    /** Where a value that no longer decodes is kept, untouched, before anything is written over it. */
+    fun unreadableCopy(key: Preferences.Key<String>) = stringPreferencesKey("${key.name}_unreadable")
 }
 
 /**
@@ -244,6 +247,31 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     private inline fun <reified T> Preferences.decode(key: Preferences.Key<String>): T? =
         this[key]?.let { runCatching { settingsJson.decodeFromString<T>(it) }.getOrNull() }
 
+    private inline fun <reified T> Preferences.unreadable(key: Preferences.Key<String>): Boolean =
+        this[key]?.let { runCatching { settingsJson.decodeFromString<T>(it) }.isFailure } ?: false
+
+    /**
+     * The JSON settings that are stored but no longer decode, e.g. after a downgrade from a build with a
+     * new enum value. Reads fall back to defaults, so onboarding opens; the raw value is never lost.
+     */
+    private fun Preferences.unreadableKeys(): List<Preferences.Key<String>> = buildList {
+        if (unreadable<StoredPersona>(SettingsKeys.PERSONA)) add(SettingsKeys.PERSONA)
+        if (unreadable<StoredProfile>(SettingsKeys.PROFILE)) add(SettingsKeys.PROFILE)
+        if (unreadable<StoredOverrides>(SettingsKeys.TARGET_OVERRIDES)) add(SettingsKeys.TARGET_OVERRIDES)
+        if (unreadable<StoredRamp>(SettingsKeys.PROTEIN_RAMP)) add(SettingsKeys.PROTEIN_RAMP)
+    }
+
+    /** Copies each unreadable value aside (once) before a write could replace it with a default. */
+    private fun MutablePreferences.keepUnreadable() {
+        unreadableKeys().forEach { key ->
+            val copy = SettingsKeys.unreadableCopy(key)
+            if (!contains(copy)) this[copy] = this[key]!!
+        }
+    }
+
+    /** Names of the settings that couldn't be read, so the app can say so. */
+    val unreadable: Flow<List<String>> = store.data.map { prefs -> prefs.unreadableKeys().map { it.name } }.distinctUntilChanged()
+
     val persona: Flow<StoredPersona> = store.data.map { it.decode<StoredPersona>(SettingsKeys.PERSONA) ?: StoredPersona() }.distinctUntilChanged()
 
     val profile: Flow<Profile?> = store.data.map { it.decode<StoredProfile>(SettingsKeys.PROFILE)?.toProfile() }.distinctUntilChanged()
@@ -268,11 +296,15 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     suspend fun currentDayStart(): LocalTime = dayStart.first()
 
     suspend fun updatePersona(transform: (StoredPersona) -> StoredPersona) = store.edit { prefs ->
+        prefs.keepUnreadable()
         prefs[SettingsKeys.PERSONA] = settingsJson.encodeToString(transform(prefs.decode<StoredPersona>(SettingsKeys.PERSONA) ?: StoredPersona()))
     }
 
     /** Several settings in one atomic write, e.g. finishing onboarding. */
-    suspend fun edit(block: SettingsEditor.() -> Unit) = store.edit { prefs -> SettingsEditor(prefs).block() }
+    suspend fun edit(block: SettingsEditor.() -> Unit) = store.edit { prefs ->
+        prefs.keepUnreadable()
+        SettingsEditor(prefs).block()
+    }
 
     suspend fun setKeepScreenOn(on: Boolean) = store.edit { it[SettingsKeys.KEEP_SCREEN_ON] = on }
 

@@ -138,7 +138,9 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
 - Later: usual scan slot, AI mode (`OFF|ON`), AI model, monthly AI cap and reminder times.
 
-M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1). The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
+M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
+
+A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet`.
 
@@ -194,7 +196,7 @@ data class ExperiencePolicy(
 | Intermediate | 6–10 / 10–15 / 12–20 | 4 | No | Every 6–8 weeks |
 | Advanced | 5–8 / 8–12 / 10–15 | 5 | No | Every 4–6 weeks |
 
-- **Presets** bundle a `PersonaDraft` (PRD §4.4). They're Kotlin objects (`Presets`) in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code. The reference preset's primary weight source is body-composition scans.
+- **Presets** bundle a `PersonaDraft` (PRD §4.4). They're Kotlin objects (`Presets`) in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
 - **Who reads the persona:**
   - Calorie and protein targets read `goal` (§5.3).
   - The progression engine reads `experience` (§5.1).
@@ -415,6 +417,7 @@ main number, by goal:
 7-day average = mean over logged days in [today − 7, today − 1] of kcal and protein, against the mean of those days' targets
 ```
 
+- Today's log date rolls over at the day boundary while the screen is open (`DayBoundary.observeToday`, which also re-checks every minute).
 - The secondary line shows the other of calories and protein. The average line shows how many days were logged, and is replaced by "appears once you log food" when none were.
 - Food logging arrives in M3b. Until then intake is 0 for every day (`NutritionRepository.intake`, `TODO(M3b)`), so Today shows the full targets and no average.
 

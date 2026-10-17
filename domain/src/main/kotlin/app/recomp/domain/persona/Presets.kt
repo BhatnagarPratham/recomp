@@ -28,7 +28,8 @@ object Presets {
             region = FoodRegion.INDIAN,
             split = SplitTemplate.PPL,
             extras = listOf(ExtraSession("Yoga class", SessionKind.YOGA)),
-            weightSource = WeightSource.SCAN,
+            // BM-01: a daily home scale drives the trend; scans are for body composition.
+            weightSource = WeightSource.HOME_SCALE,
         ),
     )
 

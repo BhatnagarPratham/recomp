@@ -27,7 +27,7 @@ class PersonaTest {
             assertEquals(FoodRegion.INDIAN, draft.region)
             assertEquals(SplitTemplate.PPL, draft.split)
             assertEquals(listOf(SessionKind.YOGA), draft.extras.map { it.kind })
-            assertEquals(WeightSource.SCAN, draft.weightSource)
+            assertEquals(WeightSource.HOME_SCALE, draft.weightSource)
         }
         assertEquals(Goal.FAT_LOSS to SplitTemplate.FULL_BODY_AB, Presets.FAT_LOSS_STARTER.goal to Presets.FAT_LOSS_STARTER.draft.split)
         assertEquals(Experience.BEGINNER, Presets.FAT_LOSS_STARTER.draft.experience)

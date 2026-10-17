@@ -13,6 +13,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -45,6 +46,16 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val unreadableSeen = MutableStateFlow(false)
+
+    /** Settings that couldn't be read, shown once per launch. Their raw values are kept aside. */
+    val unreadable: StateFlow<List<String>> = combine(personas.unreadable, unreadableSeen) { keys, seen -> if (seen) emptyList() else keys }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun dismissUnreadable() {
+        unreadableSeen.value = true
+    }
 
     private var resumeChecked = false
     private val _prompt = MutableStateFlow<ResumePrompt?>(null)

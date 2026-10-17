@@ -16,6 +16,10 @@ object LogDates {
     /** The setting's choices: midnight to 6 AM in hourly steps (PRD §7.1). */
     val DAY_START_CHOICES: List<LocalTime> = (0..6).map { LocalTime.of(it, 0) }
 
+    /** When the log date after [epochMs]'s begins, in epoch milliseconds. */
+    fun nextBoundary(epochMs: Long, zone: ZoneId, dayStart: LocalTime): Long =
+        of(epochMs, zone, dayStart).plusDays(1).atTime(dayStart).atZone(zone).toInstant().toEpochMilli()
+
     fun of(epochMs: Long, zone: ZoneId, dayStart: LocalTime): LocalDate =
         Instant.ofEpochMilli(epochMs).atZone(zone)
             .minusHours(dayStart.hour.toLong())
