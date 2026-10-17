@@ -24,10 +24,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -41,7 +41,6 @@ import androidx.navigation.toRoute
 import app.recomp.data.db.BodyCompositionEntity
 import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.ScanInput
-import app.recomp.data.repo.ScanSaved
 import app.recomp.data.repo.SegmentalLean
 import app.recomp.domain.body.ProtocolCheck
 import app.recomp.domain.body.ScanProtocol
@@ -190,22 +189,48 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
         return body.check(form.at, since.minutes, form.workout, slot)
     }
 
-    /** True while a save runs, so a second tap can't save the scan twice. */
+    /** True while a save or delete runs, so a second tap can't repeat it. */
     private val _saving = MutableStateFlow(false)
     val saving: StateFlow<Boolean> = _saving
 
-    suspend fun save(): ScanSaved? {
-        if (_saving.value) return null
-        val input = _form.value.input() ?: return null
+    /** What finished; the screen closes on it. The work runs in the view model, so leaving early can't cut it short. */
+    private val _done = MutableStateFlow<ScanDone?>(null)
+    val done: StateFlow<ScanDone?> = _done
+
+    fun save() {
+        if (_saving.value) return
+        val input = _form.value.input() ?: return
         _saving.value = true
-        return try {
-            body.saveScan(input, _form.value.id).also { saved -> _form.update { it.copy(id = saved.id) } }
-        } finally {
-            _saving.value = false
+        viewModelScope.launch {
+            try {
+                val saved = body.saveScan(input, _form.value.id)
+                _form.update { it.copy(id = saved.id) }
+                _done.value = ScanDone.Saved(saved.slotSet)
+            } finally {
+                _saving.value = false
+            }
         }
     }
 
-    suspend fun delete() = _form.value.id?.let { body.deleteScan(it) }
+    fun delete() {
+        val id = _form.value.id ?: return
+        if (_saving.value) return
+        _saving.value = true
+        viewModelScope.launch {
+            try {
+                body.deleteScan(id)
+                _done.value = ScanDone.Deleted
+            } finally {
+                _saving.value = false
+            }
+        }
+    }
+}
+
+/** A finished save (with the usual slot when this first scan set it) or delete. */
+sealed interface ScanDone {
+    data class Saved(val slotSet: ScanSlot?) : ScanDone
+    data object Deleted : ScanDone
 }
 
 private val SEGMENTS = listOf("Right arm", "Left arm", "Trunk", "Right leg", "Left leg")
@@ -220,9 +245,13 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
     val form by viewModel.form.collectAsStateWithLifecycle()
     val slot by viewModel.slot.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-    var slotSet by remember { mutableStateOf<ScanSlot?>(null) }
+    val done by viewModel.done.collectAsStateWithLifecycle()
     var deleting by remember { mutableStateOf(false) }
+    // A save that set the usual slot says so first; anything else closes the screen.
+    val slotSet = (done as? ScanDone.Saved)?.slotSet
+    LaunchedEffect(done) {
+        if (done != null && slotSet == null) onDone()
+    }
 
     Scaffold(
         topBar = {
@@ -315,12 +344,7 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
                 )
             }
             Button(
-                onClick = {
-                    scope.launch {
-                        val saved = viewModel.save() ?: return@launch
-                        if (saved.slotSet != null) slotSet = saved.slotSet else onDone()
-                    }
-                },
+                onClick = viewModel::save,
                 enabled = input != null && !saving,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Save scan") }
@@ -338,19 +362,16 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
 
     slotSet?.let { s ->
         AlertDialog(
-            onDismissRequest = { slotSet = null; onDone() },
+            onDismissRequest = onDone,
             title = { Text("Usual scan slot set") },
             text = { Text("Your usual scan slot is now ${BodyText.slot(s)}, from this scan. Later scans are checked against it. You can change it in Settings → Body data.") },
-            confirmButton = { TextButton(onClick = { slotSet = null; onDone() }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = onDone) { Text("OK") } },
         )
     }
     if (deleting) {
         ConfirmDialog("Delete this scan?", "Its Scan weigh-in is deleted with it.", confirm = "Delete", onDismiss = { deleting = false }) {
             deleting = false
-            scope.launch {
-                viewModel.delete()
-                onDone()
-            }
+            viewModel.delete()
         }
     }
 }

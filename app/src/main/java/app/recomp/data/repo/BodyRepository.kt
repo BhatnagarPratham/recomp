@@ -25,9 +25,11 @@ import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -171,9 +173,12 @@ class BodyRepository @Inject constructor(
 
     /**
      * Saves a scan and its *Scan* weigh-in in one transaction (IB-01). The first scan sets the usual slot from
-     * its own day and time; the check uses the slot in force now (TRD §5.6).
+     * its own day and time; the check uses the slot in force now (TRD §5.6). Once started it runs to the end, so
+     * leaving the screen can't save a first scan without its slot.
      */
-    suspend fun saveScan(input: ScanInput, id: Long? = null): ScanSaved {
+    suspend fun saveScan(input: ScanInput, id: Long? = null): ScanSaved = withContext(NonCancellable) { saveScanNow(input, id) }
+
+    private suspend fun saveScanNow(input: ScanInput, id: Long?): ScanSaved {
         var slot = prefs.scanSlot.first()
         var slotSet: ScanSlot? = null
         if (slot == null) {
@@ -219,9 +224,11 @@ class BodyRepository @Inject constructor(
     }
 
     /** The scan's weigh-in goes with it (TRD §5.6). */
-    suspend fun deleteScan(id: Long) = db.withTransaction {
-        bodyDao.weighInForScan(id)?.let { bodyDao.delete(it) }
-        bodyDao.scan(id)?.let { bodyDao.delete(it) }
+    suspend fun deleteScan(id: Long) = withContext(NonCancellable) {
+        db.withTransaction {
+            bodyDao.weighInForScan(id)?.let { bodyDao.delete(it) }
+            bodyDao.scan(id)?.let { bodyDao.delete(it) }
+        }
     }
 
     companion object {

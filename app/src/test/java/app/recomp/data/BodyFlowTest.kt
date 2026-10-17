@@ -27,7 +27,9 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.temporal.TemporalAdjusters
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -213,6 +215,32 @@ class BodyFlowTest {
         assertNull(app.db.bodyDao().weighInForScan(late.id))
         assertEquals(1, app.db.bodyDao().weighIns().size)
         assertEquals(listOf(first.id), body.observeScans().first().map { it.id })
+    }
+
+    @Test
+    fun `a first scan cancelled mid-save still saves with its usual slot`() = runBlocking {
+        onboard()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { body.saveScan(scan(at(0, "10:00"))) }
+        job.cancel()
+        job.join()
+        assertEquals(1, body.observeScans().first().size)
+        assertEquals(ScanSlot(DayOfWeek.MONDAY, LocalTime.of(10, 0)), body.scanSlot.first())
+    }
+
+    @Test
+    fun `a weigh-in after midnight but before the day starts belongs to the day before`() = runBlocking {
+        onboard() // "day starts at" 4 AM
+        body.logWeighIn(80_000, WeightSource.HOME_SCALE, at(0, "07:00"))
+        val night = body.logWeighIn(81_500, WeightSource.HOME_SCALE, at(1, "02:30"))
+        assertEquals(monday, app.db.bodyDao().weighIn(night)!!.logDate)
+        // It's a later weigh-in on Monday's log day, so the trend keeps Monday's morning one.
+        val trend = body.observeTrend().first()
+        assertEquals(listOf(monday), trend.points.map { it.date })
+        assertFalse(night in trend.countedIds)
+        assertEquals(80.0, trend.trendKg)
+
+        body.logWeighIn(80_400, WeightSource.HOME_SCALE, at(1, "07:00"))
+        assertEquals(listOf(monday, monday.plusDays(1)), body.observeTrend().first().points.map { it.date })
     }
 
     @Test
