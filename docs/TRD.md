@@ -686,6 +686,20 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Reinstall | ✅ Onboarding stayed done. |
 | Not run on the phone | A fresh install's equipment step and a split change, because both rebuild the phone's routines. The repository tests cover them. |
 
+**M3b results (2026-10-18, reference phone on Android 15, release build over M3a data):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M3a | ✅ Migration 4→5 ran with targets and history intact. Today gained *Log food* and the bottom bar gained Food. The first launch imported INDB's 1,014 recipes and the 28 basics. |
+| Diet filter | ✅ As the reference persona (lacto-vegetarian), the empty search listed only vegan and vegetarian basics, "chicken" found nothing, and "egg" found only eggless cakes and eggplant rice. |
+| Logging | ✅ Dal makhani prefilled INDB's bowl (353 g); 1½ katori marked Ordered showed the oil note and logged 225 g, 167 kcal. A quick add was corrected from the day view. |
+| Fried recipes | ✅ Every poori carried the frying-oil warning (INDB's poori: 921 kcal for one). |
+| Saved meal | ✅ Lunch saved as a meal, then logged into Dinner in one tap. |
+| Day view and Today | ✅ Per-meal totals, the macro split with "180 kcal from quick adds isn't split", and Today switching recomp's main number to the ramp's measuring week once food was logged. |
+| Custom food | ✅ A per-serving food (1 piece = 60 g) opened its portion sheet at 210 kcal. |
+| Settings → Food | ✅ Meals, portion sizes and the food data note. |
+| Not run on the phone | Copy from another day (the phone had no earlier day with food) and the 7-day average with food; the repository tests cover both. The test entries and saved meal were deleted afterwards, and the test food hidden. |
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
