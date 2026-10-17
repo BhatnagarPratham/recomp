@@ -71,11 +71,15 @@ class DataViewModel @Inject constructor(
             _state.value = DataState.Done(failedTitle, e.message ?: "Something went wrong.")
         } catch (e: IOException) {
             _state.value = DataState.Done(failedTitle, "The file couldn't be read or written (${e.message ?: e.javaClass.simpleName}). Nothing on this phone changed.")
+        } catch (e: Exception) {
+            _state.value = DataState.Done(failedTitle, "Something went wrong: ${e.message ?: e.javaClass.simpleName}. If anything was replaced, Settings → Data can restore the copy from before.")
         }
     }
 
     fun export(uri: Uri) = run("Exporting…", "Not exported") {
-        val out = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("no file")
+        // "wt" overwrites a file you picked again; a provider without it gets the plain mode.
+        val resolver = context.contentResolver
+        val out = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull() ?: resolver.openOutputStream(uri) ?: throw IOException("no file")
         val manifest = backups.export(out)
         _state.value = DataState.Done("Exported", "Saved ${summary(manifest)}, and your settings.")
     }
