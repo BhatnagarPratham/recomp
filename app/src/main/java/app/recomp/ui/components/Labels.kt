@@ -5,7 +5,15 @@ import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.Mechanic
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SetType
+import app.recomp.domain.nutrition.Goal
+import app.recomp.domain.nutrition.Pace
+import app.recomp.domain.nutrition.Sex
+import app.recomp.domain.persona.ActivityLevel
+import app.recomp.domain.persona.Diet
 import app.recomp.domain.persona.Experience
+import app.recomp.domain.persona.FoodRegion
+import app.recomp.domain.persona.Units
+import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.training.Loads
 
@@ -46,6 +54,62 @@ object Labels {
         Experience.BEGINNER -> "Beginner"
         Experience.INTERMEDIATE -> "Intermediate"
         Experience.ADVANCED -> "Advanced"
+    }
+
+    /** "Under a year", for the lifting question and the experience chips. */
+    fun liftingAge(e: Experience) = when (e) {
+        Experience.BEGINNER -> "Under a year"
+        Experience.INTERMEDIATE -> "1 to 3 years"
+        Experience.ADVANCED -> "3 years or more"
+    }
+
+    fun goal(g: Goal) = when (g) {
+        Goal.FAT_LOSS -> "Lose fat"
+        Goal.RECOMP -> "Recomp"
+        Goal.MAINTAIN -> "Maintain"
+        Goal.LEAN_BULK -> "Lean bulk"
+    }
+
+    fun pace(p: Pace?) = when (p) {
+        Pace.GENTLE -> "Gentle"
+        Pace.STANDARD -> "Standard"
+        Pace.AGGRESSIVE -> "Aggressive"
+        null -> "Custom"
+    }
+
+    fun diet(d: Diet) = when (d) {
+        Diet.VEGAN -> "Vegan"
+        Diet.LACTO_VEGETARIAN -> "Lacto-vegetarian"
+        Diet.EGGETARIAN -> "Eggetarian"
+        Diet.PESCATARIAN -> "Pescatarian"
+        Diet.NON_VEGETARIAN -> "Non-vegetarian"
+    }
+
+    fun region(r: FoodRegion) = when (r) {
+        FoodRegion.INDIAN -> "Indian"
+        FoodRegion.INTERNATIONAL -> "International"
+    }
+
+    fun weightSource(w: WeightSource) = when (w) {
+        WeightSource.HOME_SCALE -> "Home scale"
+        WeightSource.SCAN -> "Body-composition scans"
+        WeightSource.GYM_SCALE -> "Gym scale"
+    }
+
+    fun units(u: Units) = when (u) {
+        Units.METRIC -> "kg and cm"
+        Units.IMPERIAL -> "lb and in"
+    }
+
+    fun activity(a: ActivityLevel) = when (a) {
+        ActivityLevel.SEDENTARY -> "Mostly sitting, little training"
+        ActivityLevel.MODERATE -> "Desk job plus 3–4 sessions a week"
+        ActivityLevel.ACTIVE -> "Active job or daily training"
+    }
+
+    fun sex(s: Sex) = when (s) {
+        Sex.MALE -> "Male"
+        Sex.FEMALE -> "Female"
     }
 
     fun setType(t: SetType) = when (t) {

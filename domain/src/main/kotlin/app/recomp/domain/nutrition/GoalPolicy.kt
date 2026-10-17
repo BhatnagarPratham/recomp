@@ -33,6 +33,18 @@ data class GoalPolicy(
     }
 
     companion object {
+        /** PRD §4.2's protein range per goal, for custom values under Advanced (GL-04). */
+        fun proteinRange(goal: Goal): ClosedFloatingPointRange<Double> = when (goal) {
+            Goal.FAT_LOSS -> 1.8..2.4
+            Goal.RECOMP -> 1.6..2.2
+            Goal.MAINTAIN -> 1.4..2.0
+            Goal.LEAN_BULK -> 1.6..2.2
+        }
+
+        /** Custom loss rates in % of body weight a week, and surpluses as a fraction; the caps still apply on top. */
+        val LOSS_RATE_RANGE = 0.1..1.5
+        val SURPLUS_RANGE = 0.01..0.15
+
         /** Pace table from TRD §5.3. Maintain has no pace, so [pace] is ignored for it. */
         fun defaultFor(goal: Goal, pace: Pace = Pace.STANDARD): GoalPolicy = when (goal) {
             Goal.FAT_LOSS -> GoalPolicy(goal, lossRatePctPerWeek = pace.pick(0.5, 0.75, 1.0), proteinGPerKg = 2.0)

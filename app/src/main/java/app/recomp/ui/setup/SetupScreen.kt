@@ -1,6 +1,5 @@
 package app.recomp.ui.setup
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,7 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -47,6 +45,7 @@ import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.DayChips
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.NumberEntryDialog
+import app.recomp.ui.components.OptionCard
 import app.recomp.ui.components.Stepper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -149,7 +148,7 @@ class SetupViewModel @Inject constructor(private val training: TrainingRepositor
     }
 }
 
-private fun SplitTemplate.description() = when (this) {
+internal fun SplitTemplate.description() = when (this) {
     SplitTemplate.PPL -> "Push, Pull and Legs in rotation. Good for 3 to 6 days a week."
     SplitTemplate.FULL_BODY_AB -> "Two full-body days, A and B, alternating. Good for 2 to 4 days a week."
     SplitTemplate.UPPER_LOWER -> "Upper and Lower days, alternating. Good for 4 days a week."
@@ -158,7 +157,7 @@ private fun SplitTemplate.description() = when (this) {
 
 /**
  * Training setup (PRD §7.1): split, experience and weekly plan, then the equipment walkthrough (PR-04).
- * M3's onboarding absorbs it; until then it's also reachable from the Train tab.
+ * Onboarding covers it the first time; this re-runs it from the Train tab or Settings → Training.
  */
 @Composable
 fun SetupScreen(onDone: () -> Unit, viewModel: SetupViewModel = hiltViewModel()) {
@@ -281,24 +280,7 @@ fun SetupScreen(onDone: () -> Unit, viewModel: SetupViewModel = hiltViewModel())
 }
 
 @Composable
-private fun OptionCard(title: String, body: String, selected: Boolean, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surfaceVariant,
-        ),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun ExtraEditor(extra: ExtraDraft, onChange: (ExtraDraft) -> Unit, onRemove: () -> Unit) {
+internal fun ExtraEditor(extra: ExtraDraft, onChange: (ExtraDraft) -> Unit, onRemove: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(value = extra.name, onValueChange = { onChange(extra.copy(name = it)) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -311,7 +293,7 @@ private fun ExtraEditor(extra: ExtraDraft, onChange: (ExtraDraft) -> Unit, onRem
 }
 
 @Composable
-private fun WalkthroughCard(
+internal fun WalkthroughCard(
     item: WalkthroughItem,
     chosenId: Long,
     increments: Map<Long, Int>,

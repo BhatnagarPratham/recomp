@@ -11,6 +11,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -20,6 +21,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import app.recomp.ui.AppNav
 import app.recomp.ui.MainViewModel
 import app.recomp.ui.ResumePrompt
@@ -28,7 +30,9 @@ import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
+import app.recomp.ui.onboarding.OnboardingScreen
 import app.recomp.ui.routines.RoutineScreen
+import app.recomp.ui.settings.SettingsScreen
 import app.recomp.ui.setup.SetupScreen
 import app.recomp.ui.today.TodayScreen
 import app.recomp.ui.train.TrainScreen
@@ -44,7 +48,12 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object TrainRoute
 
+@Serializable data object SettingsRoute
+
 @Serializable data object DevRoute
+
+/** Onboarding (PS-01); with [goalOnly], Settings → Goal runs the same goal flow (PRD §4.6). */
+@Serializable data class OnboardingRoute(val goalOnly: Boolean = false)
 
 @Serializable data object SetupRoute
 
@@ -65,7 +74,7 @@ private data class TopLevel(val label: String, val glyph: String, val route: Any
 private val topLevel = listOf(
     TopLevel("Today", "◉", TodayRoute),
     TopLevel("Train", "▤", TrainRoute),
-    TopLevel("Dev", "⚙", DevRoute),
+    TopLevel("Settings", "⚙", SettingsRoute),
 )
 
 @Composable
@@ -73,6 +82,10 @@ fun RecompNavHost(main: MainViewModel) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val prompt by main.prompt.collectAsStateWithLifecycle()
+    val onboarded by main.onboarded.collectAsStateWithLifecycle()
+    // Decided once: a changing start destination would rebuild the graph and drop the back stack.
+    val start: Any = remember(onboarded != null) { if (onboarded == false) OnboardingRoute() else TodayRoute }
+    if (onboarded == null) return
     val onTopLevel = topLevel.any { backStack?.destination?.hasRoute(it.route::class) == true }
 
     LaunchedEffect(Unit) {
@@ -108,12 +121,21 @@ fun RecompNavHost(main: MainViewModel) {
         },
     ) { padding ->
         // Consumed so screens with their own Scaffold or inset padding don't add the system bars twice.
-        NavHost(nav, startDestination = TodayRoute, modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
+        NavHost(nav, startDestination = start, modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
+            composable<OnboardingRoute> { entry ->
+                val goalOnly = entry.toRoute<OnboardingRoute>().goalOnly
+                OnboardingScreen(
+                    onDone = {
+                        if (goalOnly) nav.popBackStack()
+                        else nav.navigate(TodayRoute) { popUpTo<OnboardingRoute> { inclusive = true } }
+                    },
+                    onExit = { nav.popBackStack() },
+                )
+            }
             composable<TodayRoute> {
                 TodayScreen(
                     onOpenWorkout = nav::openWorkout,
                     onOpenSummary = { nav.navigate(SummaryRoute(it)) },
-                    onOpenSetup = { nav.navigate(SetupRoute) },
                 )
             }
             composable<TrainRoute> {
@@ -121,6 +143,13 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenRoutine = { nav.navigate(RoutineRoute(it)) },
                     onOpenLibrary = { nav.navigate(LibraryRoute) },
                     onOpenSetup = { nav.navigate(SetupRoute) },
+                )
+            }
+            composable<SettingsRoute> {
+                SettingsScreen(
+                    onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
+                    onOpenTraining = { nav.navigate(SetupRoute) },
+                    onOpenDev = { nav.navigate(DevRoute) },
                 )
             }
             composable<DevRoute> { DevScreen() }
@@ -139,14 +168,19 @@ fun RecompNavHost(main: MainViewModel) {
                     onFinished = { id ->
                         nav.navigate(SummaryRoute(id)) { popUpTo<TodayRoute>() }
                     },
-                    onDiscarded = { nav.popBackStack(TodayRoute, inclusive = false) },
+                    onDiscarded = { nav.backToHome() },
                 )
             }
-            composable<SummaryRoute> { SummaryScreen(onDone = { nav.popBackStack(TodayRoute, inclusive = false) }) }
+            composable<SummaryRoute> { SummaryScreen(onDone = { nav.backToHome() }) }
         }
     }
 
     prompt?.let { ResumeDialog(it, onResume = main::resume, onFinish = main::finish, onDiscard = main::discard, onDismiss = main::dismissPrompt) }
+}
+
+/** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */
+private fun NavHostController.backToHome() {
+    if (!popBackStack<TodayRoute>(inclusive = false)) popBackStack<OnboardingRoute>(inclusive = false)
 }
 
 private fun NavHostController.openWorkout(sessionId: Long) = navigate(WorkoutRoute(sessionId)) {
