@@ -123,7 +123,8 @@ food_log            id, log_date, meal_slot (a slot key, §6.4), food_id?, name,
                     source(MANUAL|SAVED_MEAL|QUICK_ADD|AI_TEXT|AI_PHOTO|LOCAL_PARSE|LABEL|BARCODE),
                     ai_request_id?, logged_at
                                           -- null carbs, fat or fibre = unknown (quick add); a copy keeps its source
-meal_draft          id, created_at, log_date, meal_slot, text, photo_path?, origin  -- AI-02: estimate later
+meal_draft          id, created_at, log_date, meal_slot, text, photo_path?, origin,
+                    reason?               -- AI-02: estimate later; reason = why it's a draft (a failure kind, §6.2)
 saved_meal          id, name, default_slot, use_count, last_used_at?, created_at
 saved_meal_item     id, saved_meal_id, position, food_id?, name, quantity, unit_label, grams?,
                     kcal, protein_g, carbs_g?, fat_g?, fiber_g?, origin
@@ -133,7 +134,8 @@ nutrition_target    id, effective_from (unique: one version per day), goal, kcal
                                           -- protein_g is the full target; the ramp (§5.3) is applied on read
 daily_activity      log_date (PK), steps?, steps_synced_at?, sleep_hours?   -- steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
-                    input_tokens, output_tokens, cost_usd, status, response_json   -- AI-03 spend + debugging
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                    status (§6.2), latency_ms, response_json?   -- AI-03 spend + debugging; tokens summed over every attempt
 ```
 
 **Seed data.** The ~80-exercise library and the split templates are JSON assets, parsed with kotlinx.serialization. Seeding runs on every launch and inserts only exercises whose `seed_key` is missing, so a fork can add exercises and existing installs pick them up. Each seed entry has a rep class (`COMPOUND | ISOLATION | HIGH_REP`, PRD §4.3) that sets its default rep range from the experience policy. Templates reference exercises by seed key and list the walkthrough's alternatives.
@@ -143,13 +145,14 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
 - `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
-- Later: usual scan slot, AI mode (`OFF|ON`), AI model, monthly AI cap and reminder times.
+- `ai_mode` (`OFF|ON`), `ai_model`, `ai_monthly_cap_usd` (absent = no cap) and `ai_notice_seen` (§6.2). The API key is not here: it lives encrypted in its own `secrets` DataStore file.
+- Later: usual scan slot and reminder times.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
 A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
-**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
@@ -464,12 +467,36 @@ main number, by goal:
 AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
 ```
 
-- **Gate first.** Every AI entry point checks `AiGate`. When the state isn't `READY`, the UI shows the non-AI path instead: search, saved meals, quick add, the local parser, or the manual form. AI buttons are hidden when the state is `OFF`.
-- **Failures.** Timeout is 20 s with one SDK retry. A timeout, a 429, a 5xx or a network error saves the input as a `meal_draft` and drops you into the non-AI path. Logging is never blocked.
-- **Drafts** show up on that day's view with an *Estimate now* button once AI is reachable again. They're never sent automatically.
-- **Spend.** `cost_usd` = usage tokens × a price table in code (updated by hand when prices change). The monthly sum is checked against the cap before every call.
+- **How the state is decided** (`AiGate.state` in `:domain`, first match wins): `ai_mode` off → `OFF`; no stored key → `NO_KEY`; this month's `cost_usd` sum at or above `ai_monthly_cap_usd` → `OVER_CAP`; no validated connection (the default network lacks `NET_CAPABILITY_INTERNET` or `NET_CAPABILITY_VALIDATED`) → `OFFLINE`; otherwise `READY`. "This month" is the local calendar month of `created_at`; `OVER_CAP` lifts on the 1st. `AiRepository.gate` is a Flow over the settings, the key store, the log and connectivity, so screens follow it live.
+- **Gate first.** Every AI entry point checks `AiGate`, and `AiRepository.estimate` checks it again just before sending, so nothing leaves the phone unless the state is `READY`. When it isn't, the UI shows the non-AI path instead: search, saved meals and quick add, with *Save draft* for the description (PRD §7.7, *Not ready*). AI buttons are hidden when the state is `OFF`.
+- **Failures.** Each attempt times out after 20 s, with one SDK retry (`maxRetries(1)`: the SDK retries timeouts, connection errors, 408, 409, 429 and 5xx, honouring `retry-after`), so the worst case is about 40 s. Every request is logged with its status. Any status but `OK` saves the input as a `meal_draft` with that status as its `reason` and drops you into the non-AI path. Logging is never blocked. *Cancel* only stops waiting: the request runs to completion in the background so its spend is still logged, and its result is discarded.
 
-**Uses and output schemas.** Every request uses structured outputs: `output_config.format` with a JSON schema written by hand (`JsonOutputFormat.Schema`). The reply is parsed with kotlinx.serialization. **Don't use the SDK's class-based `.outputConfig(SomeClass::class.java)`.** It derives the schema with `java.lang.reflect.AnnotatedType`, which Android doesn't have even at API 37, so it crashes on the phone (found in M0).
+  | Status | From | The app says |
+  |--------|------|--------------|
+  | `OK` | `end_turn` with at least one item that passes validation | — |
+  | `REFUSAL` | `stop_reason: refusal` on the final response (after any server-side fallback) | Claude declined to estimate this |
+  | `MAX_TOKENS` | `stop_reason: max_tokens` | The estimate was cut off |
+  | `INVALID` | Another stop reason, no text block, JSON that doesn't parse, or no item left after validation | Claude's reply couldn't be read |
+  | `AUTH` | `UnauthorizedException` (401), `PermissionDeniedException` (403) | Your API key was rejected |
+  | `BILLING` | HTTP 402 (`billing_error`) | Your Anthropic account is out of credit |
+  | `RATE_LIMIT` | `RateLimitException` (429), after the retry | Claude is busy right now |
+  | `SERVER` | `InternalServerException` (5xx, including 529 overloaded), after the retry | Claude is unavailable right now |
+  | `BAD_REQUEST` | Any other 4xx | Claude couldn't take this request |
+  | `TIMEOUT` | `AnthropicIoException` caused by an `InterruptedIOException`, after the retry | Claude didn't answer in time |
+  | `NETWORK` | Any other `AnthropicIoException` | Couldn't reach Claude |
+- **Drafts** show up in their meal on that day's Food tab, with *Estimate now* once the gate is `READY` again. They're never sent automatically. Saving an estimate made from a draft deletes the draft.
+- **Spend.** `cost_usd` = Σ over every attempt in `usage.iterations` (a declined attempt and its fallback both count; without iterations, the top-level `usage`) of input × input rate + output × output rate + cache writes × 1.25 × input rate + cache reads × cache-read rate, each attempt at its own model's rates. `AiPricing` in `:domain` holds the table, updated by hand when prices change; a model it doesn't know is priced at the table's highest rates, so the cap errs on the early side. The monthly sum is checked against the cap before every call; a request that crosses the cap still completes, and the next one is paused.
+
+  | Model ($ per MTok) | Input | Output | Cache read |
+  |--------------------|-------|--------|------------|
+  | `claude-opus-5-5` | 4.00 | 20.00 | 0.20 |
+  | `claude-sonnet-5-5` | 2.00 | 10.00 | 0.20 |
+  | `claude-haiku-5-5` (prompts up to 100K tokens, as all of ours are) | 0.10 | 0.50 | 0.01 (assumed 0.1× input) |
+  | `claude-opus-5`, `claude-opus-4-8` (refusal-fallback targets) | 5.00 | 25.00 | 0.50 |
+  | `claude-fable-5-1` | 10.00 | 50.00 | 0.25 |
+- **Refusal fallback.** Opus 5.5 and Sonnet 5.5 requests go to the beta Messages endpoint with `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a safety-classifier false positive is retried on the model Anthropic recommends, in the same round trip. Haiku 5.5 has no server-side fallback, so its requests don't send it. `ai_request_log.model` records the model that served the response.
+
+**Uses and output schemas.** Every request uses structured outputs: `output_config.format` with a JSON schema written by hand (`JsonOutputFormat.Schema`, or `BetaJsonOutputFormat.Schema` on the beta endpoint). The reply is parsed with kotlinx.serialization. **Don't use the SDK's class-based `.outputConfig(SomeClass::class.java)`.** It derives the schema with `java.lang.reflect.AnnotatedType`, which Android doesn't have even at API 37, so it crashes on the phone (found in M0).
 
 | Kind | Input | Output (abridged) |
 |------|-------|-------------------|
@@ -489,7 +516,9 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
 }
 ```
 
-**Model.** `claude-opus-5-5` with adaptive thinking (the model's default), configurable in settings.
+Every property is required, as structured outputs expect with `additionalProperties: false`; `clarifying_question` is `""` when there's none. `confidence` is an enum of `high`, `medium` and `low`. The meal schema is `MealSchema` in `data/ai`, and the reply is decoded with kotlinx.serialization, ignoring unknown keys.
+
+**Model.** `claude-opus-5-5` with adaptive thinking at effort `low` (decided 2026-10-18), configurable in settings (`ai_model`: Opus 5.5, Sonnet 5.5 or Haiku 5.5). Splitting a meal into items is an extraction task, and `low` keeps a typical estimate to a few seconds, well inside the 20 s timeout and PRD §10's 45 s describe-and-review target. Thinking can't be disabled on Opus 5.5, so no `thinking` field is sent; `max_tokens` is 8,000, room for the thinking and a long meal. The eval set (§8) decides whether the effort or the model should change.
 
 | | Opus 5.5 ($4 in / $20 out per MTok) | Haiku 5.5 ($0.10 / $0.50 per MTok) |
 |---|---|---|
@@ -501,28 +530,39 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 **Meal request details.**
 
-- **System prompt:**
-  - Role and Indian portion conventions.
-  - **Diet rule from the persona,** e.g. lacto-vegetarian: no meat, fish or egg, and assume the vegetarian version of ambiguous dishes ("biryani", "momos").
-  - **Region conventions from the persona:** Indian portions (phulka, katori) or international ones (cup, slice).
-  - **Origin handling:** *Ordered* means restaurant levels of oil, ghee and cream; *Home* means home-style cooking.
-  - Your calibrated units (e.g. "my katori = 180 ml").
-  - Your top ~30 custom foods with their macros.
+- **System prompt** (`MealPrompt.system` in `:domain`; PS-03: built only from the persona and your own food data, with per-value text tables and no other branching):
+  - Role: split one meal into items with grams, macros, a confidence and the assumptions made; ask a clarifying question only when one answer would move the total a lot.
+  - **Diet rule from the persona:**
 
-  The prompt is stable between calls, so cache it if it exceeds the model's minimum cacheable length.
+    | Diet | Rule |
+    |------|------|
+    | Vegan | No meat, fish, egg, dairy (milk, curd, paneer, ghee, butter, cream) or honey; assume the vegan version of ambiguous dishes |
+    | Lacto-vegetarian | No meat, fish or egg; dairy is fine; assume the vegetarian version of ambiguous dishes ("biryani", "momos") |
+    | Eggetarian | No meat or fish; egg and dairy are fine; assume the vegetarian version unless egg is named |
+    | Pescatarian | No meat; fish, seafood, egg and dairy are fine; assume the vegetarian version unless fish or seafood is named |
+    | Non-vegetarian | Anything; take dishes as named, and say in the assumptions which version an ambiguous one was taken as |
+
+    A dish named outright that the diet excludes is estimated as named, with a note in its assumptions, never silently swapped.
+  - **Region conventions from the persona:** Indian household portions (phulka, roti, katori, glass, piece, plate) and home-style Indian cooking, or international ones (cup, slice, piece, tbsp).
+  - **Origin handling** for all three tags, so the prompt stays the same whichever applies: *Home* is home-style cooking with moderate oil; *Ordered* is restaurant or delivery food with restaurant levels of oil, ghee, butter and cream and restaurant portions; *Packaged* uses typical label values.
+  - Your household measures at your calibrated weights (`portion_sizes` over the region's defaults, e.g. "katori = 180 g").
+  - Your top 30 own foods (custom and AI-learned, unarchived, allowed by the diet and region, by use count, then last used), each with its values per 100 g and its own units.
+
+  The system prompt is the same between calls until your foods or settings change, so it carries `cache_control` (5-minute TTL). Below the model's minimum cacheable length (512 tokens on Opus 5.5) it simply isn't cached; a re-estimate after a clarifying question, within 5 minutes, reads it from cache.
+- **User message:** which origin applies, the description, and, for a re-estimate, the question asked and your answer. Each estimate is a fresh single-turn request, so there's no history to keep byte-identical (preserved thinking never applies).
 - **Photos** are downscaled to about 1500 px on the long edge as JPEG before sending.
-- **Client-side validation:**
-  - Recompute totals from the items.
-  - Flag any item whose kcal is more than 15% away from `4P + 4C + 9F`.
-  - Reject items with non-positive grams.
-  - Check `stop_reason` (`refusal`, `max_tokens`) before reading content, and enable the API's server-side refusal fallback (`fallbacks`).
-  - Handle errors with the SDK's typed exceptions.
-- **Learning loop.** If you edit an AI item and save it, it becomes a `food(source = AI)`. It then appears in search, in the local parser and in future prompts, so repeat dishes converge on your numbers.
-- **Privacy.** Only the meal text or photo, label or InBody photo, and your diet are sent. No name or account details. The first use shows a one-time notice.
+- **Client-side validation** (`MealCheck` in `:domain`):
+  - Items with non-positive grams, or a negative or non-finite number, are rejected and named in a note. No item left is `INVALID`.
+  - An item is flagged when its kcal is more than 15% away from `4P + 4C + 9F`, ignoring differences under 10 kcal so small garnishes don't flag.
+  - Totals are recomputed from the kept items; nothing from the model is summed as given.
+  - `stop_reason` (`refusal`, `max_tokens`) is checked before content is read; errors are handled with the SDK's typed exceptions (table above); the server-side refusal fallback is on (above).
+- **Saving.** One `food_log` row per item in one transaction, `source = AI_TEXT`, with `ai_request_id` and the meal's origin. *Save + My meals* then saves those rows as a saved meal (NU-13).
+- **Learning loop.** An item whose name, grams or numbers you changed before saving becomes a `food(source = AI)`: values per 100 g from your item, the persona's own-food diet tag (`Diet.ownFoodTag`), no region, and its unit (unless grams) as a calibrated `food_unit` at grams ÷ quantity. An unarchived AI food with the same name (ignoring case) is updated instead of duplicated. The log row links to the food, so it's counted in use counts and appears in search, in future prompts and later in the local parser; repeat dishes converge on your numbers. Unedited items are logged with no food, from their snapshot.
+- **Privacy.** Sent: the meal text and origin (or a photo, label or InBody image in P1), your diet and region rules, your household measures, and your top 30 own foods (names, values and units). Never sent: your name, body data, targets or log history. The first estimate shows a one-time notice (`ai_notice_seen`).
 - **API key storage:**
-  - Entered once in Settings.
-  - Encrypted with a Keystore-backed key through Tink and stored in DataStore.
-  - Never logged, and excluded from backups.
+  - Entered once in Settings → AI.
+  - Encrypted with Tink AEAD (AES-256-GCM, associated data naming the key) whose keyset is wrapped by an Android Keystore master key (`AndroidKeysetManager`; the keyset lives in its own shared-preferences file). The ciphertext is stored in the `secrets` DataStore, apart from the settings, so a settings export can never include it.
+  - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer by `data_extraction_rules.xml` (the `secrets` DataStore and the keyset file). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
   - Each person enters their own key into their own install, so no key ever ships inside an APK. A build distributed with a shared key would need a proxy, because a key inside an APK can be extracted.
 
 **Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
@@ -588,10 +628,10 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 ### 6.5 Backup and restore (DA-01, DA-02)
 
-- **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Written through the system "create document" picker, so Google Drive works as a target.
+- **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Every table includes M3c's `meal_draft` and `ai_request_log`; the `secrets` DataStore is never read. Written through the system "create document" picker, so Google Drive works as a target.
 - **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
 - **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
-- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded.
+- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`: the `secrets` DataStore and Tink's keyset file, for cloud backup and device transfer).
 - **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
 
 ### 6.6 Notifications
@@ -622,7 +662,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 |-------|------|-----|
 | Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
 | Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), onboarding and Settings saves (target versions, overrides, same-day replace), the `training` → `persona` DataStore migration, migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds), food search ranking and FTS sync, food logging, saved meals, copy, and Today's intake. The INDB converter and diet tags are domain tests over a synthetic workbook, so no test needs the real file. | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
-| AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit. The eval runs manually before changing the model or prompt. |
+| AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. The Claude client's request shape, error mapping, retry and timeout against a local mock server. Prompt building, schema parsing, validation, pricing, drafts, saving and the learning loop. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit; OkHttp's `MockWebServer` for the SDK client. The eval runs manually before changing the model or prompt. |
 | UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
 | Manual | A gym dogfood checklist before each release | |
 
@@ -700,6 +740,7 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Settings → Food | ✅ Meals, portion sizes and the food data note. |
 | Not run on the phone | Copy from another day (the phone had no earlier day with food) and the 7-day average with food; the repository tests cover both. The test entries and saved meal were deleted afterwards, and the test food hidden. |
 
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
@@ -716,7 +757,7 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 
 ## 12. Open technical decisions
 
-1. **Model for text logging:** Opus 5.5 (default) or Haiku 5.5. Decide on latency with the eval set; cost matters only on pay-as-you-go. *(AI access is settled: an API key funded by those credits.)*
+1. **Model for text logging:** Opus 5.5 (default) or Haiku 5.5. Decide on latency with the eval set; cost matters only on pay-as-you-go. *(AI access is settled: an API key funded by those credits.)* M3c ships Opus 5.5 at effort `low`, and `ai_request_log.latency_ms` records each request's time for the comparison.
 2. ~~**Exercise seed data**~~ *Settled in M1:* 81 hand-written entries in `assets/seed/exercises.json`, so there's no third-party licence to track.
 3. ~~**Indian food database**~~ *Settled in M3b:* INDB, fetched at build time with diet tags from ingredient codes (§6.4). Open: ask the authors about bundling, and whether a fried-recipe correction exists.
 4. **Package name and app name:** "Recomp" is a placeholder.

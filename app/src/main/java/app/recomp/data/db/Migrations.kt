@@ -157,4 +157,23 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_saved_meal_item_food_id` ON `saved_meal_item` (`food_id`)")
         }
     }
+
+    /** M3c, AI logging: drafts to estimate later (AI-02) and the request log behind spend and the cap (AI-03). SQL from schemas/6.json. */
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `meal_draft` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `created_at` INTEGER NOT NULL, " +
+                    "`log_date` TEXT NOT NULL, `meal_slot` TEXT NOT NULL, `text` TEXT NOT NULL, `photo_path` TEXT, `origin` TEXT NOT NULL, `reason` TEXT)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_meal_draft_log_date` ON `meal_draft` (`log_date`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `ai_request_log` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `created_at` INTEGER NOT NULL, " +
+                    "`kind` TEXT NOT NULL, `model` TEXT NOT NULL, `input_tokens` INTEGER NOT NULL, `output_tokens` INTEGER NOT NULL, " +
+                    "`cache_read_tokens` INTEGER NOT NULL, `cache_write_tokens` INTEGER NOT NULL, `cost_usd` REAL NOT NULL, `status` TEXT NOT NULL, " +
+                    "`latency_ms` INTEGER NOT NULL, `response_json` TEXT)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_request_log_created_at` ON `ai_request_log` (`created_at`)")
+        }
+    }
 }

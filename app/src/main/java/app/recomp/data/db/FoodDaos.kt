@@ -53,6 +53,22 @@ interface FoodDao {
     )
     suspend fun basics(diets: List<String>, region: String, limit: Int): List<FoodEntity>
 
+    /**
+     * Your own foods for Describe it's prompt (TRD §6.2): custom and AI-learned, unarchived, allowed by the diet
+     * and region, most used first.
+     */
+    @Query(
+        """
+        SELECT * FROM food WHERE archived = 0 AND source IN ('CUSTOM', 'AI') AND diet IN (:diets) AND (region IS NULL OR region = :region)
+        ORDER BY use_count DESC, last_used_at DESC, created_at DESC LIMIT :limit
+        """,
+    )
+    suspend fun ownFoods(diets: List<String>, region: String, limit: Int): List<FoodEntity>
+
+    /** The learning loop's match: an unarchived AI-learned food of this name, ignoring case. */
+    @Query("SELECT * FROM food WHERE source = 'AI' AND archived = 0 AND name = :name COLLATE NOCASE ORDER BY id LIMIT 1")
+    suspend fun aiFoodNamed(name: String): FoodEntity?
+
     @Query("SELECT * FROM food WHERE id = :id")
     suspend fun get(id: Long): FoodEntity?
 

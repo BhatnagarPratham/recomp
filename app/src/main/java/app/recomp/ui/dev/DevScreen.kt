@@ -13,16 +13,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -30,7 +25,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * M0 spikes (TRD §10): each card answers one feasibility question on the real phone. Spike (b), the
- * lock-screen rest timer, became the real workout service in M1.
+ * lock-screen rest timer, became the real workout service in M1, and spike (a), Claude on Android, became
+ * Describe it in M3c.
  */
 @Composable
 fun DevScreen(viewModel: DevViewModel = hiltViewModel()) {
@@ -39,7 +35,6 @@ fun DevScreen(viewModel: DevViewModel = hiltViewModel()) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("M0 spikes", style = MaterialTheme.typography.headlineSmall)
-        AiSpikeCard(viewModel)
         HealthConnectSpikeCard(viewModel)
     }
 }
@@ -51,47 +46,6 @@ private fun SpikeCard(title: String, subtitle: String, content: @Composable () -
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             content()
-        }
-    }
-}
-
-@Composable
-private fun AiSpikeCard(viewModel: DevViewModel) {
-    val state by viewModel.ai.collectAsStateWithLifecycle()
-    var apiKey by remember { mutableStateOf("") }
-    var meal by remember { mutableStateOf("2 phulka, 1 katori rajma, cucumber salad, 1 glass chaas") }
-
-    SpikeCard("(a) Claude on Android", "Anthropic Java SDK + structured output. The key stays in memory only.") {
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("API key") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(value = meal, onValueChange = { meal = it }, label = { Text("Meal") }, modifier = Modifier.fillMaxWidth())
-        Button(
-            onClick = { viewModel.runAiSpike(apiKey, meal) },
-            enabled = apiKey.isNotBlank() && meal.isNotBlank() && state !is AiSpikeState.Running,
-        ) { Text(if (state is AiSpikeState.Running) "Estimating…" else "Estimate") }
-
-        when (val s = state) {
-            AiSpikeState.Idle, AiSpikeState.Running -> Unit
-            is AiSpikeState.Failed -> Text(s.error, color = MaterialTheme.colorScheme.error)
-            is AiSpikeState.Done -> {
-                val r = s.result
-                Text("${r.latencyMs} ms · ${r.inputTokens} in / ${r.outputTokens} out · stop: ${r.stopReason}")
-                val items = r.estimate?.items.orEmpty()
-                if (items.isEmpty()) Text("No structured items returned", color = MaterialTheme.colorScheme.error)
-                items.forEach {
-                    Text("• ${it.name}: ${it.quantity} ${it.unit} (${it.grams.toInt()} g) · ${it.kcal.toInt()} kcal · P ${it.proteinG} g · ${it.confidence}")
-                }
-                if (items.isNotEmpty()) {
-                    Text("Total: ${items.sumOf { it.kcal }.toInt()} kcal · ${"%.1f".format(items.sumOf { it.proteinG })} g protein")
-                }
-                r.estimate?.clarifyingQuestion?.takeIf { it.isNotBlank() }?.let { Text("Q: $it") }
-            }
         }
     }
 }

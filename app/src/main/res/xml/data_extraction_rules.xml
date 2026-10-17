@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android Auto Backup and device-to-device transfer (TRD §6.2, §6.5). The encrypted Claude API key and the
+  Tink keyset that wraps it never leave the phone: the keyset is bound to this phone's Android Keystore, so a
+  restored copy couldn't be decrypted anyway, and the key must never reach a backup.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/secrets.preferences_pb" />
+        <exclude domain="sharedpref" path="recomp_ai_keyset.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/secrets.preferences_pb" />
+        <exclude domain="sharedpref" path="recomp_ai_keyset.xml" />
+    </device-transfer>
+</data-extraction-rules>

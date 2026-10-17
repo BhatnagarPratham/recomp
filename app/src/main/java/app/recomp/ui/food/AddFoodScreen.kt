@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,8 @@ import androidx.navigation.toRoute
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.SavedMealWithItems
 import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.repo.AiGateView
+import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.CustomFood
 import app.recomp.data.repo.FoodFilter
 import app.recomp.data.repo.FoodHit
@@ -65,6 +68,7 @@ import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.MenuItem
 import app.recomp.ui.components.OverflowMenu
 import app.recomp.ui.components.TextEntryDialog
+import app.recomp.domain.ai.AiState
 import app.recomp.ui.navigation.AddFoodRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
@@ -90,6 +94,7 @@ class AddFoodViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val foods: FoodRepository,
     private val log: FoodLogRepository,
+    ai: AiRepository,
     days: DayBoundary,
 ) : ViewModel() {
     private val route = savedState.toRoute<AddFoodRoute>()
@@ -126,7 +131,11 @@ class AddFoodViewModel @Inject constructor(
 
     val household: StateFlow<Map<String, Double>> = foods.household.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    private fun refresh() {
+    /** Describe it shows unless AI is off (AI-01); when AI isn't ready its screen keeps a draft instead (AI-02). */
+    val gate: StateFlow<AiGateView?> = ai.gate.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+
+    fun refresh() {
         version.value++
     }
 
@@ -180,7 +189,13 @@ private data class FoodForm(val id: Long?, val initial: CustomFood?, val name: S
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewModel()) {
+fun AddFoodScreen(
+    onDone: () -> Unit,
+    onDescribe: (LocalDate, String) -> Unit,
+    describeOutcome: DescribeOutcome?,
+    onDescribeOutcomeShown: () -> Unit,
+    viewModel: AddFoodViewModel = hiltViewModel(),
+) {
     val query by viewModel.query.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
     val savedMeals by viewModel.savedMeals.collectAsStateWithLifecycle()
@@ -189,6 +204,7 @@ fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewMode
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val household by viewModel.household.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
+    val gate by viewModel.gate.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var logging by remember { mutableStateOf<Logging?>(null) }
@@ -201,6 +217,16 @@ fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewMode
     fun undoable(message: String, undo: suspend () -> Unit) = scope.launch {
         snackbar.currentSnackbarData?.dismiss()
         if (snackbar.showSnackbar(message, actionLabel = "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) undo()
+    }
+
+    // What Describe it said when it came back: the saved estimate (with Undo), or why it became a draft.
+    LaunchedEffect(describeOutcome) {
+        val outcome = describeOutcome ?: return@LaunchedEffect
+        onDescribeOutcomeShown()
+        viewModel.refresh()
+        // In the screen's scope: clearing the outcome restarts this effect, which mustn't cancel the snackbar.
+        if (outcome.undoIds.isEmpty()) scope.launch { snackbar.showSnackbar(outcome.message, duration = SnackbarDuration.Long) }
+        else undoable(outcome.message) { viewModel.undo(outcome.undoIds) }
     }
 
     fun open(foodId: Long) = scope.launch {
@@ -247,6 +273,13 @@ fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewMode
                 )
             }
             item {
+                val state = gate?.state
+                if (state != null && state != AiState.OFF) {
+                    FilledTonalButton(
+                        onClick = { onDescribe(viewModel.date, viewModel.slot) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(top = 4.dp),
+                    ) { Text(if (state == AiState.READY) "Describe it" else "Describe it · keep a draft") }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                     OutlinedButton(onClick = { quickAdding = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Quick add") }
                     OutlinedButton(
@@ -254,7 +287,6 @@ fun AddFoodScreen(onDone: () -> Unit, viewModel: AddFoodViewModel = hiltViewMode
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     ) { Text("New food") }
                 }
-                // TODO(M3c): "Describe it" (NU-17) joins this screen when AiGate is READY; with AI off it stays hidden (AI-01).
             }
 
             val words = query.trim().lowercase()

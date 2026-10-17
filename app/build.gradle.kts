@@ -204,9 +204,11 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.health.connect)
     implementation(libs.anthropic.java)
+    implementation(libs.tink.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

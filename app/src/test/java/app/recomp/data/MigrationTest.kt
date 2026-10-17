@@ -3,12 +3,16 @@ package app.recomp.data
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import app.recomp.data.db.AiRequestLogEntity
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
+import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.TargetReason
+import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.FoodSource
 import app.recomp.domain.food.LogSource
@@ -17,6 +21,7 @@ import app.recomp.domain.model.Equipment
 import app.recomp.domain.nutrition.Goal
 import java.io.File
 import java.time.LocalDate
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -204,6 +209,50 @@ class MigrationTest {
                 ),
             )
             assertEquals(140.0, log.day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
+        }
+        room.close()
+    }
+
+    @Test
+    fun `5 to 6 keeps food logs and saved meals and adds drafts and the AI request log`() {
+        val file = File(tmp.root, "v5.db")
+        createAt(5, file).use { db ->
+            db.execSQL(
+                "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, archived, created_at) " +
+                    "VALUES (1, 'Rajma', 'CUSTOM', 'VEGAN', 140, 8, 20, 3, 6, 2, 0, 1)",
+            )
+            db.execSQL(
+                "INSERT INTO food_log (log_date, meal_slot, food_id, name, quantity, unit_label, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, origin, source, logged_at) " +
+                    "VALUES ('2026-10-18', 'lunch', 1, 'Rajma', 1, 'katori', 150, 210, 12, 30, 4.5, 9, 'HOME', 'MANUAL', 5)",
+            )
+            db.execSQL("INSERT INTO saved_meal (id, name, default_slot, use_count, created_at) VALUES (1, 'Usual lunch', 'lunch', 1, 1)")
+            db.execSQL(
+                "INSERT INTO saved_meal_item (saved_meal_id, position, food_id, name, quantity, unit_label, grams, kcal, protein_g, origin) " +
+                    "VALUES (1, 0, 1, 'Rajma', 1, 'katori', 150, 210, 12, 'HOME')",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val day = LocalDate.of(2026, 10, 18)
+            assertEquals(210.0, room.foodLogDao().day(day).single().kcal, 0.0)
+            assertEquals("Rajma", room.savedMealDao().get(1)!!.items.single().name)
+            assertEquals(listOf("Rajma"), room.foodDao().search("raj*", "raj", listOf("VEGAN"), "INDIAN", 10).map { it.name })
+
+            val ai = room.aiDao()
+            assertEquals(emptyList<MealDraftEntity>(), ai.observeDrafts(day).first())
+            val draftId = ai.insertDraft(MealDraftEntity(createdAt = 1, logDate = day, mealSlot = "dinner", text = "paneer wrap", origin = Origin.ORDERED, reason = AiStatus.TIMEOUT))
+            assertEquals(AiStatus.TIMEOUT, ai.draft(draftId)!!.reason)
+            assertNull(ai.draft(draftId)!!.photoPath)
+
+            ai.insertRequest(
+                AiRequestLogEntity(
+                    createdAt = 10, kind = AiKind.MEAL_TEXT, model = "claude-opus-5-5", inputTokens = 2_000, outputTokens = 1_000,
+                    cacheReadTokens = 0, cacheWriteTokens = 0, costUsd = 0.028, status = AiStatus.OK, latencyMs = 4_000, responseJson = "{}",
+                ),
+            )
+            assertEquals(0.028, ai.spendSince(0), 1e-12)
+            assertEquals(0.0, ai.spendSince(11), 0.0)
+            assertEquals(1, ai.observeSpend(0).first().requests)
         }
         room.close()
     }
