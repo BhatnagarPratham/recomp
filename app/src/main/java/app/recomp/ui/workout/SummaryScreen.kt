@@ -25,9 +25,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import app.recomp.data.db.PersonalRecordEntity
+import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.data.repo.toLogged
+import app.recomp.domain.model.SetType
+import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.PrType
+import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.Loads
+import app.recomp.ui.components.Labels
 import app.recomp.domain.training.SessionStats
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.navigation.SummaryRoute
@@ -43,7 +50,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class SummaryExercise(val name: String, val sets: String)
+/** [target] grades the frozen target (WL-08): "Target 45 × 12/12/10 · hit". */
+data class SummaryExercise(val name: String, val sets: String, val target: String? = null, val hit: Boolean = false)
 
 data class SummaryUi(
     val title: String = "",
@@ -53,31 +61,46 @@ data class SummaryUi(
     val notes: String? = null,
     val canSaveToRoutine: Boolean = false,
     val routineName: String? = null,
+    val records: List<String> = emptyList(),
+    val nextTime: List<String> = emptyList(),
 )
 
 @HiltViewModel
 class SummaryViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val workouts: WorkoutRepository,
+    private val progression: ProgressionRepository,
 ) : ViewModel() {
     private val sessionId = savedState.toRoute<SummaryRoute>().sessionId
     private val routineName = MutableStateFlow<String?>(null)
     private val differs = MutableStateFlow(false)
+    private val nextTime = MutableStateFlow<List<String>>(emptyList())
 
     init {
         viewModelScope.launch {
             val session = workouts.observeSession(sessionId).first()
             routineName.value = session?.routineId?.let { workouts.routine(it)?.name }
             differs.value = workouts.differsFromTemplate(sessionId)
+            // What changes next time: the engine's next target, now that this session is history.
+            nextTime.value = workouts.observeSessionExercises(sessionId).first()
+                .filter { ex -> ex.sets.any { it.completedAt != null } }
+                .map { ex ->
+                    val rec = progression.recommend(ex.exercise, ex.entry.targetSets, ex.entry.repMin, ex.entry.repMax)
+                    val top = ex.sets.filter { it.completedAt != null && it.setType == SetType.WORKING }.maxOfOrNull { it.loadG ?: 0 }
+                    rec to Targets.nextTime(ex.exercise.name, rec, top)
+                }
+                .sortedBy { (rec, _) -> if (rec.action == Action.INCREASE) 0 else 1 }
+                .map { it.second }
         }
     }
 
     val ui: StateFlow<SummaryUi> = combine(
         workouts.observeSession(sessionId),
         workouts.observeSessionExercises(sessionId),
-        routineName,
-        differs,
-    ) { session, exercises, routine, differs ->
+        combine(routineName, differs, ::Pair),
+        progression.observeSessionRecords(sessionId),
+        nextTime,
+    ) { session, exercises, (routine, differs), records, nextTime ->
         if (session == null) return@combine SummaryUi()
         val sets = exercises.flatMap { ex -> ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() } }
         SummaryUi(
@@ -86,11 +109,23 @@ class SummaryViewModel @Inject constructor(
             stats = SessionStats.of(session.startedAt, session.endedAt ?: session.startedAt, sets),
             exercises = exercises.map { ex ->
                 val done = ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() }
-                SummaryExercise(ex.exercise.name, if (done.isEmpty()) "Skipped" else Loads.describe(done).ifEmpty { "Warm-ups only" })
+                val rec = ProgressionRepository.decode(ex.entry.recommendationJson)?.takeIf { it.action != Action.BASELINE }
+                val hit = rec != null && done.isNotEmpty() && Targets.hit(rec, done)
+                SummaryExercise(
+                    name = ex.exercise.name,
+                    sets = if (done.isEmpty()) "Skipped" else Loads.describe(done).ifEmpty { "Warm-ups only" },
+                    target = rec?.takeIf { done.isNotEmpty() }?.let { "Target ${Targets.describe(it)} · ${if (hit) "hit" else "missed"}" },
+                    hit = hit,
+                )
             },
             notes = session.notes,
             canSaveToRoutine = differs,
             routineName = routine,
+            records = records.map { pr ->
+                val name = exercises.firstOrNull { it.exercise.id == pr.exerciseId }?.exercise?.name ?: "Exercise"
+                "$name: ${Labels.record(pr.type)}, ${recordValue(pr)}"
+            },
+            nextTime = nextTime,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SummaryUi())
 
@@ -100,10 +135,7 @@ class SummaryViewModel @Inject constructor(
     }
 }
 
-/**
- * Workout summary (WL-08). TODO(M2): PRs, targets hit or missed, and what changes next time
- * ("Lat pulldown goes to 50 kg") from the progression engine.
- */
+/** Workout summary (WL-08): totals, PRs, targets hit or missed, and what changes next time. */
 @Composable
 fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewModel()) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -122,11 +154,24 @@ fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewMode
                 Stat("Volume", "${(stats.volumeG + 500) / 1000} kg", Modifier.weight(1.4f))
             }
         }
+        if (ui.records.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("New PRs", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    ui.records.forEach { Text(it) }
+                }
+            }
+        }
         ui.exercises.forEach { ex ->
             Column {
                 Text(ex.name, style = MaterialTheme.typography.titleMedium)
                 Text(ex.sets, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ex.target?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (ex.hit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
             }
+        }
+        if (ui.nextTime.isNotEmpty()) {
+            Text("Next time", style = MaterialTheme.typography.titleMedium)
+            ui.nextTime.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
         }
         ui.notes?.let { Text("Notes: $it", style = MaterialTheme.typography.bodyMedium) }
         if (ui.canSaveToRoutine && ui.routineName != null) {
@@ -136,6 +181,13 @@ fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewMode
         }
         Button(onClick = onDone, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Done") }
     }
+}
+
+private fun recordValue(pr: PersonalRecordEntity): String = when (pr.type) {
+    PrType.MAX_LOAD -> "${Loads.formatKg(pr.value.toInt())} kg"
+    PrType.REPS_AT_LOAD -> "${pr.value} reps" + (pr.loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: "")
+    PrType.E1RM -> "about ${(pr.value + 500) / 1000} kg"
+    PrType.SESSION_VOLUME -> "${(pr.value + 500) / 1000} kg"
 }
 
 @Composable

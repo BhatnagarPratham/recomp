@@ -6,6 +6,7 @@ import app.recomp.domain.model.Mechanic
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SetType
 import app.recomp.domain.persona.Experience
+import app.recomp.domain.progression.PrType
 import app.recomp.domain.training.Loads
 
 /** User-facing names for the domain vocabulary. */
@@ -52,6 +53,13 @@ object Labels {
         SetType.WORKING -> "Working"
         SetType.DROP -> "Drop"
         SetType.FAILURE -> "Failure"
+    }
+
+    fun record(t: PrType) = when (t) {
+        PrType.MAX_LOAD -> "heaviest weight"
+        PrType.REPS_AT_LOAD -> "most reps at a weight"
+        PrType.E1RM -> "best estimated 1RM"
+        PrType.SESSION_VOLUME -> "best session volume"
     }
 
     /** "2.5 kg". */

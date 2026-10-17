@@ -6,12 +6,17 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import app.recomp.data.db.ExerciseEntity
 import app.recomp.data.db.SessionExerciseWithSets
+import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
+import app.recomp.data.repo.toLogged
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
+import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.Recommendation
+import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.DraftSet
 import app.recomp.domain.training.Loads
 import app.recomp.domain.training.LoggedSet
@@ -45,6 +50,8 @@ data class SetUi(
     val enteredReps: Int?,
     val rir: Int?,
     val done: Boolean,
+    /** Live feedback on a ticked working set that met its target (PO-03), e.g. "+1 rep". */
+    val feedback: String? = null,
 )
 
 data class ExerciseUi(
@@ -62,8 +69,16 @@ data class ExerciseUi(
     val notes: String?,
     /** "45 × 12/11/10" from the last completed session, or null the first time. */
     val last: String?,
+    /** Today's frozen target (PO-02); null only for sessions started before M2. */
+    val target: Recommendation?,
     val sets: List<SetUi>,
 ) {
+    /** "45 × 12/12/10 · add reps", or null for a baseline. */
+    val targetText: String? get() = target?.takeIf { it.action != Action.BASELINE }?.let { "${Targets.describe(it)} · ${Targets.actionLabel(it)}" }
+
+    /** The stall card shows until the exercise's first set is ticked (PO-05). */
+    val showStall: Boolean get() = target?.stalled == true && canSwap
+
     val logsLoad: Boolean get() = Loads.logsLoad(loadType)
     val canSwap: Boolean get() = sets.none { it.done }
 }
@@ -101,6 +116,7 @@ class WorkoutViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val workouts: WorkoutRepository,
     private val training: TrainingRepository,
+    private val progression: ProgressionRepository,
     private val restTimer: RestTimer,
 ) : ViewModel() {
     val sessionId = savedState.toRoute<WorkoutRoute>().sessionId
@@ -108,13 +124,15 @@ class WorkoutViewModel @Inject constructor(
     private val history = MutableStateFlow<Map<Long, List<LoggedSet>>>(emptyMap())
     private val requestedSelection = MutableStateFlow<Long?>(null)
     private val title = MutableStateFlow("")
+    private var routineId: Long? = null
 
     val library: StateFlow<List<ExerciseEntity>> =
         training.observeLibrary().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         viewModelScope.launch {
-            title.value = workouts.observeSession(sessionId).first()?.routineId?.let { workouts.routine(it)?.name } ?: "Workout"
+            routineId = workouts.observeSession(sessionId).first()?.routineId
+            title.value = routineId?.let { workouts.routine(it)?.name } ?: "Workout"
         }
     }
 
@@ -152,11 +170,15 @@ class WorkoutViewModel @Inject constructor(
     private fun SessionExerciseWithSets.toUi(last: List<LoggedSet>?): ExerciseUi {
         val ordered = sets.sortedBy { it.setIndex }
         val logsLoad = Loads.logsLoad(exercise.loadType)
+        val target = ProgressionRepository.decode(entry.recommendationJson)
+        val plannedSets = target?.takeIf { it.action != Action.BASELINE }?.let(Targets::workingSets).orEmpty()
         val ghosts = Prefill.ghosts(
             ordered.map { DraftSet(it.setType, if (logsLoad) it.loadG else null, it.reps) },
             last.orEmpty(),
             defaultReps = entry.repMax,
+            target = plannedSets,
         )
+        val lastWorking = last.orEmpty().filter { it.type == SetType.WORKING }
         var working = 0
         return ExerciseUi(
             id = entry.id,
@@ -172,7 +194,9 @@ class WorkoutViewModel @Inject constructor(
             restSec = entry.restSec,
             notes = entry.notes,
             last = last?.let { Loads.describe(it) }?.ifEmpty { null },
+            target = target,
             sets = ordered.mapIndexed { i, set ->
+                val ordinal = if (set.setType == SetType.WORKING) working else -1
                 SetUi(
                     id = set.id,
                     label = when (set.setType) {
@@ -190,6 +214,11 @@ class WorkoutViewModel @Inject constructor(
                     enteredReps = set.reps,
                     rir = set.rir,
                     done = set.completedAt != null,
+                    feedback = if (set.completedAt != null && ordinal >= 0) {
+                        Targets.feedback(plannedSets.getOrNull(ordinal), set.toLogged(), lastWorking.getOrNull(ordinal))
+                    } else {
+                        null
+                    },
                 )
             },
         )
@@ -282,6 +311,18 @@ class WorkoutViewModel @Inject constructor(
     fun move(sessionExerciseId: Long, up: Boolean) = viewModelScope.launch { workouts.moveExercise(sessionId, sessionExerciseId, up) }
     fun setExerciseNotes(sessionExerciseId: Long, notes: String) = viewModelScope.launch { workouts.setExerciseNotes(sessionExerciseId, notes) }
     fun setSessionNotes(notes: String) = viewModelScope.launch { workouts.setSessionNotes(sessionId, notes) }
+
+    // Stall choices (PO-05)
+
+    fun deloadToday(sessionExerciseId: Long) = viewModelScope.launch { progression.deloadToday(sessionExerciseId) }
+
+    fun holdStall(sessionExerciseId: Long) = viewModelScope.launch { progression.holdStall(sessionExerciseId) }
+
+    /** *Swap* from the stall card changes today's workout and the routine. */
+    fun swapForStall(exercise: ExerciseUi, replacement: ExerciseEntity) = viewModelScope.launch {
+        workouts.swapExercise(exercise.id, replacement.id)
+        routineId?.let { training.swapInRoutine(it, exercise.exerciseId, replacement.id) }
+    }
 
     // Rest and settings
 

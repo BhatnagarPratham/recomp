@@ -37,6 +37,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
+import app.recomp.data.repo.PreviewLine
+import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutAlreadyActiveException
 import app.recomp.data.repo.WorkoutRepository
@@ -72,7 +74,7 @@ data class TodayUi(
     val setupDone: Boolean = false,
     val active: ActiveCard? = null,
     val next: RoutineEntity? = null,
-    val nextExercises: List<String> = emptyList(),
+    val nextExercises: List<PreviewLine> = emptyList(),
     val rotation: List<RoutineEntity> = emptyList(),
     val dueExtras: List<RoutineEntity> = emptyList(),
     val otherExtras: List<RoutineEntity> = emptyList(),
@@ -85,6 +87,7 @@ data class TodayUi(
 class TodayViewModel @Inject constructor(
     private val training: TrainingRepository,
     private val workouts: WorkoutRepository,
+    private val progression: ProgressionRepository,
 ) : ViewModel() {
     private val today = workouts.today()
 
@@ -99,9 +102,11 @@ class TodayViewModel @Inject constructor(
         }
     }
 
-    private val next: Flow<Pair<RoutineEntity?, List<String>>> = training.observeNextRoutine().flatMapLatest { routine ->
+    /** The next routine with each exercise's target (PRD §7.5), refreshed when the routine or history changes. */
+    private val next: Flow<Pair<RoutineEntity?, List<PreviewLine>>> = training.observeNextRoutine().flatMapLatest { routine ->
         if (routine == null) flowOf(null to emptyList())
-        else training.observeRoutineExercises(routine.id).map { rows -> routine to rows.map { it.exercise.name } }
+        else combine(training.observeRoutineExercises(routine.id), workouts.observeLatestStrength()) { _, _ -> routine }
+            .map { routine to progression.preview(it.id) }
     }
 
     private val last: Flow<LastCard?> = workouts.observeLatestStrength().map { session ->
@@ -221,8 +226,14 @@ fun TodayScreen(
                     val next = ui.next
                     if (next != null) {
                         Text("${next.name} is next", style = MaterialTheme.typography.titleLarge)
-                        if (ui.nextExercises.isNotEmpty()) {
-                            Text(ui.nextExercises.joinToString(" · "), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        ui.nextExercises.forEach { line ->
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(line.name, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    line.target + if (line.weightUp) " ↑" else "",
+                                    color = if (line.weightUp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         Button(onClick = { start(next.id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                             Text("Start ${next.name}", style = MaterialTheme.typography.titleMedium)

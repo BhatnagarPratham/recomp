@@ -9,7 +9,7 @@ Everything that varies between people lives in a configurable **persona**: goal,
 
 One user per install, offline-first, no backend, no accounts. AI meal logging is optional and uses your own Claude API key.
 
-> **Status:** early development. M0 (project setup and feasibility checks on a real phone) and M1 (training core: exercise library, split templates, rotation, the active workout with a lock-screen rest timer, summary and extra-session logging) are done. See the milestones in the TRD.
+> **Status:** early development. M0 (project setup and feasibility checks on a real phone) M1 (training core: exercise library, split templates, rotation, the active workout with a lock-screen rest timer, summary and extra-session logging) and M2 (progression: targets for every exercise, live feedback, PRs, stall detection and exercise history) are done. See the milestones in the TRD.
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 

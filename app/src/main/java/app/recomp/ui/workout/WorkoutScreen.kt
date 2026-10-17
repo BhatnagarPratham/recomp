@@ -82,8 +82,8 @@ private sealed interface Dialog {
     data class Remove(val exercise: ExerciseUi) : Dialog
     data class Weight(val setId: Long, val thenTick: Boolean) : Dialog
     data class Reps(val setId: Long) : Dialog
-    /** Exercise picker: add when [swapFor] is null, else swap that session exercise. */
-    data class Pick(val swapFor: ExerciseUi?) : Dialog
+    /** Exercise picker: add when [swapFor] is null, else swap that session exercise ([forStall]: and the routine). */
+    data class Pick(val swapFor: ExerciseUi?, val forStall: Boolean = false) : Dialog
 }
 
 /**
@@ -95,6 +95,7 @@ private sealed interface Dialog {
 fun WorkoutScreen(
     onBack: () -> Unit,
     onOpenExercise: (Long) -> Unit,
+    onOpenHistory: (Long) -> Unit,
     onFinished: (Long) -> Unit,
     onDiscarded: () -> Unit,
     viewModel: WorkoutViewModel = hiltViewModel(),
@@ -198,6 +199,10 @@ fun WorkoutScreen(
                     onMove = { up -> viewModel.move(exercise.id, up) },
                     onNotes = { dialog = Dialog.ExerciseNotes(exercise) },
                     onSettings = { onOpenExercise(exercise.exerciseId) },
+                    onHistory = { onOpenHistory(exercise.exerciseId) },
+                    onStallDeload = { viewModel.deloadToday(exercise.id) },
+                    onStallSwap = { dialog = Dialog.Pick(exercise, forStall = true) },
+                    onStallHold = { viewModel.holdStall(exercise.id) },
                     onRemove = { if (exercise.sets.any { it.done }) dialog = Dialog.Remove(exercise) else viewModel.remove(exercise.id) },
                 )
             }
@@ -276,7 +281,11 @@ fun WorkoutScreen(
             onDismiss = { dialog = null },
             onPick = { ex ->
                 dialog = null
-                if (d.swapFor != null) viewModel.swap(d.swapFor.id, ex) else viewModel.addExercise(ex)
+                when {
+                    d.swapFor == null -> viewModel.addExercise(ex)
+                    d.forStall -> viewModel.swapForStall(d.swapFor, ex)
+                    else -> viewModel.swap(d.swapFor.id, ex)
+                }
             },
             onCreate = { new ->
                 dialog = null
@@ -323,6 +332,10 @@ private fun ExerciseCard(
     onMove: (Boolean) -> Unit,
     onNotes: () -> Unit,
     onSettings: () -> Unit,
+    onHistory: () -> Unit,
+    onStallDeload: () -> Unit,
+    onStallSwap: () -> Unit,
+    onStallHold: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -343,17 +356,21 @@ private fun ExerciseCard(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.secondary,
                     )
-                    // TODO(M2): today's target from the progression engine goes here (PO-02, J1).
+                    exercise.targetText?.let {
+                        Text("Today: $it", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 OverflowMenu("More options for ${exercise.name}") { close ->
                     MenuItem("Swap exercise", enabled = exercise.canSwap) { close(); onSwap() }
                     MenuItem("Move up", enabled = !isFirst) { close(); onMove(true) }
                     MenuItem("Move down", enabled = !isLast) { close(); onMove(false) }
                     MenuItem(if (exercise.notes == null) "Add notes" else "Edit notes") { close(); onNotes() }
+                    MenuItem("History") { close(); onHistory() }
                     MenuItem("Exercise settings") { close(); onSettings() }
                     MenuItem("Remove from workout") { close(); onRemove() }
                 }
             }
+            if (exercise.showStall) StallCard(onStallDeload, onStallSwap, onStallHold)
             Spacer(Modifier.height(4.dp))
             exercise.sets.forEach { set ->
                 SetRow(exercise, set, selected = set.id == selectedSetId, onSelect = { onSelect(set.id) }, onTick = { onTick(set.id) },
@@ -409,12 +426,10 @@ private fun SetRow(
             style = MaterialTheme.typography.titleMedium,
             color = if (set.repsIsGhost && !set.done) ghostColor else MaterialTheme.colorScheme.onSurface,
         )
-        Text(
-            set.rir?.let { "RIR ${if (it >= 3) "3+" else it}" }.orEmpty(),
-            modifier = Modifier.weight(1f).padding(start = 8.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Column(Modifier.weight(1f).padding(start = 8.dp)) {
+            set.rir?.let { Text("RIR ${if (it >= 3) "3+" else it}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            set.feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
+        }
         val tickDescription = if (set.done) "Undo set ${set.label}" else "Log set ${set.label}"
         if (set.done) {
             Button(onClick = onTick, modifier = Modifier.size(48.dp).semantics { contentDescription = tickDescription }, contentPadding = PaddingValues(0.dp)) { Text("✓") }
@@ -575,5 +590,26 @@ private fun RestBanner(rest: RestState, onSkip: () -> Unit, onAdd: () -> Unit) {
         }
         OutlinedButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp)) { Text("+30 s") }
         OutlinedButton(onClick = onSkip, modifier = Modifier.heightIn(min = 48.dp)) { Text("Skip") }
+    }
+}
+
+/** PO-05: offered, never auto-applied. Hidden once the exercise's first set is ticked. */
+@Composable
+private fun StallCard(onDeload: () -> Unit, onSwap: () -> Unit, onHold: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().padding(end = 12.dp, top = 8.dp),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("No gain lately", style = MaterialTheme.typography.titleSmall)
+            Text("Your estimated 1RM hasn't moved for a few sessions. Pick what to do; nothing changes until you do.", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onDeload, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) { Text("Deload 10%") }
+                OutlinedButton(onClick = onSwap, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) { Text("Swap") }
+                OutlinedButton(onClick = onHold, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) { Text("Hold") }
+            }
+        }
     }
 }

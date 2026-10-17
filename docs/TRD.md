@@ -598,6 +598,8 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | Extra session | ✅ Logged from Today, counted 1 of 1, and the next log prefilled from it. |
 | Next session | ✅ Started Push again: every set showed last session's values as ghosts. Discarding it left the rotation alone and stopped the service. |
 
+**M2 results (2026-10-17):** the engine has table-driven tests for every branch in §8 (baseline, add reps, increase, big-jump guard, repeat, deload, stall with and without a deficit, Hold and Deload resets, bodyweight, weighted bodyweight), plus PR detection, live feedback and target grading. Repository tests cover frozen targets, overrides, PRs at finish, stall choices, the Today preview and exercise history. The 2→3 migration is tested from the exported schema, and the release build launched on the reference phone over M1 data with no errors. A by-eye check of the new screens on the phone is still to do; the phone was locked.
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
