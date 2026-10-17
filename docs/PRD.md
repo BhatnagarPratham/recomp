@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v0.8, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v0.9, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -220,7 +220,7 @@ Examples use the reference persona.
   3. Tick a set to accept the prefilled values, or adjust them with steppers. The rest timer starts on its own and counts down in the notification.
   4. At Finish, a summary shows PRs, targets hit and what changes next time ("Lat pulldown goes to 50 kg").
 - **J2, extra session** (yoga, for the reference persona). After the class, tap *Log class*. It's prefilled from last time. Save, and it counts toward the weekly plan.
-- **J3, logging a meal.** Tap + on a meal and choose one of: *My meals* (one tap), *Search* (the region's database plus your own foods), *Describe it* (AI, when on) or *Quick add*. Review and save.
+- **J3, logging a meal.** On the Food tab, tap + on a meal and choose one of: *My meals* (one tap), *Search* (the region's database plus your own foods), *Describe it* (AI, when on) or *Quick add*. Review and save.
 - **J4, before ordering in.** *Will it fit?* shows what a dish does to today's calories and protein before you order. Log it in one tap if you go ahead.
 - **J5, morning check-in.** Weigh in on your primary weight source and roughly log how many hours you slept. The app shows the trend, not just today's number.
 - **J6, scan day** (if you have body-composition scans).
@@ -262,7 +262,7 @@ Examples use the reference persona.
 - **First run** opens onboarding instead of Today. So does the first launch after upgrading from a version without a persona; the training settings you already had are carried over and pre-filled, and an unfinished workout can still be resumed.
 - **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1.
 
-**Settings (PS-02).** A bottom tab next to Today and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
+**Settings (PS-02).** A bottom tab after Today, Food and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
 - **Targets can be overridden** (PR-02): calories, protein and fat. Carbs always fill the remaining calories. An overridden number is labelled *set by you* and stays until you reset it. Calories can't be set below the safety floor (§4.9).
 - **A change that moves your targets** (goal, pace, goal weight, body data, activity, an override) shows the old and new targets before it saves. Saving starts a new target version from today. Several saves on the same day replace that day's version; earlier days are never rewritten.
 
@@ -414,7 +414,7 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 | ID | Pri | Requirement |
 |----|-----|-------------|
 | NU-10 | P0 | Meal slots: Breakfast, Lunch, Snacks, Dinner (editable). |
-| NU-11 | P0 | **Bundled food database for the region**, filtered to your diet. *Indian:* INDB's ~1,000 dishes plus ingredients, fetched at build time (TRD §6.4). *International:* Open Food Facts lookups plus your custom foods. This is what makes logging work with AI off. |
+| NU-11 | P0 | **Bundled food database for the region**, filtered to your diet. *Indian:* INDB's ~1,000 dishes, fetched at build time (TRD §6.4), plus bundled protein-rich basics. *International:* Open Food Facts lookups plus your custom foods. This is what makes logging work with AI off. |
 | NU-12 | P0 | Custom foods, per 100 g or per serving, with **regional portion units** mapped to grams that you can calibrate to your own utensils. Indian: roti, katori, glass, piece, tbsp, plate. International: cup, slice, piece, tbsp. |
 | NU-13 | P0 | ★ **Saved meals** ("my usual breakfast") logged in one tap. Copy a meal or a whole day from any earlier day. |
 | NU-14 | P0 | Quick add with just calories and protein, for when you can't be bothered. |
@@ -427,6 +427,23 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 | NU-21 | P1 | Barcode scan for packaged food (Open Food Facts; coverage varies by country, so label scan is the backup). |
 | NU-22 | P1 | Recipe builder for home recipes: ingredients in, macros per portion out. |
 | NU-23 | P1 | ★ **Evening protein nudge.** If you're well short of target at a set time, show how much is left and suggest 2–3 of *your own* frequent protein foods that fit your diet, ranked by protein per 100 kcal. |
+
+**Food logging in the app (M3b):**
+- **Food tab.** The bottom bar is Today · Food · Train · Settings. Food is the daily view (NU-16), and Today's nutrition card has *Log food*, which opens it. ‹ and › move between days. You can log on past days, not future ones.
+- **Daily view (NU-16).** Calories and protein remaining against that day's targets, protein first. Protein follows the ramp (NU-03) and has no target during the baseline week. A macro split shows grams eaten against the protein, carbs and fat targets; fibre is shown without a target. Being over is a plain number, never failure styling. Each meal shows its calories and protein.
+- **Meals (NU-10).** Breakfast, Lunch, Snacks and Dinner. Settings → Food → Meals renames, adds, removes and reorders them. A removed meal keeps its past entries.
+- **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. *Describe it* joins this screen in M3c.
+- **Portion.** Tapping a food opens a portion sheet prefilled with what you logged for it last time (amount, unit and origin), otherwise one of the food's own servings, otherwise 100 g. Amounts step by ½ (10 for grams) and can be typed. *Save* logs it, so a repeat food is search, tap, Save.
+- **Units (NU-12).** Every food offers grams, its own units (INDB's serving, e.g. "bowl ≈ 258 g", or a custom food's) and the region's household measures: katori 150 g, glass 250 ml and tbsp 15 g for Indian; cup 240 ml and tbsp 15 g for International. Settings → Food → Portion sizes calibrates the household measures to your utensils, and the portion sheet can recalibrate any unit for one food. Roti, piece, slice and plate belong to particular foods, not to every food. Liquids count 1 ml as 1 g.
+- **Custom foods (NU-12).** Name, optional brand, values per 100 g or per serving (a unit and its weight; the weight is prefilled for household measures), calories, protein, carbs, fat, optional fibre, and a diet tag that defaults to your diet. Editing one changes future logs only.
+- **Quick add (NU-14).** Calories and protein, with optional carbs, fat and a name. Unknown carbs and fat stay unknown, and the macro split says how many calories it couldn't split.
+- **Origin (NU-15).** Home, Ordered or Packaged chips on every entry. The default is what you chose last time for that food, else Home (Packaged for a food with a brand). Ordered doesn't change a database food's numbers: the sheet notes that restaurant food usually carries more oil, and the tag feeds the weekly share of ordered food (HM-03) and the AI estimates (M3c).
+- **Saved meals (NU-13).** *Save as meal* in a meal's menu names it. In *My meals*, one tap logs every item into the meal you're adding to, with *Undo*. Items link to their foods, so a corrected custom food flows into the meal. Rename or delete it from its menu; to change the items, save a meal over it.
+- **Copy (NU-13).** *Copy from another day*, in the day's menu or a meal's, lists the last 14 days with food logged, plus a date picker. Copy the whole day, or one meal into its slot. Copies are added beside what's there, never replacing it, with *Undo*.
+- **Editing.** Tap an entry to change its amount, unit, origin or meal, or delete it with *Undo*.
+- **Diet filter (NU-11).** Search shows only the foods your diet allows: vegan foods for vegans, plus dairy for lacto-vegetarians, plus egg for eggetarians, plus fish but not meat for pescatarians, and everything for non-vegetarians. A food tagged wrongly can be hidden from its menu; Settings → Food → Hidden foods restores it.
+- **Region.** The Indian database (INDB) shows for the Indian region only. The protein-rich basics and your own foods show for both.
+- **Fried INDB recipes.** INDB counts all the oil used for deep frying as eaten, so about 120 fried recipes read two to three times too high (a poori at over 700 kcal per 100 g). They stay searchable with a warning that quick add or a custom food may be closer, and rank below other matches.
 
 ### 7.8 Body metrics
 
