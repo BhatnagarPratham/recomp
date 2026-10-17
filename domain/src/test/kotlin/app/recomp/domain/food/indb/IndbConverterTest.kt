@@ -84,6 +84,13 @@ class IndbConverterTest {
     }
 
     @Test
+    fun `stock coded as vegetable but worded as chicken makes the recipe meat`() {
+        val n = nutrients(listOf("TST101", "Test clear soup", "test", 40.0, 5.0, 2.0, 1.0, 0.5, "bowl", 80.0, 4.0))
+        val r = recipes(listOf("TST101", "Test clear soup", "Chicken stock", "240", "ml", "K507", "Stock cubes, vegetable", 240, "ml"))
+        assertEquals(FoodDiet.MEAT, IndbConverter.convert(n, r).foods.single().diet)
+    }
+
+    @Test
     fun `a recipe with no ingredients is tagged meat, so only non-vegetarians see it`() {
         val n = nutrients(listOf("ASC500", "Mystery dish", "asc", 100.0, 10.0, 5.0, 5.0, 1.0, "bowl", 200.0, 10.0))
         val result = IndbConverter.convert(n, recipes())

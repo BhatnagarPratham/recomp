@@ -36,8 +36,8 @@ data class Conversion(val foods: List<FoodRecord>, val skipped: List<String>) {
  * food records (TRD §6.4). Runs at build time only, from `:app:fetchIndb`; the data is never committed.
  */
 object IndbConverter {
-    /** Bumped when the output changes for the same input, so phones re-import. */
-    const val FORMAT = 1
+    /** Bumped when the output changes for the same input, so phones re-import. 2: tags read the recipe's own wording. */
+    const val FORMAT = 2
 
     /** Fried recipes above this read far too high, because INDB counts all the frying oil as eaten. */
     const val FRYING_CAVEAT_KCAL = 250.0
@@ -50,7 +50,7 @@ object IndbConverter {
         recipes.require("recipe_code", "food_code", "food_name", "ingredient_name_org", "amount_org", "unit_org")
 
         val ingredients = recipes.rows.groupBy({ recipes[it, "recipe_code"].orEmpty() }) {
-            Ingredient(recipes[it, "food_code"], recipes[it, "food_name"] ?: recipes[it, "ingredient_name_org"])
+            Ingredient(recipes[it, "food_code"], recipes[it, "food_name"], recipes[it, "ingredient_name_org"])
         }
         val fried = recipes.rows.filter { row ->
             recipes[row, "food_code"].orEmpty().startsWith("T") &&

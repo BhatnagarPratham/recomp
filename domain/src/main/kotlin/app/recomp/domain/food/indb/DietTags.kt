@@ -2,14 +2,19 @@ package app.recomp.domain.food.indb
 
 import app.recomp.domain.food.FoodDiet
 
-/** One ingredient row of an INDB recipe: its IFCT-style food code (e.g. "L003") and name. */
-data class Ingredient(val code: String?, val name: String?)
+/**
+ * One ingredient row of an INDB recipe: its IFCT-style food code (e.g. "L003"), the name of the food that
+ * code stands for, and the recipe's own wording ([original], `ingredient_name_org`).
+ */
+data class Ingredient(val code: String?, val name: String?, val original: String? = null)
 
 /**
  * Diet tags from ingredients (TRD §6.4), because INDB has no vegetarian flag. INDB codes each
  * ingredient with an IFCT food group: L milk products, M egg, N poultry, O meat, P/Q/R/S fish and
- * shellfish. A handful of codes in other groups are animal products and are listed by hand. Uncoded
- * ingredients (essences, colours) are judged by name.
+ * shellfish. A handful of codes in other groups are animal products and are listed by hand. INDB sometimes
+ * codes an animal ingredient as a vegetarian food ("chicken stock" as vegetable stock, "egg/milk" as milk),
+ * so the recipe's own wording can lift a coded ingredient to egg, fish or meat. Uncoded ingredients
+ * (essences, colours) are judged by name.
  */
 object DietTags {
     private val CODE = Regex("^[A-Z]\\d{3}$")
@@ -40,10 +45,25 @@ object DietTags {
     /** A recipe name that says it's the vegetarian version ("Soya keema", "Vegetarian egg kofta"). */
     private val VEG_VERSION = Regex("\\b(vegetarian|veg|vegan|mock|soya|soy|eggless)\\b", ic)
 
-    /** An ingredient's tag: by its food code when it has one, by name otherwise. */
+    /**
+     * An ingredient's tag. Coded: the stricter of the code and any egg, fish or meat the recipe's wording
+     * mentions (not dairy, which would turn plain milk dishes non-vegan for nothing). Uncoded: by name.
+     */
     fun ofIngredient(ingredient: Ingredient): FoodDiet {
         val code = ingredient.code?.trim()?.uppercase().orEmpty()
-        return if (CODE.matches(code)) ofCode(code) else ofName(ingredient.name.orEmpty())
+        return if (CODE.matches(code)) {
+            maxOf(ofCode(code), animalIn(ingredient.original.orEmpty()))
+        } else {
+            maxOf(ofName(ingredient.name.orEmpty()), ofName(ingredient.original.orEmpty()))
+        }
+    }
+
+    /** Egg, fish or meat named in text; vegan otherwise. Dairy words are left out on purpose. */
+    private fun animalIn(text: String): FoodDiet = when {
+        MEAT_WORDS.containsMatchIn(text) || GELATINE_WORDS.containsMatchIn(text) -> FoodDiet.MEAT
+        FISH_WORDS.containsMatchIn(text) -> FoodDiet.FISH
+        EGG_WORDS.containsMatchIn(text) -> FoodDiet.EGG
+        else -> FoodDiet.VEGAN
     }
 
     fun ofCode(code: String): FoodDiet = when {

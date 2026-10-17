@@ -51,6 +51,22 @@ class DietTagsTest {
     }
 
     @Test
+    fun `the recipe's own wording lifts a coded ingredient to egg, fish or meat, but never adds dairy`() {
+        // INDB codes "chicken stock" as vegetable stock, and an egg wash as milk.
+        assertEquals(FoodDiet.MEAT, DietTags.ofIngredient(Ingredient("K507", "Stock cubes, vegetable", "Vegetable/chicken stock")))
+        assertEquals(FoodDiet.MEAT, DietTags.ofIngredient(Ingredient("K505", "Water, distilled", "Water or meat stock")))
+        assertEquals(FoodDiet.EGG, DietTags.ofIngredient(Ingredient("L002", "Milk, whole", "Egg/Milk")))
+        assertEquals(FoodDiet.FISH, DietTags.ofIngredient(Ingredient("X501", "Soy sauce", "Fish sauce")))
+        assertEquals(FoodDiet.MEAT, DietTags.ofIngredient(Ingredient("W504", "Jam", "Lemon jelly")))
+        // Coded vegan foods stay vegan whatever dairy-sounding words the recipe uses.
+        assertEquals(FoodDiet.VEGAN, DietTags.ofIngredient(Ingredient("H007", "Coconut, fresh", "Coconut cream")))
+        assertEquals(FoodDiet.VEGAN, DietTags.ofIngredient(Ingredient("D031", "Brinjal", "Brinjal (egg plant)")))
+        assertEquals(FoodDiet.VEGAN, DietTags.ofIngredient(Ingredient("K507", "Stock cubes, vegetable", "Vegetable stock")))
+        // Uncoded rows read both names.
+        assertEquals(FoodDiet.VEGETARIAN, DietTags.ofIngredient(Ingredient("", "Essence", "Malai essence")))
+    }
+
+    @Test
     fun `a recipe takes its strictest ingredient`() {
         val dal = listOf(Ingredient("B001", "Bengal gram"), Ingredient("T506", "Ghee"))
         assertEquals(FoodDiet.VEGETARIAN, DietTags.ofRecipe("Chana dal", dal))
