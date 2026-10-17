@@ -24,9 +24,11 @@ object AiPricing {
         "claude-sonnet-5-5" to Rates(input = 2.00, output = 10.00, cacheRead = 0.20),
         // Prompts up to 100K tokens, as all of ours are. The cache-read rate assumes 0.1 × input.
         "claude-haiku-5-5" to Rates(input = 0.10, output = 0.50, cacheRead = 0.01),
-        // Refusal-fallback targets (`fallbacks: "default"`).
+        // Refusal-fallback targets (`fallbacks: "default"`, AiModel.fallbackTargets).
         "claude-opus-5" to Rates(input = 5.00, output = 25.00, cacheRead = 0.50),
         "claude-opus-4-8" to Rates(input = 5.00, output = 25.00, cacheRead = 0.50),
+        "claude-sonnet-5" to Rates(input = 2.00, output = 10.00, cacheRead = 0.20),
+        // Not a fallback target: the most expensive current model, whose rates any unknown model is charged at.
         "claude-fable-5-1" to Rates(input = 10.00, output = 50.00, cacheRead = 0.25),
     )
 

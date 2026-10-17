@@ -496,8 +496,9 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
   | `claude-opus-5-5` | 4.00 | 20.00 | 0.20 |
   | `claude-sonnet-5-5` | 2.00 | 10.00 | 0.20 |
   | `claude-haiku-5-5` (prompts up to 100K tokens, as all of ours are) | 0.10 | 0.50 | 0.01 (assumed 0.1× input) |
-  | `claude-opus-5`, `claude-opus-4-8` (refusal-fallback targets) | 5.00 | 25.00 | 0.50 |
-  | `claude-fable-5-1` | 10.00 | 50.00 | 0.25 |
+  | `claude-opus-5`, `claude-opus-4-8` (Opus 5.5's refusal-fallback targets) | 5.00 | 25.00 | 0.50 |
+  | `claude-sonnet-5` (Sonnet 5.5's refusal-fallback target) | 2.00 | 10.00 | 0.20 |
+  | `claude-fable-5-1` (not a target: the highest rates, charged for an unknown model) | 10.00 | 50.00 | 0.25 |
 - **Refusal fallback.** Opus 5.5 and Sonnet 5.5 requests go to the beta Messages endpoint with `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a safety-classifier false positive is retried on the model Anthropic recommends, in the same round trip. Haiku 5.5 has no server-side fallback, so its requests don't send it. `ai_request_log.model` records the model that served the response.
 
 **Uses and output schemas.** Every request uses structured outputs: `output_config.format` with a JSON schema written by hand (`JsonOutputFormat.Schema`, or `BetaJsonOutputFormat.Schema` on the beta endpoint). The reply is parsed with kotlinx.serialization. **Don't use the SDK's class-based `.outputConfig(SomeClass::class.java)`.** It derives the schema with `java.lang.reflect.AnnotatedType`, which Android doesn't have even at API 37, so it crashes on the phone (found in M0).

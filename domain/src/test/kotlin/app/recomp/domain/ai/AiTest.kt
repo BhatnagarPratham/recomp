@@ -78,6 +78,16 @@ class AiTest {
     }
 
     @Test
+    fun `every model Settings offers, and every model its refusals can fall back to, has a price`() {
+        AiModel.entries.forEach { model ->
+            assertTrue(model.id, model.id in AiPricing.table)
+            model.fallbackTargets.forEach { assertTrue("${model.id} falls back to $it", it in AiPricing.table) }
+        }
+        // Sonnet 5.5's fallback runs on Sonnet 5, at Sonnet rates, not the unknown-model ones.
+        assertEquals(Rates(2.00, 10.00, 0.20), AiPricing.rates("claude-sonnet-5"))
+    }
+
+    @Test
     fun `a model the table doesn't know is priced at its highest rates`() {
         val unknown = AiPricing.rates("claude-unknown-9")
         assertEquals(AiPricing.table.values.maxOf { it.input }, unknown.input, 0.0)
