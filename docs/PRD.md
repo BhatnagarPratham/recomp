@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v0.7, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v0.8, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -78,7 +78,8 @@ Each goal has three paces. **Standard** is the default, and exact values are edi
 
 - **Caps:** a deficit is capped at 25% of maintenance, and a surplus at 15%.
 - **Projection:** the pace picker shows an approximate projection, e.g. "≈0.5 kg a week, finish line around mid-March". It's recomputed weekly from the trend.
-- **Reference weight** is your goal weight if you set one, otherwise your current weight. For fat loss and recomp, onboarding suggests a goal weight: from a recent body-composition scan if you have one, otherwise the BMI-25 weight for your height.
+- **Reference weight** is your goal weight if you set one, otherwise your current weight. There is one goal weight per goal, set in the finish-line step (§4.7). It stays the reference weight whatever finish line you pick, so a date or no finish line doesn't change protein.
+- **Suggested goal weight** (fat loss and recomp): from a recent body-composition scan if you have one (IB-05), otherwise the BMI-25 weight for your height. If your BMI is already 25 or less, the suggestion is 5% below your current weight, never below BMI 20.
 - **Safety floor:** intake never goes below your BMR, or below 1,500 kcal (men) / 1,200 kcal (women). More guardrails are in §4.9.
 - **In a deficit** (fat loss, recomp), the progression engine adds one session to its stall window, because progress is slower when eating below maintenance.
 
@@ -124,14 +125,14 @@ Onboarding, and Settings → Goal, follow the same flow:
    - **Lose fat and build muscle (Recomp):** a gentle deficit with high protein. Works best if you're new to lifting or carrying extra fat.
    - **Maintain:** keep your weight steady and get stronger.
    - **Build muscle (Lean bulk):** a small surplus to grow faster with little fat gain.
-   - **None of these fit? Describe your goal:** a free-text box. This leads to step 2.
+   - **None of these fit? Describe your goal:** a free-text box. This leads to step 2. With AI off the card reads **Not sure? Answer 3 quick questions** and has no text box, since nothing would read the text.
 2. **Suggestion**, only after "Describe your goal":
    - **With AI on:** Claude reads the text, maps it to an intent (lose fat, build muscle, both, stay as I am) and may ask one follow-up question.
-   - **With AI off, or if the intent is still unclear:** three quick questions. What matters most to you? How long have you been lifting? What's your body fat? Body fat comes from a recent scan, or is estimated from height and weight.
+   - **With AI off, or if the intent is still unclear:** three quick questions. What matters most to you? How long have you been lifting? What's your body fat? Body fat comes from a recent scan, or is estimated from height and weight (shown as your BMI). You can also type a body-fat % you know; it's used for this suggestion only and isn't saved. The lifting answer pre-fills your experience level.
    - **The result:** a recommended goal with a one-line reason ("You want both and you're new to lifting, so a recomp fits"). Confirm it, or pick another card.
-3. **Pace** (not for Maintain): Gentle, Standard or Aggressive, with the projection.
+3. **Pace** (not for Maintain): Gentle, Standard or Aggressive, each with its projection. Picking Aggressive shows its warning once, and you acknowledge it (§4.9).
 4. **Finish line** (§4.7).
-5. **Targets:** each number, with where it came from.
+5. **Targets:** each number, with where it came from. From Settings, this step shows the old and new targets side by side before saving.
 
 **Recommendation rules.** These are starting defaults; the algorithm is in TRD §5.7.
 
@@ -144,7 +145,7 @@ Onboarding, and Settings → Goal, follow the same flow:
 
 ### 4.7 Finish line and what comes next
 
-- **One finish line per goal:** a target weight, a target body-fat % (needs scans), a date, or none.
+- **One finish line per goal:** your goal weight, a target body-fat % (needs scans; shown but unavailable until you have one), a date, or none. The goal weight is edited here.
 - **Suggested defaults:**
   - Fat loss and recomp: the suggested goal weight (§4.2).
   - Lean bulk: a date about 16 weeks out.
@@ -168,15 +169,17 @@ Onboarding, and Settings → Goal, follow the same flow:
 
 **Daily target, judged weekly.**
 - The calorie target is the same every day.
-- Today shows what's left today, plus a small line with the 7-day average against target.
+- **Maintain's range** is the target ±5%, rounded to 10 kcal (e.g. 2,480–2,740 for a 2,610 target).
+- Today shows what's left today, plus a small line with the 7-day average against target. The average covers the last 7 complete days (today is left out) and counts only days with food logged; it shows calories and protein against their targets and how many days were logged. With nothing logged it says it appears once you log food.
 - Check-ins and the weekly review judge 7-day averages.
 - A single day over target is never styled as a failure. It just shows up in the average.
+- Recomp's main number uses the ramped protein target (NU-03) while the ramp runs.
 
 ### 4.9 Guardrails
 
-- **Low BMI:** Fat loss and recomp are unavailable at a BMI below 18.5. The app suggests Maintain and explains why.
+- **Low BMI:** Fat loss and recomp are unavailable at a BMI below 18.5. Their goal cards are greyed out with the reason, and the app suggests Maintain.
 - **Floor:** intake never goes below BMR, or below 1,500 / 1,200 kcal.
-- **Aggressive pace** shows a plain warning about muscle loss and sticking with it. It's still subject to the caps.
+- **Aggressive pace** shows a plain warning about muscle loss and sticking with it, acknowledged once per goal. It's still subject to the caps.
 - **Under 18:** deficits are limited to Gentle, with a note to involve a parent or doctor.
 - **Pregnancy and breastfeeding:** an onboarding toggle that disables deficits and shows a note (P1).
 - **Not medical advice:** the app says so, and suggests checking with a professional if you have a medical condition.
@@ -238,7 +241,7 @@ Examples use the reference persona.
 |----|-----|-------------|
 | PR-01 | P0 | Onboarding captures sex, date of birth, height, current weight, goal weight (or a target body-fat %, see IB-05), activity level, units and primary weight source, on top of the persona settings in §4. |
 | PR-02 | P0 | Compute starting targets for calories, protein, fat and carbs from the goal policy, with a plain-language explanation. Every target can be overridden. |
-| PR-03 | P0 | ★ Configurable "day starts at" time (default 4 AM), so a late-night snack counts toward the right day. |
+| PR-03 | P0 | ★ Configurable "day starts at" time (default 4 AM; midnight to 6 AM in hourly steps), so a late-night snack counts toward the right day. Changing it never moves days already logged. |
 | PR-04 | P0 | Onboarding walks through the chosen split once to confirm the equipment and smallest weight step for each exercise. That sets the progression increments. |
 
 **Equipment walkthrough (PR-04).** One scrolling list of the split's exercises, grouped by routine:
@@ -246,7 +249,22 @@ Examples use the reference persona.
 - Every exercise shows its smallest weight step as chips (1, 1.25, 2, 2.5, 4 or 5 kg, or a custom value). Defaults come from the equipment: 2.5 kg for barbells (1.25 kg plates each side), dumbbells (per dumbbell) and plate-loaded machines, 5 kg for pin-loaded machines and cables, 4 kg for kettlebells.
 - Running it again on the same split swaps variants in place and keeps your other routine edits. Choosing a different split archives the current routines (history stays) and builds the new ones.
 
-**Until M3's onboarding exists**, a short *Training setup* runs the parts of §4 that training needs: split, experience, strength days per week, and extra sessions with their days. The walkthrough follows it. It can be re-run from the Train tab, and M3 folds it into onboarding.
+**Training setup** (split, experience, strength days per week, and extra sessions with their days, then the walkthrough) was a stand-in for onboarding in M1. From M3 it's part of onboarding's review step, and it can still be re-run from the Train tab or Settings.
+
+**Onboarding (PS-01, PR-01, PR-02, J0).** One step per screen, with Back on every step:
+1. **Preset** (§4.4).
+2. **About you:** sex (for the calorie formulas), date of birth, height, current weight and activity level. Activity has three choices: mostly sitting with little training (×1.2), a desk job plus 3–4 sessions a week (×1.375, the default), or an active job or daily training (×1.55).
+3. **Goal** (§4.6), with **Pace** and **Finish line**.
+4. **Your settings:** every other persona value pre-filled from the preset for review: experience, diet, food region, split and strength days, extra sessions, primary weight source, units, "day starts at" and the protein ramp. Values a preset leaves as *Asked* must be chosen before you can continue.
+5. **Targets:** calories, protein, fat and carbs, each with a plain sentence on where it came from, and the "not medical advice" note.
+6. **Gym equipment** (PR-04), only when routines need building: on a fresh install, or when you picked a different split.
+
+- **First run** opens onboarding instead of Today. So does the first launch after upgrading from a version without a persona; the training settings you already had are carried over and pre-filled, and an unfinished workout can still be resumed.
+- **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1.
+
+**Settings (PS-02).** A bottom tab next to Today and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
+- **Targets can be overridden** (PR-02): calories, protein and fat. Carbs always fill the remaining calories. An overridden number is labelled *set by you* and stays until you reset it. Calories can't be set below the safety floor (§4.9).
+- **A change that moves your targets** (goal, pace, goal weight, body data, activity, an override) shows the old and new targets before it saves. Saving starts a new target version from today. Several saves on the same day replace that day's version; earlier days are never rewritten.
 
 ### 7.2 Exercise library
 
@@ -386,7 +404,7 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 |----|-----|-------------|
 | NU-01 | P0 | Daily calorie target from the goal policy (§4.2), with a safety floor. |
 | NU-02 | P0 | ★ **Protein is the hero metric.** The target comes from the goal policy and is shown first on every nutrition view. |
-| NU-03 | P0 | ★ **Protein ramp.** The first week measures what you eat now. After that, the target rises by about 15 g a week until it reaches the full target. On by default for vegetarian and vegan diets, whose starting intake is often low; optional for others. |
+| NU-03 | P0 | ★ **Protein ramp.** The first week measures what you eat now. After that, the target rises by about 15 g a week until it reaches the full target. On by default for vegan, lacto-vegetarian and eggetarian diets, whose starting intake is often low; optional for others. The baseline week starts on your first day with food logged and needs 5 logged days out of 7; until then the full target is shown with a note that the ramp starts when you log food. |
 | NU-04 | P0 | Fat has a floor. Carbs fill the remaining calories. Fiber is shown but not targeted. |
 | NU-05 | P1 | ★ **Adaptive target.** After 2–3 weeks of data, estimate your real maintenance calories from logged intake against the trend in your weight. The weekly check-in proposes the new target for your goal. |
 | NU-06 | P1 | ★ Optional daily snack allowance inside the calorie target (e.g. 150 kcal), so a planned snack isn't a "failure". |
@@ -541,5 +559,5 @@ Ranked by impact.
 ## 11. Open questions
 
 1. Which presets beyond the five in §4.4 are worth shipping? Candidates: older adults, a strength-focused powerlifting split, and returning after a break.
-2. Should lb/in display ship in the MVP or in v1.1?
+2. ~~Should lb/in display ship in the MVP or in v1.1?~~ *Settled in M3:* v1.1. The MVP is metric only; the persona already stores the choice.
 3. Is "Pescatarian" enough, or does the diet filter also need custom exclusions (e.g. Jain: no root vegetables)?
