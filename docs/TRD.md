@@ -740,7 +740,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M3a: Personas and targets** | `Persona` and `GoalPlan` models, presets and onboarding (PS-01 to PS-03), the goal flow with cards, guided suggestion, pace, finish line and guardrails (GL P0), Settings, versioned targets (Room v4) with overrides and the protein ramp, "day starts at", and a goal-driven Today screen; M1's training setup folded in; `inDeficit` wired into progression. | PS, PR-01 to PR-03, GL P0, NU-01 to NU-04 |
 | **M3b: Food logging** | The INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. | NU-10 to NU-16 |
 | **M3c: AI logging** | `AiGate` with AI Describe it, drafts and the spend cap. | NU-17, AI P0 |
-| **M4: Body, Today and data** | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
+| **M4: Body, Today and data** ✅ | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
 | **M5+: v1.1** | Adaptive target with weekly check-in and review, Will it fit?, label scan, local parser, AI meal photos, the share target (§6.7) with InBody import from screenshots and Health Connect, recomp chart and InBody-based targets, steps through Health Connect, sleep in the check-in, barcode, charts, reminders, widget, auto-backup | P1 |
 
 **M0 results (2026-10-17, reference phone on Android 15):**
@@ -818,6 +818,35 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Describe it with a dummy key | ✅ The privacy notice showed once, then "Estimating with Claude Opus 5.5…". The API's 401 came back as `AUTH`: the description became a draft in Snacks ("Your API key was rejected"), and the add-food screen was back with search, My meals and Quick add. *Estimate now* failed the same way, replaced the draft rather than adding one, and the Food tab said why. Settings showed $0.00 for 2 requests. The first run found that the outcome message never reached the screen it returned to (a screen's view model has a different saved-state handle from its nav entry); fixed and re-checked. |
 | No key | ✅ The button reads *Describe it · keep a draft*; the screen says why, offers *Add key*, and its action is *Save draft*. |
 | Not run on the phone | A real estimate, which needs your key. The offline and over-cap states (the tests cover them; the phone's airplane mode wasn't touched). Review edits and the learning loop (the tests cover them). The test draft was deleted and the dummy key removed; AI is left on with no key. |
+
+**M4 results (2026-10-18, reference phone on Android 15, release build over M3c data). With M4 the MVP is complete; dogfooding starts (PRD §9: every workout and every day of food for 2 straight weeks).** The UX calls were settled with the user first (PRD v1.0): a Body tab, the rest-day rule, the trend weight only on a target change, and a safety copy on import. Tests cover:
+- `:domain`:
+  - `TrendCalculator`: daily, weekly and mixed spacing, seeding, the primary-source and first-of-day filters, interpolation, the rate anchored at the last weigh-in, and the pace for each goal.
+  - `ScanProtocol`: the 90-minute edges, the midnight wrap, meal, workout, every reason at once, and no slot.
+  - `WeeklyPlan.restDay`.
+- Repositories:
+  - weigh-ins and the trend, edit, delete and undo;
+  - the trend weight in target previews, never a version on its own;
+  - scan, slot and protocol, the linked weigh-in and its cascade, and trained-before from the workout log.
+- Migrations: 5→6 (M3c), 6→7, and the 5→6→7 chain.
+- Backup:
+  - the round trip, with every table filled including M3c's;
+  - the safety copy, and an older (v5) file upgraded on import;
+  - refusals that leave the phone's data untouched: newer, not a zip, damaged JSON, a non-CREATE schema, a column mismatch, a broken foreign key, an unknown enum value, and settings of the wrong type or out of range;
+  - an active workout blocks import;
+  - the AI key is never exported.
+
+An independent review before the phone run found that a backup with a broken foreign key could leave the database stuck in a transaction, and that out-of-range values could crash the app at launch. Both are now refused before anything is replaced (§6.5).
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M3c | ✅ The release build installed over the M3c (v6) data, migration 6→7 ran, and Today opened with the targets intact and a rest day ("Strength done for today", *Start Pull anyway*) after the day's earlier workout. The bottom bar gained Body. |
+| Export → import | ✅ Settings → Data → *Export all data* saved `recomp-backup-2026-10-18.zip` to Downloads through the system dialog ("5 workouts, 0 food entries, 0 weigh-ins, 0 scans"). A weigh-in logged after it was gone after *Import a backup* → *Replace*. Today and Body refreshed without a restart, and *Restore the data from before the import* appeared. |
+| Weigh-in sheet | ✅ It prefilled the typed weight, with the primary source's chip selected, and the trend started from it. |
+| Body and Today with five weeks of invented data | ✅ Checked in a separate debug install (`app.recomp.m4dev`, uninstalled afterwards). The chart drew home-scale weigh-ins as filled dots on the trend line and gym-scale ones as hollow dots. Today's weight card read "−0.5 kg this week (−0.6%) · goal −0.5% a week". <!-- pii-ok: invented --> The scan table marked an off-protocol scan with its reasons. The phone run found that the table was too wide for the card; fixed so it fits at the default font size. |
+| Scan form | ✅ Body fat % filled in from fat mass ÷ weight, and the live verdict read "Off protocol: 7 h 43 min from your usual time" for a scan typed in at night. The time dialog takes typed input. |
+| Trend weight in Settings (dev install) | ✅ About you showed "82.3 kg · trend" with a note that the targets still used the typed weight. Tapping it previewed 2,100 → 1,980 kcal with protein unchanged (it follows the goal weight). After saving, the note went away. <!-- pii-ok: invented dev-install values --> |
+| Not run on the phone | Saving a scan (the dev run backed out of the form) and the waist sheet; the tests cover both. A backup from an older version and the refusals (the tests cover them). Android's own Auto Backup restore. The test weigh-in was removed by the import; the backup file stays in Downloads, and the app's safety copy holds the state from just before the import. |
 
 ## 11. Risks and mitigations
 
