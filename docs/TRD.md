@@ -577,6 +577,18 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | (d) Food database | ✅ INDB (§6.4). |
 | (e) InBody → Health Connect | ✅ Weight, body fat % and BMR only (§6.3). The InBody app's Health Connect access is off. |
 
+**M1 results (2026-10-17, reference phone on Android 15, release build):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from the M0 install | ✅ Migration 1→2 ran on the phone; the library seeded 81 exercises. |
+| Training setup and walkthrough | ✅ PPL, beginner, 3 days a week, a Saturday yoga class; picking the machine shoulder press swapped it into Push. |
+| Full Push workout | ✅ Ghost values, steppers, RIR, rest banner, and the ongoing notification ("Push · resting" with a countdown, *Skip rest* and *+30 s*). Rotation moved to Pull and the week showed 1 of 3. |
+| Killed mid-workout | ✅ `am force-stop` after 5 sets, then relaunch: *Resume workout?* restored every set and the remaining rest. The first run showed the service didn't restart on resume; fixed and re-checked. |
+| Summary and save-back | ✅ Duration, sets, reps, volume and per-exercise sets; an added set was saved back to Push. |
+| Extra session | ✅ Logged from Today, counted 1 of 1, and the next log prefilled from it. |
+| Next session | ✅ Started Push again: every set showed last session's values as ghosts. Discarding it left the rotation alone and stopped the service. |
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |

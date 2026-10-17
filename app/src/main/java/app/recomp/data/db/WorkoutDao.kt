@@ -42,8 +42,8 @@ interface WorkoutDao {
     @Query("SELECT log_date, kind, routine_id FROM workout_session WHERE status = 'COMPLETED' AND log_date >= :from")
     fun observeCompletedSince(from: LocalDate): Flow<List<PlanSessionRow>>
 
-    @Query("SELECT * FROM workout_session WHERE status = 'COMPLETED' ORDER BY started_at DESC LIMIT 1")
-    fun observeLatestCompleted(): Flow<WorkoutSessionEntity?>
+    @Query("SELECT * FROM workout_session WHERE status = 'COMPLETED' AND kind = 'STRENGTH' ORDER BY started_at DESC LIMIT 1")
+    fun observeLatestCompletedStrength(): Flow<WorkoutSessionEntity?>
 
     @Query("SELECT * FROM workout_session WHERE routine_id = :routineId AND status = 'COMPLETED' ORDER BY started_at DESC LIMIT 1")
     suspend fun lastCompletedOfRoutine(routineId: Long): WorkoutSessionEntity?

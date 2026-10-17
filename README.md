@@ -9,7 +9,7 @@ Everything that varies between people lives in a configurable **persona**: goal,
 
 One user per install, offline-first, no backend, no accounts. AI meal logging is optional and uses your own Claude API key.
 
-> **Status:** early development. M0 (project setup and feasibility checks on a real phone) is done. See the milestones in the TRD.
+> **Status:** early development. M0 (project setup and feasibility checks on a real phone) and M1 (training core: exercise library, split templates, rotation, the active workout with a lock-screen rest timer, summary and extra-session logging) are done. See the milestones in the TRD.
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 
@@ -52,6 +52,7 @@ You need:
 4. Build, test and install:
    ```bash
    ./gradlew :domain:test              # pure-Kotlin engine tests
+   ./gradlew :app:testDebugUnitTest    # Room, migration and seed-data tests (Robolectric)
    ./gradlew :app:assembleRelease      # minified APK (debug-signed for now)
    adb install -r app/build/outputs/apk/release/app-release.apk
    ```
@@ -83,7 +84,7 @@ The Indian food database comes from the [Indian Nutrient Databank (INDB)](https:
 ## Layout
 
 - `domain/`: pure Kotlin. Personas, goal and experience policies, progression, nutrition and trend logic, with no Android imports.
-- `app/`: Compose UI, Room, Hilt, the workout service, and the Health Connect and AI clients.
+- `app/`: Compose UI, Room, Hilt, the workout service, and the Health Connect and AI clients. The exercise library and split templates are JSON in `app/src/main/assets/seed/`, so a fork can change them without code.
 - `docs/`: PRD and TRD. `docs/local/` is gitignored, for your own notes.
 
 ## Licence

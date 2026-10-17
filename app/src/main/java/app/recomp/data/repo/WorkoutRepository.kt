@@ -46,7 +46,7 @@ class WorkoutRepository @Inject constructor(
     suspend fun active(): WorkoutSessionEntity? = workoutDao.active()
     fun observeSession(id: Long): Flow<WorkoutSessionEntity?> = workoutDao.observeSession(id)
     fun observeSessionExercises(id: Long): Flow<List<SessionExerciseWithSets>> = workoutDao.observeSessionExercises(id)
-    fun observeLatestCompleted(): Flow<WorkoutSessionEntity?> = workoutDao.observeLatestCompleted()
+    fun observeLatestStrength(): Flow<WorkoutSessionEntity?> = workoutDao.observeLatestCompletedStrength()
     suspend fun routine(id: Long): RoutineEntity? = routineDao.get(id)
 
     fun observeWeek(today: LocalDate): Flow<List<PlanSession>> =

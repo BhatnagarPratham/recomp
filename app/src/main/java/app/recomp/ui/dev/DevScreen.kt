@@ -1,9 +1,6 @@
 package app.recomp.ui.dev
 
-import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,16 +22,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.recomp.workout.ActiveWorkoutService
 
-/** M0 spikes (TRD §10): each card answers one feasibility question on the real phone. */
+/**
+ * M0 spikes (TRD §10): each card answers one feasibility question on the real phone. Spike (b), the
+ * lock-screen rest timer, became the real workout service in M1.
+ */
 @Composable
 fun DevScreen(viewModel: DevViewModel = hiltViewModel()) {
     Column(
@@ -43,7 +40,6 @@ fun DevScreen(viewModel: DevViewModel = hiltViewModel()) {
     ) {
         Text("M0 spikes", style = MaterialTheme.typography.headlineSmall)
         AiSpikeCard(viewModel)
-        RestTimerSpikeCard()
         HealthConnectSpikeCard(viewModel)
     }
 }
@@ -97,49 +93,6 @@ private fun AiSpikeCard(viewModel: DevViewModel) {
                 r.estimate?.clarifyingQuestion?.takeIf { it.isNotBlank() }?.let { Text("Q: $it") }
             }
         }
-    }
-}
-
-@Composable
-private fun RestTimerSpikeCard() {
-    val context = LocalContext.current
-    var pendingSeconds by remember { mutableStateOf<Int?>(null) }
-    var message by remember { mutableStateOf("") }
-    val required = arrayOf(Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.POST_NOTIFICATIONS)
-
-    fun allGranted() = required.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        val seconds = pendingSeconds
-        pendingSeconds = null
-        if (allGranted() && seconds != null) {
-            ActiveWorkoutService.startRest(context, seconds)
-            message = "Started ${seconds}s rest. Lock the phone and watch the lock screen."
-        } else {
-            message = "Needs physical activity and notification permissions."
-        }
-    }
-
-    fun start(seconds: Int) {
-        if (allGranted()) {
-            ActiveWorkoutService.startRest(context, seconds)
-            message = "Started ${seconds}s rest. Lock the phone and watch the lock screen."
-        } else {
-            pendingSeconds = seconds
-            launcher.launch(required)
-        }
-    }
-
-    SpikeCard(
-        "(b) Rest timer on the lock screen",
-        "Foreground service of type \"health\". Start a rest, lock the phone: the countdown should show, then vibrate at zero.",
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { start(30) }) { Text("Rest 30 s") }
-            Button(onClick = { start(90) }) { Text("Rest 90 s") }
-            OutlinedButton(onClick = { ActiveWorkoutService.stop(context); message = "Stopped." }) { Text("End") }
-        }
-        if (message.isNotEmpty()) Text(message)
     }
 }
 

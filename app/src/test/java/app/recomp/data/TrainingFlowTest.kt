@@ -5,7 +5,6 @@ import app.recomp.data.repo.TrainingSetup
 import app.recomp.data.repo.WorkoutAlreadyActiveException
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.domain.model.SessionKind
-import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.SplitTemplate
@@ -296,7 +295,8 @@ class TrainingFlowTest {
         assertEquals(WorkoutRepository.ExtraEntry("Hatha", 60, 3, "hips tight"), prefill)
         val week = workouts.observeWeek(workouts.today(10_000_000)).first()
         assertEquals(SessionKind.YOGA, week.single().kind)
-        assertEquals(SessionStatus.COMPLETED, app.db.workoutDao().observeLatestCompleted().first()!!.status)
+        // The "last workout" card is for strength sessions only.
+        assertNull(workouts.observeLatestStrength().first())
         // Extra sessions are not strength days and don't touch the rotation.
         assertEquals("Push", nextName())
     }

@@ -22,6 +22,7 @@ import app.recomp.domain.model.SessionKind
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
+import app.recomp.domain.training.Loads
 import app.recomp.domain.training.Rotation
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -64,6 +65,7 @@ class TrainingRepository @Inject constructor(
 
     fun observeLibrary(): Flow<List<ExerciseEntity>> = exerciseDao.observeActive()
     fun observeExercise(id: Long): Flow<ExerciseEntity?> = exerciseDao.observe(id)
+    suspend fun exercise(id: Long): ExerciseEntity? = exerciseDao.get(id)
     fun observeRotation(): Flow<List<RoutineEntity>> = routineDao.observeRotation()
     fun observeExtras(): Flow<List<RoutineEntity>> = routineDao.observeExtras()
     fun observeRoutine(id: Long) = routineDao.observe(id)
@@ -94,6 +96,8 @@ class TrainingRepository @Inject constructor(
         val inRotation = routineDao.rotation().associateWith { routineDao.exercises(it.id).map { row -> row.exercise } }
 
         if (split == SplitTemplate.CUSTOM) {
+            // Switching to Custom starts empty, so there's nothing to walk through yet.
+            if (current.split != SplitTemplate.CUSTOM) return emptyList()
             // No template: walk through whatever your routines already hold, to confirm increments.
             return inRotation.entries.flatMap { (routine, exercises) -> exercises.map { routine.name to it } }
                 .groupBy({ it.second }, { it.first })
@@ -237,21 +241,27 @@ class TrainingRepository @Inject constructor(
 
     // Exercises (EX-02, EX-03)
 
-    /** A custom exercise starts from the experience policy's range for its mechanic. */
-    suspend fun newCustomExercise(name: String, mechanic: Mechanic): ExerciseEntity {
+    /**
+     * Creates a custom exercise (EX-02). It starts from the experience policy's range for its mechanic
+     * and the equipment's default increment; everything is editable afterwards (EX-03).
+     */
+    suspend fun createCustomExercise(name: String, mechanic: Mechanic, equipment: Equipment): Long {
         val policy = policy(prefs.current().experience)
         val reps = policy.repsFor(if (mechanic == Mechanic.COMPOUND) RepClass.COMPOUND else RepClass.ISOLATION)
-        return ExerciseEntity(
-            name = name,
-            primaryMuscle = "other",
-            equipment = Equipment.DUMBBELL,
-            mechanic = mechanic,
-            movementPattern = "other",
-            incrementG = 2500,
-            defaultRepMin = reps.first,
-            defaultRepMax = reps.last,
-            defaultRestSec = if (mechanic == Mechanic.COMPOUND) 120 else 90,
-            isCustom = true,
+        return exerciseDao.insert(
+            ExerciseEntity(
+                name = name,
+                primaryMuscle = "other",
+                equipment = equipment,
+                mechanic = mechanic,
+                movementPattern = "other",
+                loadType = if (equipment == Equipment.BODYWEIGHT || equipment == Equipment.BAND) LoadType.BODYWEIGHT else LoadType.WEIGHTED,
+                incrementG = Loads.defaultIncrementG(equipment),
+                defaultRepMin = reps.first,
+                defaultRepMax = reps.last,
+                defaultRestSec = if (mechanic == Mechanic.COMPOUND) 120 else 90,
+                isCustom = true,
+            ),
         )
     }
 
