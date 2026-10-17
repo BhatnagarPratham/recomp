@@ -86,7 +86,8 @@ class TodayViewModel @Inject constructor(
     private val training: TrainingRepository,
     private val workouts: WorkoutRepository,
 ) : ViewModel() {
-    private val today = workouts.today()
+    /** The log date (PR-03 day boundary), which everything on Today is keyed to, header included. */
+    val today: LocalDate = workouts.today()
 
     private val active: Flow<ActiveCard?> = workouts.observeActive().flatMapLatest { session ->
         if (session == null) {
@@ -191,7 +192,7 @@ fun TodayScreen(
     ) {
         Text("Today", style = MaterialTheme.typography.headlineMedium)
         Text(
-            LocalDate.now().format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
+            viewModel.today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (!ui.loaded) return@Column
