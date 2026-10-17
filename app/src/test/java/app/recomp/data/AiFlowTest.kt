@@ -370,6 +370,25 @@ class AiFlowTest {
     }
 
     @Test
+    fun `saving an estimate is all or nothing`() = runBlocking {
+        val draft = ai.saveDraft(date, "lunch", "2 phulka", Origin.HOME, AiStatus.TIMEOUT)
+        try {
+            app.foodLog.saveAiMeal(date, "lunch", listOf(AiItemToLog(item(), true)), Origin.HOME, 1, FoodDiet.VEGETARIAN, mealName = " ", draftId = draft)
+            throw AssertionError("saved a meal without a name")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        }
+        assertTrue("no rows", app.foodLog.day(date).isEmpty())
+        assertTrue("no learned food", app.db.foodDao().bySource(FoodSource.AI.name).isEmpty())
+        assertNotNull("the draft is still there", ai.draft(draft))
+
+        val ids = app.foodLog.saveAiMeal(date, "lunch", listOf(AiItemToLog(item(), false)), Origin.HOME, 1, FoodDiet.VEGETARIAN, mealName = "Phulka plate", draftId = draft)
+        assertEquals(1, ids.size)
+        assertNotNull(app.foodLog.savedMealNamed("Phulka plate"))
+        assertNull(ai.draft(draft))
+    }
+
+    @Test
     fun `save plus My meals saves just the estimate's items`() = runBlocking {
         app.foodLog.quickAdd(date, "lunch", "Earlier snack", 100.0, 2.0, null, null, Origin.HOME)
         val ids = app.foodLog.logAiMeal(date, "lunch", listOf(AiItemToLog(item(), false), AiItemToLog(item(name = "Dal", grams = 150.0), true)), Origin.HOME, 1, FoodDiet.VEGETARIAN)

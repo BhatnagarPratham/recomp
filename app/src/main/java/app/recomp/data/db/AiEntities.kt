@@ -86,6 +86,9 @@ interface AiDao {
     @Query("SELECT * FROM meal_draft WHERE log_date = :date ORDER BY created_at, id")
     fun observeDrafts(date: LocalDate): Flow<List<MealDraftEntity>>
 
+    @Update
+    suspend fun updateDraft(draft: MealDraftEntity)
+
     @Query("DELETE FROM meal_draft WHERE id = :id")
     suspend fun deleteDraft(id: Long)
 }

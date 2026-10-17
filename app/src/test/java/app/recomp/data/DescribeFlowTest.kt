@@ -14,7 +14,10 @@ import app.recomp.ui.food.DescribePhase
 import app.recomp.ui.food.DescribeViewModel
 import java.io.File
 import java.time.LocalDate
+import androidx.lifecycle.viewModelScope
+import app.recomp.domain.ai.Clarification
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -213,7 +216,50 @@ class DescribeFlowTest {
         vm.estimate()
         eventually { vm.outcome.value }
         val draft = drafts().single()
+        assertEquals("updated in place, not deleted and added again", draftId, draft.id)
         assertEquals("2 phulka, dal", draft.text)
         assertEquals(AiStatus.SERVER, draft.reason)
+    }
+
+    @Test
+    fun `a failed or cancelled re-estimate goes back to the estimate already paid for`() = runBlocking {
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, MealEstimate(listOf(phulka), "Ghee on the phulka?")) }
+        val vm = viewModel()
+        vm.setText("2 phulka")
+        vm.estimate()
+        val first = eventually { vm.phase.value as? DescribePhase.Review }
+
+        app.estimator.next = { FakeEstimator.reply(AiStatus.TIMEOUT, attempts = emptyList()) }
+        vm.estimate(Clarification("Ghee on the phulka?", "a spoon"))
+        val back = eventually { (vm.phase.value as? DescribePhase.Review)?.takeIf { it.notice != null } }
+        assertEquals(first.requestId, back.requestId)
+        assertEquals(first.items, back.items)
+        assertTrue(back.notice!!.startsWith("Claude didn't answer in time"))
+        assertNull(vm.outcome.value)
+        assertTrue("a re-estimate keeps no draft: the estimate is still there", drafts().isEmpty())
+
+        val hold = CompletableDeferred<Unit>()
+        app.estimator.hold = hold
+        vm.estimate(Clarification("Ghee on the phulka?", "a spoon"))
+        assertEquals(DescribePhase.Estimating, vm.phase.value)
+        vm.cancel()
+        assertEquals(first.requestId, (vm.phase.value as DescribePhase.Review).requestId)
+        hold.complete(Unit)
+        Unit
+    }
+
+    @Test
+    fun `a failed estimate keeps its draft even when the screen goes away mid-request`() = runBlocking {
+        val hold = CompletableDeferred<Unit>()
+        app.estimator.hold = hold
+        app.estimator.next = { FakeEstimator.reply(AiStatus.TIMEOUT, attempts = emptyList()) }
+        val vm = viewModel()
+        vm.setText("paneer wrap")
+        vm.estimate()
+        vm.viewModelScope.cancel()
+        hold.complete(Unit)
+        val draft = eventually { drafts().singleOrNull() }
+        assertEquals("paneer wrap", draft.text)
+        assertEquals(AiStatus.TIMEOUT, draft.reason)
     }
 }

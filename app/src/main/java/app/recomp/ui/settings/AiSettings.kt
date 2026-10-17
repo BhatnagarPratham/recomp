@@ -37,6 +37,7 @@ import app.recomp.ui.food.parseNumber
 import app.recomp.ui.onboarding.SwitchRow
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -54,7 +55,7 @@ class AiSettingsViewModel @Inject constructor(private val ai: AiRepository) : Vi
     fun setModel(model: AiModel) = viewModelScope.launch { ai.setModel(model) }
     fun setCap(usd: Double?) = viewModelScope.launch { ai.setMonthlyCap(usd) }
     suspend fun saveKey(key: String) = ai.saveKey(key)
-    fun removeKey() = viewModelScope.launch { ai.removeKey() }
+    fun removeKey() = viewModelScope.launch { runCatching { ai.removeKey() } }
 }
 
 private enum class AiEditing { KEY, MODEL, CAP }
@@ -154,6 +155,11 @@ fun ApiKeyDialog(hasKey: Boolean, onDismiss: () -> Unit, onSave: suspend (String
                             onSave(text)
                         } catch (e: IllegalArgumentException) {
                             error = "That doesn't look like an API key."
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // A Keystore or storage failure: say so, never crash, and never show what was typed.
+                            error = "Couldn't store the key on this phone. Try again."
                         }
                     }
                 },

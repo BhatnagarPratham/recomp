@@ -219,6 +219,27 @@ class FoodLogRepository @Inject constructor(
     }
 
     /**
+     * Saves a reviewed estimate in one transaction: its rows (with the learning loop), the saved meal when
+     * [mealName] is set (*Save + My meals*), and the draft it came from, which is done. All of it or none.
+     */
+    suspend fun saveAiMeal(
+        date: LocalDate,
+        slot: String,
+        items: List<AiItemToLog>,
+        origin: Origin,
+        requestId: Long?,
+        dietTag: FoodDiet,
+        mealName: String?,
+        draftId: Long?,
+        now: Long = System.currentTimeMillis(),
+    ): List<Long> = db.withTransaction {
+        val ids = logAiMeal(date, slot, items, origin, requestId, dietTag, now)
+        if (mealName != null) saveMealOf(mealName, ids, slot, now)
+        if (draftId != null) aiDao.deleteDraft(draftId)
+        ids
+    }
+
+    /**
      * The learning loop (TRD §6.2): your edited item's values per 100 g, with its unit at the item's weight. One of
      * your own foods of the same name is updated rather than duplicated: an AI-learned one takes the item's diet tag
      * too, a custom one keeps the tag you gave it. Bundled foods are never changed, so an edited dish named like one
@@ -275,6 +296,7 @@ class FoodLogRepository @Inject constructor(
 
     private suspend fun saveRows(name: String, rows: List<FoodLogEntity>, slot: String, now: Long): Long {
         require(rows.isNotEmpty()) { "That meal is empty" }
+        require(name.isNotBlank()) { "A meal needs a name" }
         val existing = savedMealDao.byName(name.trim())
         val mealId = if (existing != null) {
             savedMealDao.deleteItems(existing.id)

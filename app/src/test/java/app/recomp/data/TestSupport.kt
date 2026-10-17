@@ -151,7 +151,7 @@ class TestApp(private val dir: File) {
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
-        ai = AiRepository(db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
+        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

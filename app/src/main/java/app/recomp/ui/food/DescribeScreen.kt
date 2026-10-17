@@ -54,6 +54,7 @@ import app.recomp.data.prefs.AiSettings
 import app.recomp.data.repo.AiGateView
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.AiRepository
+import app.recomp.data.repo.DraftPlan
 import app.recomp.data.repo.EstimateResult
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
@@ -95,7 +96,14 @@ data class ReviewItem(val original: EstimatedItem, val current: EstimatedItem) {
 sealed interface DescribePhase {
     data object Input : DescribePhase
     data object Estimating : DescribePhase
-    data class Review(val requestId: Long, val items: List<ReviewItem>, val rejected: List<String>, val question: String?) : DescribePhase
+    /** [notice] says why a re-estimate didn't replace this one. */
+    data class Review(
+        val requestId: Long,
+        val items: List<ReviewItem>,
+        val rejected: List<String>,
+        val question: String?,
+        val notice: String? = null,
+    ) : DescribePhase
 }
 
 /** How Describe it ended, for the screen it returns to: a message, and the new entries' ids for *Undo*. */
@@ -146,6 +154,9 @@ class DescribeViewModel @Inject constructor(
     /** Bumped by *Cancel*, so a reply to an abandoned request is ignored (it's still logged and costed). */
     private var attempt = 0
 
+    /** The estimate a *Re-estimate* started from: already paid for, so a failed or cancelled re-estimate returns to it. */
+    private var beforeReestimate: DescribePhase.Review? = null
+
     init {
         val id = draftId
         if (id != null && !restored) {
@@ -183,17 +194,22 @@ class DescribeViewModel @Inject constructor(
         // A second tap while one runs would send (and pay for) the same meal twice.
         if (description.isEmpty() || _phase.value == DescribePhase.Estimating || _busy.value) return
         val mine = ++attempt
+        beforeReestimate = if (clarification != null) _phase.value as? DescribePhase.Review else null
         _phase.value = DescribePhase.Estimating
+        // A first estimate keeps its description as a draft if it fails, unless you cancelled; a re-estimate has the
+        // earlier estimate to go back to instead.
+        val plan = if (clarification == null) DraftPlan(date, slot, draftId, keep = { mine == attempt }) else null
         viewModelScope.launch {
             val result = try {
-                ai.estimate(description, origin.value, clarification)
+                ai.estimate(description, origin.value, clarification, plan)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Whatever went wrong, the description is kept.
                 EstimateResult.Failed(AiStatus.UNEXPECTED, requestId = null)
             }
             if (mine != attempt) return@launch
+            val earlier = beforeReestimate
+            beforeReestimate = null
             when (result) {
                 is EstimateResult.Estimated -> _phase.value = DescribePhase.Review(
                     requestId = result.requestId,
@@ -201,20 +217,25 @@ class DescribeViewModel @Inject constructor(
                     rejected = result.meal.rejected,
                     question = result.meal.clarifyingQuestion,
                 )
-                // The gate changed since the button showed: back to the text, where the screen says why.
-                is EstimateResult.NotReady -> _phase.value = DescribePhase.Input
-                is EstimateResult.Failed -> {
-                    keepDraft(description, result.status)
+                // The gate changed since the button showed: back to the text (or the earlier estimate), which says why.
+                is EstimateResult.NotReady -> _phase.value = earlier?.copy(notice = "AI isn't ready right now, so this is the earlier estimate.")
+                    ?: DescribePhase.Input
+                is EstimateResult.Failed -> if (earlier != null) {
+                    _phase.value = earlier.copy(notice = "${AiText.reason(result.status)}, so this is the earlier estimate.")
+                } else {
+                    // Whatever went wrong, the description is kept: by the repository, or here if it never got that far.
+                    draftId = result.draftId ?: ai.keepDraft(date, slot, draftId, description, origin.value, result.status)
                     _outcome.value = DescribeOutcome("${AiText.reason(result.status)}. Kept as a draft in ${slotName()}; log it now with search or quick add.")
                 }
             }
         }
     }
 
-    /** *Cancel* only stops waiting; the description is unchanged and nothing is saved. */
+    /** *Cancel* only stops waiting: back to the text (or the estimate a re-estimate started from), and nothing is saved. */
     fun cancel() {
         attempt++
-        _phase.value = DescribePhase.Input
+        _phase.value = beforeReestimate ?: DescribePhase.Input
+        beforeReestimate = null
     }
 
     /** Back from the review returns to the text, where you can estimate again or keep a draft. */
@@ -228,7 +249,7 @@ class DescribeViewModel @Inject constructor(
         if (description.isEmpty() || !claim()) return
         viewModelScope.launch {
             finishing {
-                keepDraft(description, reason = null)
+                draftId = ai.keepDraft(date, slot, draftId, description, origin.value, reason = null)
                 _outcome.value = DescribeOutcome("Kept as a draft in ${slotName()}. Estimate it once AI is ready.")
             }
         }
@@ -242,12 +263,6 @@ class DescribeViewModel @Inject constructor(
         } finally {
             if (_outcome.value == null) _busy.value = false
         }
-    }
-
-    /** One draft per description: estimating a draft again replaces it rather than adding another. */
-    private suspend fun keepDraft(description: String, reason: AiStatus?) {
-        draftId?.let { ai.deleteDraft(it) }
-        draftId = ai.saveDraft(date, slot, description, origin.value, reason)
     }
 
     fun update(index: Int, item: EstimatedItem) = editReview { items -> items.mapIndexed { i, r -> if (i == index) r.copy(current = item) else r } }
@@ -267,9 +282,10 @@ class DescribeViewModel @Inject constructor(
         if (review.items.isEmpty() || !claim()) return
         viewModelScope.launch {
             finishing {
-                val ids = log.logAiMeal(date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet())
-                if (mealName != null) log.saveMealOf(mealName, ids, slot)
-                draftId?.let { ai.deleteDraft(it) }
+                val ids = log.saveAiMeal(
+                    date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet(),
+                    mealName = mealName, draftId = draftId,
+                )
                 val totals = MealCheck.totals(review.items.map { it.current })
                 val n = review.items.size
                 _outcome.value = DescribeOutcome(
@@ -527,6 +543,9 @@ private fun ReviewStep(
                         Text("${review.items.size} ${if (review.items.size == 1) "item" else "items"} · ${FoodText.origin(origin)} · tap one to change it", style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
+            review.notice?.let { notice ->
+                item { Text(notice, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary) }
             }
             review.question?.let { q ->
                 item {

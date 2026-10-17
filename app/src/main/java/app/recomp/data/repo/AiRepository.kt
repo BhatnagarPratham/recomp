@@ -3,7 +3,9 @@ package app.recomp.data.repo
 import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.db.AiDao
+import androidx.room.withTransaction
 import app.recomp.data.db.AiRequestLogEntity
+import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.prefs.AiSettings
@@ -51,8 +53,17 @@ data class AiSpend(val month: LocalDate, val costUsd: Double, val requests: Int)
 sealed interface EstimateResult {
     data class Estimated(val meal: CheckedMeal, val requestId: Long) : EstimateResult
     data class NotReady(val state: AiState) : EstimateResult
-    data class Failed(val status: AiStatus, val requestId: Long?) : EstimateResult
+    /** [draftId] is the draft the description was kept as, when the caller asked for one (AI-02). */
+    data class Failed(val status: AiStatus, val requestId: Long?, val draftId: Long? = null) : EstimateResult
 }
+
+/**
+ * Where a failed estimate's description is kept (AI-02): a draft for [slot] on [date], updating [replacing] when it
+ * still exists. [keep] is asked once the reply is in; it says false when the caller stopped waiting (*Cancel*),
+ * which keeps nothing. The draft is written in the same non-cancellable step as the request's log row, so a screen
+ * that goes away mid-request never loses it.
+ */
+class DraftPlan(val date: LocalDate, val slot: String, val replacing: Long?, val keep: () -> Boolean = { true })
 
 /**
  * AI-01 to AI-03 and NU-17 (TRD §6.2): the gate, Describe it's requests and their log, drafts, and the AI settings.
@@ -61,6 +72,7 @@ sealed interface EstimateResult {
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class AiRepository @Inject constructor(
+    private val db: AppDatabase,
     private val aiDao: AiDao,
     private val foodDao: FoodDao,
     private val prefs: SettingsPrefs,
@@ -99,7 +111,7 @@ class AiRepository @Inject constructor(
      * Estimates one meal (NU-17). The request always runs to completion, even if the caller stops waiting
      * (*Cancel*), so its spend is logged; the caller then just ignores the result.
      */
-    suspend fun estimate(text: String, origin: Origin, clarification: Clarification? = null): EstimateResult = withContext(NonCancellable) {
+    suspend fun estimate(text: String, origin: Origin, clarification: Clarification? = null, draft: DraftPlan? = null): EstimateResult = withContext(NonCancellable) {
         // Check the gate and reserve the request's cost in one step, so requests made at the same time each see the
         // others' reservations and the cap holds (AI-03).
         val (request, pending) = sending.withLock {
@@ -130,7 +142,12 @@ class AiRepository @Inject constructor(
                 responseJson = reply.responseText,
             ),
         )
-        if (status == AiStatus.OK && checked != null) EstimateResult.Estimated(checked, pending.id) else EstimateResult.Failed(status, pending.id)
+        if (status == AiStatus.OK && checked != null) {
+            EstimateResult.Estimated(checked, pending.id)
+        } else {
+            val draftId = draft?.takeIf { it.keep() }?.let { keepDraft(it.date, it.slot, it.replacing, text, origin, status) }
+            EstimateResult.Failed(status, pending.id, draftId)
+        }
     }
 
     /** Serializes the gate check with the reservation it leads to. */
@@ -180,9 +197,23 @@ class AiRepository @Inject constructor(
     suspend fun draft(id: Long): MealDraftEntity? = aiDao.draft(id)
 
     /** Keeps a description to estimate later. [reason] is the failed request's status, or null when you saved it yourself. */
-    suspend fun saveDraft(date: LocalDate, slot: String, text: String, origin: Origin, reason: AiStatus?): Long {
+    suspend fun saveDraft(date: LocalDate, slot: String, text: String, origin: Origin, reason: AiStatus?): Long =
+        keepDraft(date, slot, replacing = null, text, origin, reason)
+
+    /**
+     * One draft per description: [replacing], when it still exists, is updated in place, in one transaction, rather
+     * than deleted and added again. Returns the draft's id.
+     */
+    suspend fun keepDraft(date: LocalDate, slot: String, replacing: Long?, text: String, origin: Origin, reason: AiStatus?): Long = db.withTransaction {
         require(text.isNotBlank()) { "Nothing to keep" }
-        return aiDao.insertDraft(MealDraftEntity(createdAt = clock.millis(), logDate = date, mealSlot = slot, text = text.trim(), origin = origin, reason = reason))
+        val row = MealDraftEntity(createdAt = clock.millis(), logDate = date, mealSlot = slot, text = text.trim(), origin = origin, reason = reason)
+        val existing = replacing?.let { aiDao.draft(it) }
+        if (existing != null) {
+            aiDao.updateDraft(row.copy(id = existing.id))
+            existing.id
+        } else {
+            aiDao.insertDraft(row)
+        }
     }
 
     /** Deletes a draft and returns it, so *Undo* can put it back with [restoreDraft]. */
