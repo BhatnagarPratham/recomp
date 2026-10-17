@@ -117,8 +117,12 @@ class BackupManager @Inject constructor(
 
     // Export
 
-    /** Writes the whole backup to [out] and closes it. */
+    /** Writes the whole backup to [out] and closes it, whether or not the export succeeds. */
     suspend fun export(out: OutputStream, now: Long = System.currentTimeMillis()): BackupManifest = withContext(Dispatchers.IO) {
+        out.use { exportTo(it, now) }
+    }
+
+    private suspend fun exportTo(out: OutputStream, now: Long): BackupManifest {
         val data = db.withTransaction { DatabaseSnapshot.read(db.openHelper.writableDatabase::query) }
         val settings = encodeSettings(prefs.exportable())
         val manifest = BackupManifest(FORMAT, FORMAT_VERSION, schemaVersion(), now, appVersion(), data.tables.mapValues { it.value.rows.size })
@@ -132,7 +136,7 @@ class BackupManager @Inject constructor(
             json.encodeToStream(settings, zip)
             zip.closeEntry()
         }
-        manifest
+        return manifest
     }
 
     // Import

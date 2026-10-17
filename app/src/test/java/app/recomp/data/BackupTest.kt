@@ -451,6 +451,26 @@ class BackupTest {
     }
 
     @Test
+    fun `a failed export still closes its file`() = runBlocking {
+        var closed = false
+        val out = object : ByteArrayOutputStream() {
+            override fun close() {
+                closed = true
+                super.close()
+            }
+        }
+        app.db.close()
+        try {
+            app.backup.export(out)
+            fail("Exported from a closed database")
+        } catch (e: Exception) {
+            // Expected: nothing to read.
+        }
+        assertTrue(closed)
+        app.restart()
+    }
+
+    @Test
     fun `the AI key never leaves its own store`() = runBlocking {
         fill()
         val planted = "planted-value-7310"

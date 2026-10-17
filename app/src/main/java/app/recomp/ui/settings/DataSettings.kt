@@ -2,6 +2,7 @@ package app.recomp.ui.settings
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -33,9 +34,12 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Where export and import stand (PRD §7.14). */
 sealed interface DataState {
@@ -76,16 +80,25 @@ class DataViewModel @Inject constructor(
         }
     }
 
+    /** A failed export leaves no half-written file behind with a backup's name. */
     fun export(uri: Uri) = run("Exporting…", "Not exported") {
-        // "wt" overwrites a file you picked again; a provider without it gets the plain mode.
         val resolver = context.contentResolver
-        val out = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull() ?: resolver.openOutputStream(uri) ?: throw IOException("no file")
-        val manifest = backups.export(out)
+        val manifest = try {
+            withContext(Dispatchers.IO) {
+                // "wt" overwrites a file you picked again; a provider without it gets the plain mode. A provider
+                // such as Drive may go over the network, so this stays off the main thread.
+                val out = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull() ?: resolver.openOutputStream(uri) ?: throw IOException("no file")
+                backups.export(out)
+            }
+        } catch (e: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) { runCatching { DocumentsContract.deleteDocument(resolver, uri) } }
+            throw e
+        }
         _state.value = DataState.Done("Exported", "Saved ${summary(manifest)}, and your settings.")
     }
 
     fun open(uri: Uri) = run("Checking the backup…", "Can't import this file") {
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("no file")
+        val input = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri) } ?: throw IOException("no file")
         _state.value = DataState.Confirm(backups.prepare(input), safetyCopy = false)
     }
 
