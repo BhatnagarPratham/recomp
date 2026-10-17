@@ -91,6 +91,22 @@ class IndbConverterTest {
     }
 
     @Test
+    fun `units too big to be a serving, or that just mean grams, are dropped`() {
+        val n = nutrients(
+            listOf("TST201", "Test big curry", "test", 100.0, 10.0, 4.0, 5.0, 1.0, "bowl", 700.0, 28.0),
+            listOf("TST202", "Test sauce", "test", 100.0, 10.0, 4.0, 5.0, 1.0, "gm", 3.0, 0.12),
+            listOf("TST203", "Test drink", "test", 50.0, 10.0, 1.0, 0.5, 0.0, "ml", 2.5, 0.05),
+            listOf("TST204", "Test thali", "test", 100.0, 10.0, 4.0, 5.0, 1.0, "plate", 500.0, 20.0),
+        )
+        val r = recipes(*listOf("TST201", "TST202", "TST203", "TST204").map { listOf(it, "Test", "Rice", "100", "g", "A014", "Rice", 100, "g") }.toTypedArray())
+        val units = IndbConverter.convert(n, r).foods.associate { it.key to it.units }
+        assertEquals(emptyList<Pair<String, Double>>(), units["indb:TST201"]) // 700 g
+        assertEquals(emptyList<Pair<String, Double>>(), units["indb:TST202"])
+        assertEquals(emptyList<Pair<String, Double>>(), units["indb:TST203"])
+        assertEquals(listOf("plate" to 500.0), units["indb:TST204"])
+    }
+
+    @Test
     fun `a recipe with no ingredients is tagged meat, so only non-vegetarians see it`() {
         val n = nutrients(listOf("ASC500", "Mystery dish", "asc", 100.0, 10.0, 5.0, 5.0, 1.0, "bowl", 200.0, 10.0))
         val result = IndbConverter.convert(n, recipes())

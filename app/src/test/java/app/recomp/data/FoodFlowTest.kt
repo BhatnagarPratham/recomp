@@ -278,6 +278,16 @@ class FoodFlowTest {
     }
 
     @Test
+    fun `a database food whose unit is too big to be a serving prefills 100 g`() = runBlocking {
+        persona(Diet.LACTO_VEGETARIAN)
+        seed(entry("indb:B1", "Test pot curry", FoodDiet.VEGAN, units = listOf(FoodFileUnit("bowl", 700.0))))
+        val choice = foods.portion(named("Test pot curry").id)!!
+        assertEquals("g", choice.unit.label)
+        assertEquals(100.0, choice.quantity, 0.0)
+        assertEquals("bowl", choice.units.first().label)
+    }
+
+    @Test
     fun `the day view totals each meal and edits scale an entry's own snapshot`() = runBlocking {
         onboard()
         seed()

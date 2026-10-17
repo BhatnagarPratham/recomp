@@ -23,6 +23,15 @@ data class PortionUnit(val label: String, val grams: Double, val kind: Kind) {
 object Portions {
     const val GRAMS = "g"
 
+    /** Above this, one unit is a whole pot or a family platter, not a serving: one tap could log a kilogram. */
+    const val MAX_UNIT_GRAMS = 500.0
+
+    /** Labels that just mean grams (1 ml counts as 1 g), so a food needs no unit for them. */
+    val GRAM_LABELS = setOf("g", "gm", "gms", "gram", "grams", "ml")
+
+    /** Whether one unit weighing [grams] is a believable serving to prefill. */
+    fun plausible(grams: Double): Boolean = grams in 1.0..MAX_UNIT_GRAMS
+
     /** Household measures every food offers, with their default weights. Calibrated in Settings → Food. */
     fun householdDefaults(region: FoodRegion): Map<String, Double> = when (region) {
         FoodRegion.INDIAN -> linkedMapOf("katori" to 150.0, "glass" to 250.0, "tbsp" to 15.0)

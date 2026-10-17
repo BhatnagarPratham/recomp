@@ -106,8 +106,9 @@ class FoodRepository @Inject constructor(
 
     /**
      * The portion sheet's prefill: what you logged for this food last time (amount, unit, origin) when
-     * that unit still exists, else one of its own servings, else 100 g. Origin defaults to Home, or
-     * Packaged for a food with a brand (NU-15).
+     * that unit still exists, else one of its own servings, else 100 g. A database food whose own unit is
+     * too big to be a serving prefills 100 g, so search, tap, Save never logs a whole pot. Origin defaults
+     * to Home, or Packaged for a food with a brand (NU-15).
      */
     suspend fun portion(foodId: Long): PortionChoice? {
         val food = foodDao.get(foodId) ?: return null
@@ -117,7 +118,8 @@ class FoodRepository @Inject constructor(
         val origin = last?.origin ?: if (food.brand != null) Origin.PACKAGED else Origin.HOME
         return when {
             last != null && lastUnit != null -> PortionChoice(food, units, last.quantity, lastUnit, origin)
-            units.first().kind == PortionUnit.Kind.OWN -> PortionChoice(food, units, 1.0, units.first(), origin)
+            units.first().kind == PortionUnit.Kind.OWN && (food.source == FoodSource.CUSTOM || Portions.plausible(units.first().grams)) ->
+                PortionChoice(food, units, 1.0, units.first(), origin)
             else -> PortionChoice(food, units, 100.0, units.last(), origin)
         }
     }

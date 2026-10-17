@@ -5,6 +5,7 @@ package app.recomp.domain.food.indb
 import app.recomp.domain.food.FoodCaveat
 import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.Per100g
+import app.recomp.domain.food.Portions
 import app.recomp.domain.persona.FoodRegion
 import java.io.File
 import java.util.Locale
@@ -36,8 +37,11 @@ data class Conversion(val foods: List<FoodRecord>, val skipped: List<String>) {
  * food records (TRD §6.4). Runs at build time only, from `:app:fetchIndb`; the data is never committed.
  */
 object IndbConverter {
-    /** Bumped when the output changes for the same input, so phones re-import. 2: tags read the recipe's own wording. */
-    const val FORMAT = 2
+    /**
+     * Bumped when the output changes for the same input, so phones re-import. 2: tags read the recipe's own
+     * wording. 3: implausible and gram-like units are dropped.
+     */
+    const val FORMAT = 3
 
     /** Fried recipes above this read far too high, because INDB counts all the frying oil as eaten. */
     const val FRYING_CAVEAT_KCAL = 250.0
@@ -86,7 +90,8 @@ object IndbConverter {
 
     /**
      * The recipe's serving unit, weighing per-serving energy ÷ per-100 g energy × 100 (or another macro
-     * when energy is zero). Null when it can't be weighed sensibly.
+     * when energy is zero). Null when it can't be weighed sensibly, when one unit is too big to be a serving
+     * (`Portions.MAX_UNIT_GRAMS`), or when the label just means grams.
      */
     private fun servingUnit(t: Table, row: List<String?>, per100: Per100g): Pair<String, Double>? {
         val pairs = listOf(
@@ -99,8 +104,9 @@ object IndbConverter {
             val serving = t[row, column]?.toDoubleOrNull()?.takeIf { it.isFinite() }
             if (serving != null && serving > 0 && per100g > 0) serving / per100g * 100 else null
         } ?: return null
-        if (grams !in 1.0..3000.0) return null
-        return unitLabel(t[row, "servings_unit"]) to grams.round(1)
+        val label = unitLabel(t[row, "servings_unit"])
+        if (!Portions.plausible(grams) || label in Portions.GRAM_LABELS) return null
+        return label to grams.round(1)
     }
 
     /** "Tablespoon" → "tbsp" so it doesn't sit beside the household tbsp; blank → "serving". */
