@@ -1,5 +1,6 @@
 package app.recomp.data.repo
 
+import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.prefs.DayBoundary
@@ -15,12 +16,13 @@ import app.recomp.domain.nutrition.WeekAverage
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToInt
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 
 /** Today's nutrition card (GL-07, GL-10, NU-02, NU-03). */
 data class TodayNutrition(
@@ -32,19 +34,30 @@ data class TodayNutrition(
     val week: WeekAverage?,
 )
 
+/** The targets in force on a day, with that day's protein after the ramp (NU-03). */
+data class DayTargets(val target: NutritionTargetEntity, val protein: ProteinGoal)
+
 /** Versioned targets, the protein ramp and Today's numbers (TRD §5.3, §5.9). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class NutritionRepository @Inject constructor(
     private val nutritionDao: NutritionDao,
+    private val foodLogDao: FoodLogDao,
     private val prefs: SettingsPrefs,
     private val days: DayBoundary,
 ) {
-    /**
-     * Food eaten per log date in [from]..[to], for days with food logged only.
-     * TODO(M3b): sum `food_log` by `log_date`. Until food logging exists nothing is ever logged.
-     */
-    fun observeIntake(from: LocalDate, to: LocalDate): Flow<Map<LocalDate, Intake>> = flowOf(emptyMap())
+    /** Food eaten per log date in [from]..[to] (`food_log` summed by `log_date`), for days with food logged only. */
+    fun observeIntake(from: LocalDate, to: LocalDate): Flow<Map<LocalDate, Intake>> =
+        foodLogDao.observeIntake(from, to).map { rows -> rows.associate { it.logDate to Intake(it.kcal.roundToInt(), it.proteinG.roundToInt()) } }
+
+    /** The day view's targets (NU-16): the version in force on [date] and its ramped protein. Null before any target. */
+    fun observeTargets(date: LocalDate): Flow<DayTargets?> = prefs.ramp.flatMapLatest { ramp ->
+        val from = minOf(ramp?.countFrom ?: date, date)
+        combine(nutritionDao.observeAll(), prefs.persona, observeIntake(from, date)) { targets, persona, intake ->
+            val target = targets.lastOrNull { !it.effectiveFrom.isAfter(date) } ?: return@combine null
+            DayTargets(target, ProteinRamp.goal(target.proteinG, persona.rampEnabled(), ramp, date, intake.mapValues { it.value.proteinG }))
+        }
+    }
 
     suspend fun targetOn(date: LocalDate): NutritionTargetEntity? = nutritionDao.targetOn(date)
 
@@ -75,7 +88,7 @@ class NutritionRepository @Inject constructor(
 
     /**
      * Locks the ramp's baseline once its week is found (TRD §5.3), so later edits to those days never
-     * move it. A no-op until M3b logs food.
+     * move it.
      */
     suspend fun lockRampBaseline() {
         val state = prefs.ramp.first() ?: return

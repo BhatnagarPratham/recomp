@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v0.8, 2026-10-17. Implements [PRD.md](PRD.md) v0.8. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v0.9, 2026-10-17. Implements [PRD.md](PRD.md) v0.9. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -111,17 +111,23 @@ body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CON
                     mins_since_meal, workout_before_scan, protocol_ok, image_path?, notes  -- IB-01/02
 measurement         id, log_date, type(WAIST|CHEST|ARM|THIGH|HIP|MOBILITY_*), value
 progress_photo      id, log_date, pose(FRONT|SIDE|BACK), file_path   -- app-private storage
-food                id, name, brand?, source(CUSTOM|IFCT|INDB|OFF|LABEL_OCR|AI), barcode?,
-                    diet(VEG|EGG|NON_VEG|VEGAN), kcal_100g, protein_100g, carbs_100g, fat_100g,
-                    fiber_100g, use_count, last_used_at, archived
-food_unit           id, food_id, label("roti","katori","piece"…), grams
-food_log            id, log_date, meal_slot, food_id?, name, quantity, unit_label, grams,
-                    kcal, protein_g, carbs_g, fat_g, fiber_g, origin(HOME|ORDERED|PACKAGED),
+food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR), barcode?,
+                    source_key?           -- unique: "seed:paneer", "indb:ASC001"; ties a row to its bundled file
+                    diet(VEGAN|VEGETARIAN|EGG|FISH|MEAT), region(INDIAN|INTERNATIONAL)?   -- null = every region
+                    kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g,
+                    caveat(FRYING_OIL)?, use_count, last_used_at?, archived, created_at
+food_fts            FTS4 over food.name, external content: Room's triggers keep it in sync with food
+food_unit           id, food_id, label("roti","katori","bowl"…), grams, calibrated   -- unique (food_id, label)
+food_log            id, log_date, meal_slot (a slot key, §6.4), food_id?, name, quantity, unit_label, grams?,
+                    kcal, protein_g, carbs_g?, fat_g?, fiber_g?, origin(HOME|ORDERED|PACKAGED),
                     source(MANUAL|SAVED_MEAL|QUICK_ADD|AI_TEXT|AI_PHOTO|LOCAL_PARSE|LABEL|BARCODE),
                     ai_request_id?, logged_at
+                                          -- null carbs, fat or fibre = unknown (quick add); a copy keeps its source
 meal_draft          id, created_at, log_date, meal_slot, text, photo_path?, origin  -- AI-02: estimate later
-saved_meal          id, name, default_slot, use_count
-saved_meal_item     id, saved_meal_id, food_id, quantity, unit_label, grams
+saved_meal          id, name, default_slot, use_count, last_used_at?, created_at
+saved_meal_item     id, saved_meal_id, position, food_id?, name, quantity, unit_label, grams?,
+                    kcal, protein_g, carbs_g?, fat_g?, fiber_g?, origin
+                                          -- with a food, logging recomputes from it; without one (quick add), from the snapshot
 nutrition_target    id, effective_from (unique: one version per day), goal, kcal, protein_g, fat_g, carbs_g,
                     tdee_estimate, bmr_kcal, reason(INITIAL|CHECKIN|MANUAL), created_at
                                           -- protein_g is the full target; the ramp (§5.3) is applied on read
@@ -136,13 +142,14 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `persona`: the persona (§5.0) as JSON, including the goal plan, the training part (split, experience, strength days, extra-session schedules by routine id) and `onboarded_on`. Never body data, so PS-06 can export it as is.
 - `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
+- `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
 - Later: usual scan slot, AI mode (`OFF|ON`), AI model, monthly AI cap and reminder times.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
 A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
-**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet`.
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
@@ -419,7 +426,7 @@ main number, by goal:
 
 - Today's log date rolls over at the day boundary while the screen is open (`DayBoundary.observeToday`, which also re-checks every minute).
 - The secondary line shows the other of calories and protein. The average line shows how many days were logged, and is replaced by "appears once you log food" when none were.
-- Food logging arrives in M3b. Until then intake is 0 for every day (`NutritionRepository.intake`, `TODO(M3b)`), so Today shows the full targets and no average.
+- Intake is `food_log` summed per `log_date` (`NutritionRepository.observeIntake`). A day counts as logged once it has any entry.
 
 ## 6. Key technical flows
 
@@ -549,20 +556,26 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 ### 6.4 Food data (database P0, scanning P1)
 
-- **Region databases (P0, NU-11).** Each `food` row carries `diet` tags, and search filters on the persona's diet.
+- **Region databases (P0, NU-11).** Each `food` row carries a diet tag, and search shows only the tags the persona's diet allows (`Diet.allows`): vegan → `VEGAN`; lacto-vegetarian → plus `VEGETARIAN` (dairy); eggetarian → plus `EGG`; pescatarian → plus `FISH`; non-vegetarian → everything. A recipe takes its strictest ingredient's tag.
 - **Indian region: INDB**, the Indian Nutrient Databank ([GitHub](https://github.com/lindsayjaacks/Indian-Nutrient-Databank-INDB-), [paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC11277795/)).
-  - **What's in it:** 1,014 recipes plus about 1,095 raw items, with per-100 g and per-serving values for energy (kcal), protein, carbs, fat, fibre and more.
-  - **Never committed to this repo.** A Gradle task (`:app:fetchIndb`) downloads `INDB.xlsx` (about 1 MB) from the authors' repository at a pinned commit and checks its SHA-256. It converts the file into the prepopulated food asset, written under `build/`, and never commits it.
-  - **Why:** the authors' repository declares no licence, so redistributing the data from a public repo isn't safe. Fetching it from the source at build time is fine for personal builds.
-  - **Diet tags** are derived from ingredients (meat, fish, egg, dairy), because INDB has no vegetarian flag.
-  - **Indian units** come from INDB's serving sizes, plus your own calibration.
-  - **Licensing (checked 2026-10-17):** the paper is CC BY 4.0, and the authors describe the files as "publicly and freely available". Cite INDB in the app's About screen. Ask the authors before ever bundling the data in a distributed APK.
+  - **What's in it:** `INDB.xlsx` holds 1,014 recipes with per-100 g and per-serving values for energy (kcal), protein, carbs, fat, fibre and more, plus each recipe's serving unit. The raw items INDB was built from come from IFCT 2017, which isn't in the authors' repository, so they aren't imported; the protein-rich basics below cover the staples.
+  - **Never committed to this repo.** `:app:fetchIndb` downloads `INDB.xlsx` and `recipes.xlsx` (each recipe's ingredients, for the diet tags) from the authors' repository at commit `fbdb62bec519c6e2468582a799fb47e194b42558` and checks each file's SHA-256 (pinned in `app/build.gradle.kts`). Downloads are cached in Gradle's user home. The converter (`app.recomp.domain.food.indb`, run with `JavaExec` on the `:domain` classpath so it's tested with the domain) writes `food/indb.json` under `app/build/generated/indb/`, and the build adds that folder to the APK's assets.
+  - **Why:** the authors' repository declares no licence, so redistributing the data from a public repo isn't safe. Fetching it from the source at build time is fine for personal builds. `-Precomp.indb=false` builds without it (search then has the basics, your own foods and quick add); any APK published from this repo must be built that way unless the authors agree.
+  - **Diet tags** come from the ingredients, because INDB has no vegetarian flag. Ingredients carry IFCT food-group codes: `L` (milk products) is dairy, `M` egg, `N` and `O` meat, `P`, `Q`, `R` and `S` fish and shellfish. Exceptions by code: butter and ghee (`T500`, `T501`, `T506`), ice cream (`I501`), honey (`I507`, so not vegan), chocolate (`I509`), drinking chocolate (`V504`), white sauce, sour-cream dips, cook-in sauce and biscuits or wafers (`X506`, `X508`, `X500`, `U500`, `U509`) are dairy; gelatine (`K504`), chicken stock (`K506`) and jelly (`W501`) are meat; Worcestershire sauce (`X507`, anchovies) is fish; mayonnaise (`L507`) and thousand island (`X509`) are egg. INDB sometimes codes an animal ingredient as a vegetarian food ("chicken stock" as vegetable stock, "egg/milk" as milk), so egg, fish or meat named in the recipe's own wording (`ingredient_name_org`) lifts a coded ingredient; dairy words don't, or plain milk dishes would lose their vegan tag for nothing. Uncoded ingredients (essences, colours) are judged by both names: vegan, except jelly crystals (meat, for the gelatine). As a safety net, a recipe whose name says chicken, mutton, fish, prawn and the like is lifted to meat or fish. At the pinned commit: 288 vegan, 386 vegetarian, 173 egg, 25 fish and 142 meat recipes.
+  - **Fried recipes.** 132 recipes list oil "for frying", and INDB counts all of it as eaten, so fried dishes read two to three times too high. Those above 250 kcal per 100 g get the `FRYING_OIL` caveat (125 at the pinned commit): the UI warns, and search ranks them below other matches. INDB's yield and serving data don't allow a reliable correction (tried and dropped in M3b).
+  - **Indian units** come from INDB's serving unit for each recipe (bowl, plate, piece, parantha…), with grams = per-serving energy ÷ per-100 g energy × 100. A unit over 500 g (`Portions.MAX_UNIT_GRAMS`: a pot or platter, not a serving) or one that just means grams (gm, ml) is dropped, and a database food whose own unit is still implausible prefills 100 g. Some kept units still look odd; the portion sheet shows the grams and recalibrates them (`calibrated`, which re-imports leave alone).
+  - **Licensing (checked 2026-10-17):** the paper is CC BY 4.0, and the authors describe the files as "publicly and freely available". Settings → Food → Food data cites INDB. Ask the authors before ever bundling the data in a distributed APK.
   - **IFCT 2017 (NIN):** a free PDF with no stated open licence, covering raw foods only. It's a cited reference, not a data source. The community CSV port is AGPL-3.0.
 - **International region:** no bundled dataset in the MVP. Open Food Facts lookups (barcode and search, P1), custom foods, AI-learned items and quick add. A bundled generic dataset (e.g. USDA FoodData Central, public domain) is a candidate for v1.1.
-- **Protein-dense seeds per diet**, tagged so the protein nudge (NU-23) can rank them by protein per 100 kcal.
-  - Vegetarian: paneer, tofu, soya chunks, curd and hung curd, Greek yogurt, milk, whey, chana, rajma, moong, besan, peanuts.
-  - Vegan: the same list without dairy and whey.
+- **Protein-rich basics** (`assets/seed/foods.json`, committed): our own list, per 100 g, rounded from USDA FoodData Central (public domain), or from typical Indian pack labels where USDA has no entry (paneer, soya chunks, whey). Each has a diet tag, a region only where it's regional, and household units (a scoop of whey, an egg). They're `source = SEED`, so the protein nudge (NU-23) can rank them by protein per 100 kcal.
+  - Vegetarian: paneer (full-fat and low-fat), tofu, soya chunks, curd and hung curd, Greek yogurt, milk (whole, toned, double toned), whey, chana, rajma, moong, masoor, besan, peanuts.
+  - Vegan: the same list without dairy and whey, plus soy milk and peanut butter.
   - Other diets: add eggs, fish and meat.
+- **Import.** On launch, `FoodSeeder` upserts the basics and, when the build has it, INDB by `source_key`, but only when a file's version differs from `food_data_version`. Updates keep use counts, hidden foods and calibrated units. A food that disappears from a file is archived, never deleted, because log rows may point at it. Without INDB in the build, INDB rows already on the phone stay.
+- **Search (NU-11).** `food_fts MATCH` with each typed word as a prefix (`pan* tik*`), joined to `food` and filtered to unarchived rows whose diet the persona allows and whose region is null or the persona's. Order: foods you've logged first (most often, then most recently), then custom, AI-learned, the basics and INDB, with caveat foods last among those; then names that start with the query, then shorter names. An empty query lists recently used foods, or the basics for the diet when nothing has been logged yet. Hiding a food archives it.
+- **Units and portions (NU-12).** A food offers `g`, its own `food_unit` rows and the region's household measures (`portion_sizes`; Indian: katori 150 g, glass 250 g, tbsp 15 g; International: cup 240 g, tbsp 15 g; 1 ml counts as 1 g). Recalibrating a unit for one food writes a `calibrated` `food_unit` row, which beats the household default. A log row snapshots grams and macros: `kcal = kcal_100g × grams / 100`, and so on.
+- **Meal slots (NU-10)** are `{key, name, removed}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
+- **Saved meals and copy (NU-13).** Logging a saved meal inserts one row per item in a transaction (`source = SAVED_MEAL`); an item with a food recomputes from the food's current values. Copying a day or a meal re-inserts its rows on the target date with a new `logged_at`, keeping their macros, origin and source. Both bump the foods' `use_count` and `last_used_at`, and return the new ids for *Undo*.
 - **Label scan (P1, NU-19):**
   1. CameraX captures the label.
   2. ML Kit text recognition runs on-device.
@@ -608,7 +621,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | Layer | What | How |
 |-------|------|-----|
 | Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
-| Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), onboarding and Settings saves (target versions, overrides, same-day replace), the `training` → `persona` DataStore migration, migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds) | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
+| Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), onboarding and Settings saves (target versions, overrides, same-day replace), the `training` → `persona` DataStore migration, migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds), food search ranking and FTS sync, food logging, saved meals, copy, and Today's intake. The INDB converter and diet tags are domain tests over a synthetic workbook, so no test needs the real file. | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
 | AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit. The eval runs manually before changing the model or prompt. |
 | UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
 | Manual | A gym dogfood checklist before each release | |
@@ -673,6 +686,20 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Reinstall | ✅ Onboarding stayed done. |
 | Not run on the phone | A fresh install's equipment step and a split change, because both rebuild the phone's routines. The repository tests cover them. |
 
+**M3b results (2026-10-18, reference phone on Android 15, release build over M3a data):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M3a | ✅ Migration 4→5 ran with targets and history intact. Today gained *Log food* and the bottom bar gained Food. The first launch imported INDB's 1,014 recipes and the 28 basics. |
+| Diet filter | ✅ As the reference persona (lacto-vegetarian), the empty search listed only vegan and vegetarian basics, "chicken" found nothing, and "egg" found only eggless cakes and eggplant rice. |
+| Logging | ✅ An INDB dal prefilled its own bowl; 1½ katori marked Ordered showed the oil note and logged 225 g at the database's values. A quick add was corrected from the day view. |
+| Fried recipes | ✅ Every poori carried the frying-oil warning. |
+| Saved meal | ✅ Lunch saved as a meal, then logged into Dinner in one tap. |
+| Day view and Today | ✅ Per-meal totals, the macro split with "180 kcal from quick adds isn't split", and Today switching recomp's main number to the ramp's measuring week once food was logged. |
+| Custom food | ✅ A per-serving food (1 piece = 60 g) opened its portion sheet at 210 kcal. |
+| Settings → Food | ✅ Meals, portion sizes and the food data note. |
+| Not run on the phone | Copy from another day (the phone had no earlier day with food) and the 7-day average with food; the repository tests cover both. The test entries and saved meal were deleted afterwards, and the test food hidden. |
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
@@ -691,5 +718,5 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 
 1. **Model for text logging:** Opus 5.5 (default) or Haiku 5.5. Decide on latency with the eval set; cost matters only on pay-as-you-go. *(AI access is settled: an API key funded by those credits.)*
 2. ~~**Exercise seed data**~~ *Settled in M1:* 81 hand-written entries in `assets/seed/exercises.json`, so there's no third-party licence to track.
-3. **Indian food database:** INDB, fetched at build time (§6.4). Remaining work: the download-and-convert Gradle task and the diet tagging, in M3.
+3. ~~**Indian food database**~~ *Settled in M3b:* INDB, fetched at build time with diet tags from ingredient codes (§6.4). Open: ask the authors about bundling, and whether a fried-recipe correction exists.
 4. **Package name and app name:** "Recomp" is a placeholder.

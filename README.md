@@ -14,8 +14,9 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M1: training core: exercise library, split templates, rotation, the active workout with a lock-screen rest timer, summary and extra-session logging.
 > - M2: progression: targets for every exercise, live feedback, PRs, stall detection and exercise history.
 > - M3a: personas and targets: presets and onboarding, the goal flow with guardrails, Settings, versioned calorie and macro targets with a protein ramp, and a goal-driven Today screen.
+> - M3b: food logging: a Food tab with meals, search over the Indian Nutrient Databank and protein-rich basics filtered to your diet, custom foods with portion units you can calibrate, saved meals, copy, quick add and origin tags.
 >
-> Food logging (M3b) and AI meal logging (M3c) are next. See the milestones in the TRD.
+> AI meal logging (M3c) is next. See the milestones in the TRD.
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 
@@ -55,14 +56,19 @@ You need:
    ```bash
    git config core.hooksPath .githooks
    ```
-4. Build, test and install:
+4. **Indian food data:** each build downloads [INDB](https://github.com/lindsayjaacks/Indian-Nutrient-Databank-INDB-) at a pinned commit, checks its SHA-256 and converts it into the app's food database under `build/` (`./gradlew :app:fetchIndb` does just that step). Its repository has no licence, so the data is never committed, and any APK you share or publish must be built without it:
+   ```bash
+   ./gradlew :app:assembleRelease -Precomp.indb=false
+   ```
+   Without INDB, search has the protein-rich basics, your own foods and quick add.
+5. Build, test and install:
    ```bash
    ./gradlew :domain:test              # pure-Kotlin engine tests
    ./gradlew :app:testDebugUnitTest    # Room, migration and seed-data tests (Robolectric)
    ./gradlew :app:assembleRelease      # minified APK (debug-signed for now)
    adb install -r app/build/outputs/apk/release/app-release.apk
    ```
-5. **AI (optional):** create an API key in the [Claude Console](https://platform.claude.com) and paste it into the app. A claude.ai subscription login can't be used by apps, but [Max plans include monthly API credits](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers) that can fund the key. Give the key its own workspace with a spend limit.
+6. **AI (optional):** create an API key in the [Claude Console](https://platform.claude.com) and paste it into the app. A claude.ai subscription login can't be used by apps, but [Max plans include monthly API credits](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers) that can fund the key. Give the key its own workspace with a spend limit.
 
 ## Privacy hooks
 

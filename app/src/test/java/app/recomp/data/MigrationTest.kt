@@ -4,8 +4,15 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.FoodEntity
+import app.recomp.data.db.FoodLogEntity
+import app.recomp.data.db.FoodUnitEntity
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.TargetReason
+import app.recomp.domain.food.FoodDiet
+import app.recomp.domain.food.FoodSource
+import app.recomp.domain.food.LogSource
+import app.recomp.domain.food.Origin
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.nutrition.Goal
 import java.io.File
@@ -48,6 +55,8 @@ class MigrationTest {
             val table = e.getValue("tableName").jsonPrimitive.content
             db.execSQL(e.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table))
             e["indices"]?.jsonArray?.forEach { db.execSQL(it.jsonObject.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table)) }
+            // FTS tables keep their content table in sync with triggers (v5's food_fts).
+            e["contentSyncTriggers"]?.jsonArray?.forEach { db.execSQL(it.jsonPrimitive.content) }
         }
         s.getValue("setupQueries").jsonArray.forEach { db.execSQL(it.jsonPrimitive.content) }
         db.version = version
@@ -150,6 +159,51 @@ class MigrationTest {
             assertEquals(2050, dao.targetOn(LocalDate.of(2026, 10, 19))!!.kcal)
             assertEquals(2000, dao.targetOn(LocalDate.of(2026, 11, 1))!!.kcal)
             assertNull(dao.targetOn(LocalDate.of(2026, 10, 16)))
+        }
+        room.close()
+    }
+
+    @Test
+    fun `4 to 5 keeps targets and adds foods with a working full-text index`() {
+        val file = File(tmp.root, "v4.db")
+        createAt(4, file).use { db ->
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL(
+                "INSERT INTO nutrition_target (effective_from, goal, kcal, protein_g, fat_g, carbs_g, tdee_estimate, bmr_kcal, reason, created_at) " +
+                    "VALUES ('2026-10-17', 'RECOMP', 2090, 125, 58, 267, 2611, 1899, 'INITIAL', 1)",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(2090, room.nutritionDao().targetOn(LocalDate.of(2026, 10, 18))!!.kcal)
+            assertEquals(1, room.workoutDao().session(1)!!.id)
+
+            val foods = room.foodDao()
+            fun food(name: String, key: String) = FoodEntity(
+                name = name, source = FoodSource.SEED, sourceKey = key, diet = FoodDiet.VEGETARIAN,
+                kcal100g = 280.0, protein100g = 18.0, carbs100g = 2.0, fat100g = 22.0, fiber100g = 0.0, createdAt = 1,
+            )
+            val veg = listOf(FoodDiet.VEGAN.name, FoodDiet.VEGETARIAN.name)
+            val paneer = foods.insert(food("Paneer", "seed:paneer"))
+            foods.insert(food("Paneer tikka", "seed:tikka"))
+            assertEquals(listOf("Paneer", "Paneer tikka"), foods.search("pan*", "pan", veg, "INDIAN", 10).map { it.name })
+
+            // The migration's triggers keep the index in sync with edits.
+            foods.update(foods.get(paneer)!!.copy(name = "Cottage cheese"))
+            assertEquals(listOf("Paneer tikka"), foods.search("pan*", "pan", veg, "INDIAN", 10).map { it.name })
+            assertEquals(listOf("Cottage cheese"), foods.search("cott*", "cott", veg, "INDIAN", 10).map { it.name })
+
+            foods.upsertUnits(listOf(FoodUnitEntity(foodId = paneer, label = "piece", grams = 25.0)))
+            assertEquals(25.0, foods.units(paneer).single().grams, 0.0)
+            val log = room.foodLogDao()
+            log.insert(
+                FoodLogEntity(
+                    logDate = LocalDate.of(2026, 10, 18), mealSlot = "lunch", foodId = paneer, name = "Paneer", quantity = 2.0, unitLabel = "piece",
+                    grams = 50.0, kcal = 140.0, proteinG = 9.0, carbsG = 1.0, fatG = 11.0, fiberG = 0.0, origin = Origin.HOME,
+                    source = LogSource.MANUAL, loggedAt = 1,
+                ),
+            )
+            assertEquals(140.0, log.day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
         }
         room.close()
     }

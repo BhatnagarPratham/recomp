@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SettingsStore
+import app.recomp.domain.food.MealSlot
+import app.recomp.domain.food.MealSlots
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.domain.nutrition.Pace
@@ -173,6 +175,16 @@ data class StoredRamp(
     }
 }
 
+/** A meal slot as stored under `meal_slots` (NU-10). */
+@Serializable
+data class StoredMealSlot(val key: String, val name: String, val removed: Boolean = false) {
+    fun toSlot() = MealSlot(key, name, removed)
+
+    companion object {
+        fun of(slot: MealSlot) = StoredMealSlot(slot.key, slot.name, slot.removed)
+    }
+}
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -193,6 +205,13 @@ internal object SettingsKeys {
     val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
     val TARGET_OVERRIDES = stringPreferencesKey("target_overrides")
     val PROTEIN_RAMP = stringPreferencesKey("protein_ramp")
+    val MEAL_SLOTS = stringPreferencesKey("meal_slots")
+
+    /** Household measures you calibrated, label → grams (NU-12). Missing labels use the region's defaults. */
+    val PORTION_SIZES = stringPreferencesKey("portion_sizes")
+
+    /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
+    val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
 
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
@@ -259,6 +278,8 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         if (unreadable<StoredProfile>(SettingsKeys.PROFILE)) add(SettingsKeys.PROFILE)
         if (unreadable<StoredOverrides>(SettingsKeys.TARGET_OVERRIDES)) add(SettingsKeys.TARGET_OVERRIDES)
         if (unreadable<StoredRamp>(SettingsKeys.PROTEIN_RAMP)) add(SettingsKeys.PROTEIN_RAMP)
+        if (unreadable<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)) add(SettingsKeys.MEAL_SLOTS)
+        if (unreadable<Map<String, Double>>(SettingsKeys.PORTION_SIZES)) add(SettingsKeys.PORTION_SIZES)
     }
 
     /** Copies each unreadable value aside (once) before a write could replace it with a default. */
@@ -285,6 +306,19 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         store.data.map { it.decode<StoredOverrides>(SettingsKeys.TARGET_OVERRIDES)?.toOverrides() ?: TargetOverrides() }.distinctUntilChanged()
 
     val ramp: Flow<RampState?> = store.data.map { it.decode<StoredRamp>(SettingsKeys.PROTEIN_RAMP)?.toState() }.distinctUntilChanged()
+
+    /** NU-10: the default four until you edit them. */
+    val mealSlots: Flow<List<MealSlot>> = store.data.map { prefs ->
+        prefs.decode<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)?.map { it.toSlot() }?.takeIf { it.isNotEmpty() } ?: MealSlots.DEFAULT
+    }.distinctUntilChanged()
+
+    /** NU-12: household measures you calibrated. */
+    val portionSizes: Flow<Map<String, Double>> =
+        store.data.map { it.decode<Map<String, Double>>(SettingsKeys.PORTION_SIZES) ?: emptyMap() }.distinctUntilChanged()
+
+    suspend fun foodDataVersion(): String? = store.data.first()[SettingsKeys.FOOD_DATA_VERSION]
+
+    suspend fun setFoodDataVersion(version: String) = store.edit { it[SettingsKeys.FOOD_DATA_VERSION] = version }
 
     val training: Flow<TrainingSettings> = store.data.map { prefs ->
         val p = prefs.decode<StoredPersona>(SettingsKeys.PERSONA) ?: StoredPersona()
@@ -325,6 +359,17 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (overrides.isEmpty) prefs.remove(SettingsKeys.TARGET_OVERRIDES)
             else prefs[SettingsKeys.TARGET_OVERRIDES] = settingsJson.encodeToString(StoredOverrides.of(overrides))
         }
+
+        var mealSlots: List<MealSlot>
+            get() = prefs.decode<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)?.map { it.toSlot() }?.takeIf { it.isNotEmpty() } ?: MealSlots.DEFAULT
+            set(value) { prefs[SettingsKeys.MEAL_SLOTS] = settingsJson.encodeToString(value.map(StoredMealSlot::of)) }
+
+        var portionSizes: Map<String, Double>
+            get() = prefs.decode<Map<String, Double>>(SettingsKeys.PORTION_SIZES) ?: emptyMap()
+            set(value) {
+                if (value.isEmpty()) prefs.remove(SettingsKeys.PORTION_SIZES)
+                else prefs[SettingsKeys.PORTION_SIZES] = settingsJson.encodeToString(value)
+            }
 
         fun setRamp(state: RampState?) {
             if (state == null) prefs.remove(SettingsKeys.PROTEIN_RAMP)

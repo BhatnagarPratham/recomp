@@ -94,4 +94,67 @@ object Migrations {
             db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_nutrition_target_effective_from` ON `nutrition_target` (`effective_from`)")
         }
     }
+
+    /** M3b, food logging: foods with a full-text index, their units, the food log and saved meals. SQL from schemas/5.json. */
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `food` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `brand` TEXT, " +
+                    "`source` TEXT NOT NULL, `barcode` TEXT, `source_key` TEXT, `diet` TEXT NOT NULL, `region` TEXT, `kcal_100g` REAL NOT NULL, " +
+                    "`protein_100g` REAL NOT NULL, `carbs_100g` REAL NOT NULL, `fat_100g` REAL NOT NULL, `fiber_100g` REAL NOT NULL, `caveat` TEXT, " +
+                    "`use_count` INTEGER NOT NULL, `last_used_at` INTEGER, `archived` INTEGER NOT NULL, `created_at` INTEGER NOT NULL)",
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_food_source_key` ON `food` (`source_key`)")
+
+            // External-content FTS4 over food.name; Room's triggers keep it in sync (Room creates them itself only on a fresh install).
+            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `food_fts` USING FTS4(`name` TEXT NOT NULL, content=`food`)")
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_food_fts_BEFORE_UPDATE BEFORE UPDATE ON `food` " +
+                    "BEGIN DELETE FROM `food_fts` WHERE `docid`=OLD.`rowid`; END",
+            )
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_food_fts_BEFORE_DELETE BEFORE DELETE ON `food` " +
+                    "BEGIN DELETE FROM `food_fts` WHERE `docid`=OLD.`rowid`; END",
+            )
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_food_fts_AFTER_UPDATE AFTER UPDATE ON `food` " +
+                    "BEGIN INSERT INTO `food_fts`(`docid`, `name`) VALUES (NEW.`rowid`, NEW.`name`); END",
+            )
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_food_fts_AFTER_INSERT AFTER INSERT ON `food` " +
+                    "BEGIN INSERT INTO `food_fts`(`docid`, `name`) VALUES (NEW.`rowid`, NEW.`name`); END",
+            )
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `food_unit` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `food_id` INTEGER NOT NULL, " +
+                    "`label` TEXT NOT NULL, `grams` REAL NOT NULL, `calibrated` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_food_unit_food_id_label` ON `food_unit` (`food_id`, `label`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `food_log` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, " +
+                    "`meal_slot` TEXT NOT NULL, `food_id` INTEGER, `name` TEXT NOT NULL, `quantity` REAL NOT NULL, `unit_label` TEXT NOT NULL, " +
+                    "`grams` REAL, `kcal` REAL NOT NULL, `protein_g` REAL NOT NULL, `carbs_g` REAL, `fat_g` REAL, `fiber_g` REAL, " +
+                    "`origin` TEXT NOT NULL, `source` TEXT NOT NULL, `ai_request_id` INTEGER, `logged_at` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_food_log_log_date` ON `food_log` (`log_date`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_food_log_food_id` ON `food_log` (`food_id`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `saved_meal` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, " +
+                    "`default_slot` TEXT NOT NULL, `use_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL)",
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `saved_meal_item` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `saved_meal_id` INTEGER NOT NULL, " +
+                    "`position` INTEGER NOT NULL, `food_id` INTEGER, `name` TEXT NOT NULL, `quantity` REAL NOT NULL, `unit_label` TEXT NOT NULL, " +
+                    "`grams` REAL, `kcal` REAL NOT NULL, `protein_g` REAL NOT NULL, `carbs_g` REAL, `fat_g` REAL, `fiber_g` REAL, `origin` TEXT NOT NULL, " +
+                    "FOREIGN KEY(`saved_meal_id`) REFERENCES `saved_meal`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                    "FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_saved_meal_item_saved_meal_id` ON `saved_meal_item` (`saved_meal_id`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_saved_meal_item_food_id` ON `saved_meal_item` (`food_id`)")
+        }
+    }
 }
