@@ -190,7 +190,20 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
         return body.check(form.at, since.minutes, form.workout, slot)
     }
 
-    suspend fun save(): ScanSaved? = _form.value.input()?.let { body.saveScan(it, _form.value.id) }
+    /** True while a save runs, so a second tap can't save the scan twice. */
+    private val _saving = MutableStateFlow(false)
+    val saving: StateFlow<Boolean> = _saving
+
+    suspend fun save(): ScanSaved? {
+        if (_saving.value) return null
+        val input = _form.value.input() ?: return null
+        _saving.value = true
+        return try {
+            body.saveScan(input, _form.value.id).also { saved -> _form.update { it.copy(id = saved.id) } }
+        } finally {
+            _saving.value = false
+        }
+    }
 
     suspend fun delete() = _form.value.id?.let { body.deleteScan(it) }
 }
@@ -206,6 +219,7 @@ private val SEGMENTS = listOf("Right arm", "Left arm", "Trunk", "Right leg", "Le
 fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
     val form by viewModel.form.collectAsStateWithLifecycle()
     val slot by viewModel.slot.collectAsStateWithLifecycle()
+    val saving by viewModel.saving.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var slotSet by remember { mutableStateOf<ScanSlot?>(null) }
     var deleting by remember { mutableStateOf(false) }
@@ -307,7 +321,7 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
                         if (saved.slotSet != null) slotSet = saved.slotSet else onDone()
                     }
                 },
-                enabled = input != null,
+                enabled = input != null && !saving,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Save scan") }
             if (form.id != null) {

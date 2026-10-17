@@ -183,11 +183,15 @@ class BodyRepository @Inject constructor(
         }
         val check = check(input.measuredAt, input.minsSinceMeal, input.workoutBefore, slot)
         val logDate = days.of(input.measuredAt)
-        val row = BodyCompositionEntity(
-            id = id ?: 0,
+        // An edit keeps what the form doesn't show, such as where the scan came from (IB-03, IB-07).
+        val existing = id?.let { bodyDao.scan(it) }
+        val base = existing ?: BodyCompositionEntity(
+            measuredAt = 0, logDate = logDate, source = ScanSource.MANUAL, weightG = 0, skeletalMuscleG = 0, bodyFatG = 0, bodyFatPct = 0.0,
+            visceralFatLevel = 0.0, minsSinceMeal = 0, workoutBeforeScan = false, minsFromSlot = null, protocolOk = false,
+        )
+        val row = base.copy(
             measuredAt = input.measuredAt,
             logDate = logDate,
-            source = ScanSource.MANUAL,
             weightG = input.weightG,
             skeletalMuscleG = input.skeletalMuscleG,
             bodyFatG = input.bodyFatG,
@@ -204,7 +208,7 @@ class BodyRepository @Inject constructor(
             notes = input.notes?.trim()?.takeIf { it.isNotEmpty() },
         )
         val saved = db.withTransaction {
-            val scanId = if (id == null) bodyDao.insert(row) else row.id.also { bodyDao.update(row) }
+            val scanId = if (existing == null) bodyDao.insert(row) else row.id.also { bodyDao.update(row) }
             val weighIn = bodyDao.weighInForScan(scanId)
             val fresh = BodyWeightEntity(logDate = logDate, measuredAt = input.measuredAt, weightG = input.weightG, source = WeightSource.SCAN, scanId = scanId)
             if (weighIn == null) bodyDao.insert(fresh) else bodyDao.update(fresh.copy(id = weighIn.id))

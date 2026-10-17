@@ -101,8 +101,10 @@ class DataViewModel @Inject constructor(
             } catch (e: BackupException) {
                 backups.discard(confirm.backup)
                 throw e
+            } finally {
+                // A failure after the safety copy was written still leaves a new copy to restore.
+                _safetyCopy.value = backups.safetyCopyDate()
             }
-            _safetyCopy.value = backups.safetyCopyDate()
             _state.value = DataState.Done("Imported", "Your data is now the backup's: ${summary(confirm.backup.manifest)}.")
         }
     }

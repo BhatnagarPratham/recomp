@@ -353,7 +353,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     /** PR-03. */
     val dayStart: Flow<LocalTime> = store.data.map { prefs ->
-        prefs[SettingsKeys.DAY_START_MINUTES]?.let { LocalTime.of(it / 60, it % 60) } ?: LogDates.DEFAULT_DAY_START
+        prefs[SettingsKeys.DAY_START_MINUTES]?.takeIf { it in 0 until 24 * 60 }?.let { LocalTime.of(it / 60, it % 60) } ?: LogDates.DEFAULT_DAY_START
     }.distinctUntilChanged()
 
     val overrides: Flow<TargetOverrides> =
@@ -371,11 +371,45 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         store.data.map { it.decode<Map<String, Double>>(SettingsKeys.PORTION_SIZES) ?: emptyMap() }.distinctUntilChanged()
 
     /** IB-02. Null until set; the first scan sets it. */
-    val scanSlot: Flow<ScanSlot?> = store.data.map { it.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.toSlot() }.distinctUntilChanged()
+    val scanSlot: Flow<ScanSlot?> =
+        store.data.map { prefs -> prefs.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.let { runCatching { it.toSlot() }.getOrNull() } }.distinctUntilChanged()
 
     suspend fun setScanSlot(slot: ScanSlot) = store.edit { prefs ->
         prefs.keepUnreadable()
         prefs[SettingsKeys.SCAN_SLOT] = settingsJson.encodeToString(StoredScanSlot.of(slot))
+    }
+
+    /**
+     * The settings in [prefs] this version can't use (TRD §6.5): a known key holding the wrong type, JSON that
+     * doesn't decode, or a value out of range. Import refuses a backup with any, so a bad file can't stop the
+     * app from starting.
+     */
+    fun problems(prefs: Preferences): List<String> {
+        val values = prefs.asMap().mapKeys { it.key.name }
+        fun wrongType(key: Preferences.Key<*>, type: kotlin.reflect.KClass<*>) = values[key.name]?.let { !type.isInstance(it) } ?: false
+        fun <T> decodes(key: Preferences.Key<String>, decode: (String) -> T, valid: (T) -> Boolean = { true }): Boolean =
+            (values[key.name] as? String)?.let { text -> runCatching { valid(decode(text)) }.getOrDefault(false) } ?: true
+        val strings = listOf(
+            SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
+            SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
+            SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL,
+        )
+        return buildList {
+            strings.filter { wrongType(it, String::class) }.forEach { add(it.name) }
+            if (wrongType(SettingsKeys.DAY_START_MINUTES, Int::class) || (values[SettingsKeys.DAY_START_MINUTES.name] as? Int)?.let { it !in 0 until 24 * 60 } == true) {
+                add(SettingsKeys.DAY_START_MINUTES.name)
+            }
+            if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
+            if (wrongType(SettingsKeys.AI_MONTHLY_CAP_USD, Double::class)) add(SettingsKeys.AI_MONTHLY_CAP_USD.name)
+            if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
+            if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it) })) add(SettingsKeys.PERSONA.name)
+            if (!decodes(SettingsKeys.PROFILE, { settingsJson.decodeFromString<StoredProfile>(it).toProfile() })) add(SettingsKeys.PROFILE.name)
+            if (!decodes(SettingsKeys.TARGET_OVERRIDES, { settingsJson.decodeFromString<StoredOverrides>(it) })) add(SettingsKeys.TARGET_OVERRIDES.name)
+            if (!decodes(SettingsKeys.PROTEIN_RAMP, { settingsJson.decodeFromString<StoredRamp>(it) })) add(SettingsKeys.PROTEIN_RAMP.name)
+            if (!decodes(SettingsKeys.MEAL_SLOTS, { settingsJson.decodeFromString<List<StoredMealSlot>>(it) })) add(SettingsKeys.MEAL_SLOTS.name)
+            if (!decodes(SettingsKeys.PORTION_SIZES, { settingsJson.decodeFromString<Map<String, Double>>(it) })) add(SettingsKeys.PORTION_SIZES.name)
+            if (!decodes(SettingsKeys.SCAN_SLOT, { settingsJson.decodeFromString<StoredScanSlot>(it).toSlot() })) add(SettingsKeys.SCAN_SLOT.name)
+        }.distinct()
     }
 
     /** Every setting an export carries (DA-01, TRD §6.5): all of them except the ones that stay on the device. */

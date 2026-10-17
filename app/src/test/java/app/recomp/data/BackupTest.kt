@@ -8,11 +8,17 @@ import app.recomp.data.backup.BackupManifest
 import app.recomp.data.backup.DatabaseData
 import app.recomp.data.backup.DatabaseSnapshot
 import app.recomp.data.backup.SchemaItem
+import app.recomp.data.backup.SettingValue
+import app.recomp.data.db.AiRequestLogEntity
+import app.recomp.data.db.MealDraftEntity
+import app.recomp.data.db.readers
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ScanInput
 import app.recomp.data.repo.SegmentalLean
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
+import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.food.Origin
 import app.recomp.domain.food.PortionUnit
 import app.recomp.domain.model.SessionKind
@@ -36,6 +42,8 @@ import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -104,6 +112,18 @@ class BackupTest {
         )
         val yogaRoutine = app.training.observeExtras().first().single()
         app.workouts.logExtra(yogaRoutine, ExtraEntry("Hatha", 60, 3, "Hips"), now - dayMs)
+
+        // AI (M3c): a draft, a logged request and the AI settings.
+        app.prefs.setAiEnabled(true)
+        app.prefs.setAiMonthlyCap(5.0)
+        app.prefs.setAiNoticeSeen()
+        app.db.aiDao().insertDraft(MealDraftEntity(createdAt = now, logDate = today, mealSlot = "dinner", text = "paneer wrap", origin = Origin.ORDERED, reason = AiStatus.TIMEOUT))
+        app.db.aiDao().insertRequest(
+            AiRequestLogEntity(
+                createdAt = now, kind = AiKind.MEAL_TEXT, model = "claude-opus-5-5", inputTokens = 2_000, outputTokens = 900, cacheReadTokens = 0,
+                cacheWriteTokens = 1_500, costUsd = 0.0261, status = AiStatus.OK, latencyMs = 4_200, responseJson = "{\"items\":[]}",
+            ),
+        )
 
         // Body: weigh-ins from two sources, a waist, and a scan (which sets the usual slot).
         app.body.logWeighIn(80_100, WeightSource.HOME_SCALE, now - 3 * dayMs)
@@ -278,6 +298,59 @@ class BackupTest {
             assertTrue(e.message!!.startsWith("Finish or discard"))
         }
         app.backup.discard(prepared)
+    }
+
+    @Test
+    fun `every table is read back through Room before an import`() = runBlocking {
+        val tables = DatabaseSnapshot.dataTables(DatabaseSnapshot.schema(app.db.openHelper.writableDatabase::query)).toSet()
+        assertEquals(tables, app.db.backupCheckDao().readers().keys)
+    }
+
+    @Test
+    fun `a backup with a broken link, an unknown value or unreadable settings is refused`() = runBlocking {
+        fill()
+        val before = dump()
+        val good = entries(export())
+        val manifest = good.getValue(BackupManager.MANIFEST)
+        val data = json.decodeFromString<DatabaseData>(good.getValue(BackupManager.DATABASE))
+        fun withRows(table: String, edit: (List<String>, List<JsonElement>) -> List<JsonElement>): String {
+            val t = data.tables.getValue(table)
+            return json.encodeToString(data.copy(tables = data.tables + (table to t.copy(rows = t.rows.map { edit(t.columns, it) }))))
+        }
+        fun set(column: String, value: JsonElement) = { columns: List<String>, row: List<JsonElement> -> row.toMutableList().also { it[columns.indexOf(column)] = value } }
+
+        // A scan weigh-in whose scan isn't in the file.
+        val orphan = withRows("body_weight", set("scan_id", JsonPrimitive(999L)))
+        assertTrue(refused(zip(BackupManager.MANIFEST to manifest, BackupManager.DATABASE to orphan, BackupManager.SETTINGS to good.getValue(BackupManager.SETTINGS))).contains("point at rows"))
+        // A source this version doesn't know, as a newer build might write.
+        val unknown = withRows("body_weight", set("source", JsonPrimitive("SMART_SCALE")))
+        assertTrue(refused(zip(BackupManager.MANIFEST to manifest, BackupManager.DATABASE to unknown, BackupManager.SETTINGS to good.getValue(BackupManager.SETTINGS))).contains("can't read in body_weight"))
+        // Settings out of range or of the wrong kind.
+        val settings = json.decodeFromString<Map<String, SettingValue>>(good.getValue(BackupManager.SETTINGS))
+        listOf(
+            "day_start_minutes" to SettingValue("int", JsonPrimitive(99_999)),
+            "scan_slot" to SettingValue("string", JsonPrimitive("{\"day\":9,\"minutes\":600}")),
+            "keep_screen_on" to SettingValue("string", JsonPrimitive("yes")),
+        ).forEach { (key, bad) ->
+            val message = refused(zip(BackupManager.MANIFEST to manifest, BackupManager.DATABASE to good.getValue(BackupManager.DATABASE), BackupManager.SETTINGS to json.encodeToString(settings + (key to bad))))
+            assertTrue(message, message.contains(key))
+        }
+        assertEquals(before, dump())
+        // The app still writes normally afterwards.
+        assertTrue(app.body.logWeighIn(80_000, WeightSource.HOME_SCALE, System.currentTimeMillis()) > 0)
+    }
+
+    @Test
+    fun `the AI key never leaves its own store`() = runBlocking {
+        fill()
+        val planted = "planted-value-7310"
+        app.keys.save(planted)
+        val backup = export()
+        assertFalse(entries(backup).values.any { planted in it })
+        app.keys.clear()
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(backup)))
+        // Import never touches the key store either way.
+        assertNull(app.keys.key())
     }
 
     @Test

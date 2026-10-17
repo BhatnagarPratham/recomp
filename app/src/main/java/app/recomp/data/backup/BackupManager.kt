@@ -19,6 +19,7 @@ import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteStatement
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.readers
 import app.recomp.data.prefs.SettingsPrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
@@ -34,6 +35,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -129,13 +131,14 @@ class BackupManager @Inject constructor(
         val data = decode<DatabaseData>(entries[DATABASE] ?: throw BackupException.damaged("no database"))
         DatabaseSnapshot.validate(data)
         val settings = decodeSettings(entries[SETTINGS]?.let { decode<Map<String, SettingValue>>(it) } ?: emptyMap())
+        prefs.problems(settings).takeIf { it.isNotEmpty() }?.let { throw BackupException.damaged("settings this version can't read (${it.joinToString()})") }
 
         val scratch = File(context.cacheDir, "restore/scratch.db")
         scratch.parentFile!!.mkdirs()
         deleteDatabaseFiles(scratch)
         try {
             build(scratch, data, manifest.schemaVersion)
-            upgrade(scratch)
+            upgradeAndCheck(scratch)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             deleteDatabaseFiles(scratch)
@@ -150,7 +153,7 @@ class BackupManager @Inject constructor(
      * Replaces every table and setting with the backup's (TRD §6.5 steps 4 to 6): a safety copy first, then
      * one transaction for the database, then the settings.
      */
-    suspend fun restore(backup: PreparedBackup, now: Long = System.currentTimeMillis()) = withContext(Dispatchers.IO) {
+    suspend fun restore(backup: PreparedBackup, now: Long = System.currentTimeMillis()) = withContext(NonCancellable + Dispatchers.IO) {
         if (!backup.scratch.isFile) throw BackupException("This backup is no longer ready. Choose the file again.")
         if (db.workoutDao().active() != null) throw BackupException("Finish or discard the workout in progress first, then import.")
 
@@ -166,16 +169,25 @@ class BackupManager @Inject constructor(
                 tables.forEach { live.execSQL("DELETE FROM `$it`") }
                 tables.filter { it in sourceTables }.forEach { copy(source, live, it) }
                 DatabaseSnapshot.virtualTables(schema).forEach { live.execSQL("INSERT INTO `$it`(`$it`) VALUES('rebuild')") }
+                // Checked before the commit, so a broken link rolls back instead of failing the commit itself.
+                brokenLinks(live::query)?.let { throw BackupException.damaged("entries that point at rows it doesn't have ($it)") }
             }
         }
-        prefs.replaceAll(backup.settings)
+        try {
+            prefs.replaceAll(backup.settings)
+        } catch (e: Exception) {
+            throw BackupException(
+                "Your data was replaced, but the settings couldn't be (${e.message ?: e.javaClass.simpleName}). Restore the data from before the import in Settings → Data.",
+                e,
+            )
+        }
         deleteDatabaseFiles(backup.scratch)
     }
 
     /** When the safety copy was made, or null without one. */
     suspend fun safetyCopyDate(): Long? = withContext(Dispatchers.IO) {
         if (!safetyCopyFile.isFile) return@withContext null
-        runCatching { safetyCopyFile.inputStream().use(::unzip)[MANIFEST]?.let { decode<BackupManifest>(it).exportedAt } }.getOrNull()
+        runCatching { safetyCopyFile.inputStream().use { unzip(it, only = setOf(MANIFEST)) }[MANIFEST]?.let { decode<BackupManifest>(it).exportedAt } }.getOrNull()
     }
 
     suspend fun prepareSafetyCopy(): PreparedBackup = prepare(safetyCopyFile.inputStream())
@@ -225,18 +237,33 @@ class BackupManager @Inject constructor(
         }
     }
 
-    /** Room migrates an older backup with the real MIGRATIONS, then validates every table, or refuses it. */
-    private fun upgrade(file: File) {
+    /**
+     * Room migrates an older backup with the real MIGRATIONS and validates every table, or refuses it. Then every
+     * link between rows must hold, and every row must read back through Room's converters.
+     */
+    private suspend fun upgradeAndCheck(file: File) {
         val room = Room.databaseBuilder(context, AppDatabase::class.java, file.absolutePath)
             .addMigrations(*AppDatabase.MIGRATIONS)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .build()
         try {
-            room.openHelper.writableDatabase
+            val scratch = room.openHelper.writableDatabase
+            brokenLinks(scratch::query)?.let { throw BackupException.damaged("entries that point at rows it doesn't have ($it)") }
+            room.backupCheckDao().readers().forEach { (table, read) ->
+                try {
+                    read()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    throw BackupException.damaged("values this version can't read in $table", e)
+                }
+            }
         } finally {
             room.close()
         }
     }
+
+    /** The first table with a row whose foreign key points nowhere, or null when every link holds. */
+    private fun brokenLinks(query: (String) -> Cursor): String? = query("PRAGMA foreign_key_check").use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
     private fun copy(source: SQLiteDatabase, live: SupportSQLiteDatabase, table: String) {
         val sourceColumns = DatabaseSnapshot.columns({ source.rawQuery(it, null) }, table).toSet()
@@ -269,13 +296,14 @@ class BackupManager @Inject constructor(
 
     // The zip and its JSON
 
-    private fun unzip(input: InputStream): Map<String, String> = try {
+    /** The backup's entries ([only] those named, when given) as text. Others are skipped, never held in memory. */
+    private fun unzip(input: InputStream, only: Set<String> = ENTRIES): Map<String, String> = try {
         val entries = mutableMapOf<String, String>()
         var total = 0L
         ZipInputStream(input).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name in ENTRIES) {
+                if (entry.name in only) {
                     val bytes = ByteArrayOutputStream()
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
@@ -309,7 +337,8 @@ class BackupManager @Inject constructor(
         const val DATABASE = "database.json"
         const val SETTINGS = "settings.json"
         private val ENTRIES = setOf(MANIFEST, DATABASE, SETTINGS)
-        private const val MAX_BYTES = 512L * 1024 * 1024
+        /** Far above any real backup (a year of use is a few MB), and small enough to read into memory. */
+        private const val MAX_BYTES = 64L * 1024 * 1024
         const val NOT_A_BACKUP = "This file isn't a Recomp backup."
 
         /** `recomp-backup-2026-10-18.zip`. */
