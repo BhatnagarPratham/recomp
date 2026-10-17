@@ -98,8 +98,11 @@ class DataViewModel @Inject constructor(
     }
 
     fun open(uri: Uri) = run("Checking the backup…", "Can't import this file") {
-        val input = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri) } ?: throw IOException("no file")
-        _state.value = DataState.Confirm(backups.prepare(input), safetyCopy = false)
+        val prepared = withContext(Dispatchers.IO) {
+            val input = context.contentResolver.openInputStream(uri) ?: throw IOException("no file")
+            input.use { backups.prepare(it) }
+        }
+        _state.value = DataState.Confirm(prepared, safetyCopy = false)
     }
 
     fun openSafetyCopy() = run("Checking the copy…", "Can't restore the copy") {
