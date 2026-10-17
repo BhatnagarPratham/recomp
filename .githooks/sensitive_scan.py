@@ -49,6 +49,7 @@ BODY_METRICS = [
     re.compile(r"(?i)\b(bmr|tdee)\b\s*(is|of|was|=|:|~|≈)?\s*" + NUM + r"\d{1,2},?\d{3}\s?kcal"),
 ]
 SKIP_MARKER = "pii-ok"
+GITHUB_WEB_FLOW = "noreply@github.com"  # committer of GitHub's own merge commits; never a person
 
 BLOCKED_FILES = [
     "local.properties", ".env", ".env.*", "*.keystore", "*.jks", "*.p12", "*.pem", "*.key",
@@ -171,10 +172,13 @@ def mode_all(s: Scanner):
         for i, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
             s.scan_line(f"{path}:{i}", line, path)
     try:
-        emails = set(git("log", "--all", "--format=%ae%n%ce").split())
+        authors = set(git("log", "--all", "--format=%ae").split())
+        committers = set(git("log", "--all", "--format=%ce").split())
     except subprocess.CalledProcessError:
-        emails = set()  # no commits yet
-    for email in emails:
+        authors, committers = set(), set()  # no commits yet
+    # GitHub itself commits PR merge refs, web merges and squashes as noreply@github.com.
+    committers.discard(GITHUB_WEB_FLOW)
+    for email in authors | committers:
         s.check_identity_email("history", email)
 
 
