@@ -8,8 +8,10 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.ExerciseDao
+import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.WorkoutDao
+import app.recomp.data.prefs.LegacyTrainingMigration
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -48,10 +50,13 @@ object DatabaseModule {
     fun provideWorkoutDao(db: AppDatabase): WorkoutDao = db.workoutDao()
 
     @Provides
+    fun provideNutritionDao(db: AppDatabase): NutritionDao = db.nutritionDao()
+
+    @Provides
     @Singleton
     @SettingsStore
     fun provideSettingsStore(@ApplicationContext context: Context): DataStore<Preferences> =
-        PreferenceDataStoreFactory.create { context.preferencesDataStoreFile("settings") }
+        PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { context.preferencesDataStoreFile("settings") }
 
     @Provides
     @Singleton

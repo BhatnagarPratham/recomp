@@ -1,5 +1,10 @@
 package app.recomp.domain.nutrition
 
+import app.recomp.domain.persona.ActivityLevel
+import app.recomp.domain.persona.FinishLine
+import app.recomp.domain.persona.GoalPlan
+import app.recomp.domain.persona.Profile
+import java.time.LocalDate
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -95,5 +100,86 @@ class NutritionCalculatorTest {
     @Test(expected = IllegalArgumentException::class)
     fun `a policy cannot both lose and gain`() {
         GoalPolicy(Goal.RECOMP, lossRatePctPerWeek = 0.5, surplusFraction = 0.1, proteinGPerKg = 1.6)
+    }
+
+    // Where each number came from (PR-02)
+
+    @Test
+    fun `the breakdown explains vector A`() {
+        val t = NutritionCalculator.startingTargets(recomp)
+        assertEquals(BmrFormula.MIFFLIN_ST_JEOR, t.bmrFormula)
+        assertEquals(1.375, t.activityFactor, 0.0)
+        assertEquals(false, t.adjustmentCapped)
+        assertEquals(false, t.floored)
+        assertEquals(1900, t.floorKcal)
+        assertEquals(78.0, t.referenceKg, 0.0)
+        assertTrue(t.referenceIsGoalWeight)
+        assertEquals(1.6, t.proteinGPerKg, 0.0)
+        assertEquals(false, t.fatFromBodyWeight)
+    }
+
+    @Test
+    fun `the breakdown flags capped deficits and surpluses`() {
+        val b = NutritionCalculator.startingTargets(recomp.copy(policy = GoalPolicy.defaultFor(Goal.RECOMP, Pace.AGGRESSIVE), leanMassKg = 66.0))
+        assertEquals(BmrFormula.KATCH_MCARDLE, b.bmrFormula)
+        assertTrue(b.adjustmentCapped)
+        val greedy = NutritionCalculator.startingTargets(recomp.copy(policy = GoalPolicy(Goal.LEAN_BULK, surplusFraction = 0.30, proteinGPerKg = 1.6)))
+        assertTrue(greedy.adjustmentCapped)
+        assertEquals(false, NutritionCalculator.startingTargets(recomp.copy(policy = GoalPolicy.defaultFor(Goal.MAINTAIN))).adjustmentCapped)
+    }
+
+    @Test
+    fun `the breakdown flags the floor and fat from body weight`() {
+        val floored = NutritionCalculator.startingTargets(recomp.copy(activityFactor = 1.2, policy = GoalPolicy(Goal.FAT_LOSS, lossRatePctPerWeek = 1.0, proteinGPerKg = 2.0)))
+        assertTrue(floored.floored)
+
+        // A heavy reference weight with a modest intake: 0.6 g/kg beats 25% of calories.
+        val heavy = TargetInputs(Sex.FEMALE, 35, 165.0, trendWeightKg = 120.0, policy = GoalPolicy.defaultFor(Goal.FAT_LOSS))
+        val t = NutritionCalculator.startingTargets(heavy)
+        assertTrue(t.fatFromBodyWeight)
+        assertEquals(72, t.fatG)
+        assertEquals(false, t.referenceIsGoalWeight)
+    }
+
+    // Overrides (PR-02)
+
+    @Test
+    fun `a calorie override rescales fat and carbs fill the rest`() {
+        val t = NutritionCalculator.startingTargets(recomp, TargetOverrides(kcal = 2000))
+        assertEquals(2000, t.kcal)
+        assertEquals(125, t.proteinG)
+        assertEquals(56, t.fatG)
+        assertEquals(250, t.carbsG)
+        assertEquals(TargetOverrides(kcal = 2000), t.overrides)
+        // TDEE and the adjustment still describe the computed plan.
+        assertEquals(2611, t.tdeeKcal.roundToInt())
+    }
+
+    @Test
+    fun `a calorie override is held at the floor`() {
+        assertEquals(1900, NutritionCalculator.startingTargets(recomp, TargetOverrides(kcal = 1200)).kcal)
+    }
+
+    @Test
+    fun `protein and fat overrides leave calories alone and move carbs`() {
+        val protein = NutritionCalculator.startingTargets(recomp, TargetOverrides(proteinG = 150))
+        assertTargets(protein, 1899, 2611, -523, 2090, 150, 58, 242)
+        val fat = NutritionCalculator.startingTargets(recomp, TargetOverrides(fatG = 40))
+        assertTargets(fat, 1899, 2611, -523, 2090, 125, 40, 308)
+        assertEquals(false, fat.fatFromBodyWeight)
+    }
+
+    @Test
+    fun `carbs never go below zero`() {
+        assertEquals(0, NutritionCalculator.startingTargets(recomp, TargetOverrides(proteinG = 600)).carbsG)
+    }
+
+    @Test
+    fun `inputs come from the profile and goal plan on the day`() {
+        val profile = Profile(Sex.MALE, LocalDate.of(1996, 10, 18), 175.0, 95.0, ActivityLevel.MODERATE)
+        val plan = GoalPlan.of(Goal.RECOMP, Pace.STANDARD, 78.0, FinishLine.GoalWeight, LocalDate.of(2026, 10, 17))
+        // One day before the 30th birthday the age is still 29; on it, vector A exactly.
+        assertEquals(29, TargetInputs.from(profile, plan, LocalDate.of(2026, 10, 17)).ageYears)
+        assertEquals(recomp, TargetInputs.from(profile, plan, LocalDate.of(2026, 10, 18)))
     }
 }

@@ -89,7 +89,6 @@ class TodayViewModel @Inject constructor(
     private val workouts: WorkoutRepository,
     private val progression: ProgressionRepository,
 ) : ViewModel() {
-    private val today = workouts.today()
 
     private val active: Flow<ActiveCard?> = workouts.observeActive().flatMapLatest { session ->
         if (session == null) {
@@ -113,7 +112,9 @@ class TodayViewModel @Inject constructor(
         session?.let { LastCard(it.id, it.routineId?.let { id -> workouts.routine(id)?.name } ?: "Workout", it.logDate) }
     }
 
-    private val extras = combine(training.settings, training.observeExtras(), workouts.observeWeek(today)) { settings, extras, week ->
+    private val week = workouts.observeToday().flatMapLatest { today -> workouts.observeWeek(today).map { today to it } }
+
+    private val extras = combine(training.settings, training.observeExtras(), week) { settings, extras, (today, week) ->
         val plans = settings.extras.map { it.toPlan() }
         val due = WeeklyPlan.dueToday(today, week, plans).toSet()
         Triple(

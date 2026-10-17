@@ -4,8 +4,12 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.NutritionTargetEntity
+import app.recomp.data.db.TargetReason
 import app.recomp.domain.model.Equipment
+import app.recomp.domain.nutrition.Goal
 import java.io.File
+import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -106,6 +110,46 @@ class MigrationTest {
             assertEquals(false, bench.stallResetKeepsBaseline)
             assertEquals(1, room.workoutDao().exposureRows(3, 10).size)
             assertEquals(emptyList<Any>(), room.workoutDao().exerciseRecords(3))
+        }
+        room.close()
+    }
+
+    @Test
+    fun `3 to 4 keeps progression data and adds versioned targets`() {
+        val file = File(tmp.root, "v3.db")
+        createAt(3, file).use { db ->
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, " +
+                    "increment_g, default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, seed_key, " +
+                    "stall_reset_at, stall_reset_keeps_baseline) " +
+                    "VALUES (3, 'Bench press', 'chest', '[]', 'BARBELL', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 2500, 8, 12, 150, 0, 0, 0, 'bench_press', 5, 1)",
+            )
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL("INSERT INTO session_exercise (id, session_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec, user_overrode) VALUES (1, 1, 3, 0, 3, 8, 12, 150, 0)")
+            db.execSQL("INSERT INTO set_entry (id, session_exercise_id, set_index, set_type, load_g, reps, completed_at) VALUES (1, 1, 0, 'WORKING', 40000, 12, 1)")
+            db.execSQL("INSERT INTO personal_record (exercise_id, session_id, type, value, load_g, set_entry_id, achieved_at) VALUES (3, 1, 'MAX_LOAD', 40000, 40000, 1, 1)")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val bench = room.exerciseDao().get(3)!!
+            assertEquals(5L, bench.stallResetAt)
+            assertEquals(true, bench.stallResetKeepsBaseline)
+            assertEquals(1, room.workoutDao().exerciseRecords(3).size)
+
+            val dao = room.nutritionDao()
+            assertNull(dao.targetOn(LocalDate.of(2026, 10, 17)))
+            fun row(day: Int, kcal: Int) = NutritionTargetEntity(
+                effectiveFrom = LocalDate.of(2026, 10, day), goal = Goal.RECOMP, kcal = kcal, proteinG = 125, fatG = 58, carbsG = 267,
+                tdeeEstimate = 2611, bmrKcal = 1899, reason = TargetReason.INITIAL, createdAt = 1,
+            )
+            dao.upsert(row(17, 2090))
+            // Same day: replaced, not added (one version per day).
+            dao.upsert(row(17, 2050))
+            dao.upsert(row(20, 2000))
+            assertEquals(listOf(2050, 2000), dao.all().map { it.kcal })
+            assertEquals(2050, dao.targetOn(LocalDate.of(2026, 10, 19))!!.kcal)
+            assertEquals(2000, dao.targetOn(LocalDate.of(2026, 11, 1))!!.kcal)
+            assertNull(dao.targetOn(LocalDate.of(2026, 10, 16)))
         }
         room.close()
     }

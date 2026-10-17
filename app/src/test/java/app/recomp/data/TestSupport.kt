@@ -5,7 +5,11 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.db.AppDatabase
-import app.recomp.data.prefs.TrainingPrefs
+import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.prefs.LegacyTrainingMigration
+import app.recomp.data.prefs.SettingsPrefs
+import app.recomp.data.repo.NutritionRepository
+import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
@@ -25,7 +29,8 @@ object FileSeedSource : SeedSource {
 class TestApp(private val dir: File) {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val dbFile = File(dir, "recomp-test.db")
-    private val prefs = TrainingPrefs(PreferenceDataStoreFactory.create { File(dir, "settings.preferences_pb") })
+    val prefs = SettingsPrefs(PreferenceDataStoreFactory.create(migrations = listOf(LegacyTrainingMigration)) { File(dir, "settings.preferences_pb") })
+    val days = DayBoundary(prefs)
 
     lateinit var db: AppDatabase
         private set
@@ -34,6 +39,10 @@ class TestApp(private val dir: File) {
     lateinit var workouts: WorkoutRepository
         private set
     lateinit var progression: ProgressionRepository
+        private set
+    lateinit var personas: PersonaRepository
+        private set
+    lateinit var nutrition: NutritionRepository
         private set
 
     init {
@@ -46,8 +55,10 @@ class TestApp(private val dir: File) {
             .allowMainThreadQueries()
             .build()
         training = TrainingRepository(db, db.exerciseDao(), db.routineDao(), db.workoutDao(), FileSeedSource, prefs)
-        progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs)
-        workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression)
+        progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs, db.nutritionDao(), days)
+        workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression, days)
+        personas = PersonaRepository(prefs, db.nutritionDao(), training, days)
+        nutrition = NutritionRepository(db.nutritionDao(), prefs, days)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

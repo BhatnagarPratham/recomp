@@ -7,8 +7,11 @@ import app.recomp.data.db.ExerciseEntity
 import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.WorkoutDao
-import app.recomp.data.prefs.TrainingPrefs
+import app.recomp.data.db.NutritionDao
+import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.domain.model.SetType
+import app.recomp.domain.nutrition.EnergyBalance
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.ExerciseConfig
@@ -53,7 +56,9 @@ class ProgressionRepository @Inject constructor(
     private val workoutDao: WorkoutDao,
     private val exerciseDao: ExerciseDao,
     private val routineDao: RoutineDao,
-    private val prefs: TrainingPrefs,
+    private val prefs: SettingsPrefs,
+    private val nutritionDao: NutritionDao,
+    private val days: DayBoundary,
 ) {
     /** Completed exposures of an exercise, newest first. */
     suspend fun history(exerciseId: Long, limit: Int = HISTORY_LIMIT): List<Exposure> =
@@ -62,9 +67,14 @@ class ProgressionRepository @Inject constructor(
         }
 
     private suspend fun context(exercise: ExerciseEntity) = ProgressionContext(
-        experience = ExperiencePolicy.defaultFor(prefs.current().experience),
+        experience = ExperiencePolicy.defaultFor(prefs.currentTraining().experience),
+        inDeficit = inDeficit(),
         stallReset = exercise.stallResetAt?.let { StallReset(it, exercise.stallResetKeepsBaseline) },
     )
+
+    /** TRD §5.1: today's target against the TDEE estimate stored with it. False until there's a target. */
+    suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
+        nutritionDao.targetOn(days.of(now))?.let { EnergyBalance.inDeficit(it.kcal, it.tdeeEstimate) } ?: false
 
     suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int): Recommendation =
         ProgressionEngine.recommend(

@@ -12,17 +12,16 @@ import app.recomp.data.db.SetEntryEntity
 import app.recomp.data.db.WorkoutDao
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.db.YogaDetailEntity
+import app.recomp.data.prefs.DayBoundary
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
-import app.recomp.domain.training.LogDates
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.PlanRow
 import app.recomp.domain.training.PlanSession
 import app.recomp.domain.training.Prefill
 import app.recomp.domain.training.WeeklyPlan
 import java.time.LocalDate
-import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -40,8 +39,8 @@ class WorkoutRepository @Inject constructor(
     private val exerciseDao: ExerciseDao,
     private val training: TrainingRepository,
     private val progression: ProgressionRepository,
+    private val days: DayBoundary,
 ) {
-    private val zone: ZoneId get() = ZoneId.systemDefault()
 
     fun observeActive(): Flow<WorkoutSessionEntity?> = workoutDao.observeActive()
     suspend fun active(): WorkoutSessionEntity? = workoutDao.active()
@@ -55,7 +54,10 @@ class WorkoutRepository @Inject constructor(
             rows.map { PlanSession(it.logDate, it.kind, it.routineId) }
         }
 
-    fun today(now: Long = System.currentTimeMillis()): LocalDate = LogDates.of(now, zone)
+    /** Today's log date under the "day starts at" setting (PR-03). */
+    suspend fun today(now: Long = System.currentTimeMillis()): LocalDate = days.of(now)
+
+    fun observeToday(): Flow<LocalDate> = days.observeToday()
 
     /** The latest completed exposure of an exercise (TRD §4 hot query), for ghost values and "last time". */
     suspend fun lastExposure(exerciseId: Long): List<LoggedSet> {
@@ -67,7 +69,7 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun startRoutine(routineId: Long, now: Long = System.currentTimeMillis()): Long = db.withTransaction {
         workoutDao.active()?.let { throw WorkoutAlreadyActiveException(it.id) }
-        val sessionId = workoutDao.insertSession(newSession(routineId, now))
+        val sessionId = workoutDao.insertSession(newSession(routineId, now, days.of(now)))
         routineDao.exercises(routineId).forEachIndexed { position, row ->
             insertExercise(sessionId, row.exercise, position, row.entry.targetSets, row.entry.repMin, row.entry.repMax, row.entry.restSec)
         }
@@ -77,15 +79,15 @@ class WorkoutRepository @Inject constructor(
     /** An ad-hoc workout (RT-03): no routine, exercises added as you go. It doesn't move the rotation. */
     suspend fun startEmpty(now: Long = System.currentTimeMillis()): Long = db.withTransaction {
         workoutDao.active()?.let { throw WorkoutAlreadyActiveException(it.id) }
-        workoutDao.insertSession(newSession(routineId = null, now))
+        workoutDao.insertSession(newSession(routineId = null, now, days.of(now)))
     }
 
-    private fun newSession(routineId: Long?, now: Long) = WorkoutSessionEntity(
+    private fun newSession(routineId: Long?, now: Long, logDate: LocalDate) = WorkoutSessionEntity(
         routineId = routineId,
         kind = SessionKind.STRENGTH,
         status = SessionStatus.ACTIVE,
         startedAt = now,
-        logDate = LogDates.of(now, zone),
+        logDate = logDate,
     )
 
     private suspend fun insertExercise(
@@ -249,7 +251,7 @@ class WorkoutRepository @Inject constructor(
                 status = SessionStatus.COMPLETED,
                 startedAt = now - entry.durationMin * 60_000L,
                 endedAt = now,
-                logDate = LogDates.of(now, zone),
+                logDate = days.of(now),
                 notes = entry.notes?.ifBlank { null },
             ),
             YogaDetailEntity(sessionId = 0, style = entry.style, durationMin = entry.durationMin, intensity = entry.intensity),
