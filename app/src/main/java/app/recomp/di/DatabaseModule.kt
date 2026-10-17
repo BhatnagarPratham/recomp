@@ -8,8 +8,11 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.ExerciseDao
+import app.recomp.data.db.FoodDao
+import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.RoutineDao
+import app.recomp.data.db.SavedMealDao
 import app.recomp.data.db.WorkoutDao
 import app.recomp.data.prefs.LegacyTrainingMigration
 import dagger.Module
@@ -51,6 +54,15 @@ object DatabaseModule {
 
     @Provides
     fun provideNutritionDao(db: AppDatabase): NutritionDao = db.nutritionDao()
+
+    @Provides
+    fun provideFoodDao(db: AppDatabase): FoodDao = db.foodDao()
+
+    @Provides
+    fun provideFoodLogDao(db: AppDatabase): FoodLogDao = db.foodLogDao()
+
+    @Provides
+    fun provideSavedMealDao(db: AppDatabase): SavedMealDao = db.savedMealDao()
 
     @Provides
     @Singleton

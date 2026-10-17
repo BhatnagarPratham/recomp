@@ -190,6 +190,8 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
             "profile" -> "your body data"
             "target_overrides" -> "the targets you set yourself"
             "protein_ramp" -> "the protein ramp's progress"
+            "meal_slots" -> "your meal names"
+            "portion_sizes" -> "your portion sizes"
             else -> it
         }
     }

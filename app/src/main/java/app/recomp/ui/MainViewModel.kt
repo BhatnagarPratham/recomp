@@ -3,6 +3,7 @@ package app.recomp.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.WorkoutSessionEntity
+import app.recomp.data.food.FoodSeeder
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
@@ -34,7 +35,7 @@ sealed interface AppNav {
 }
 
 /**
- * Activity-wide work: seeding the library, whether onboarding has run, the resume prompt, and opening the
+ * Activity-wide work: seeding the library and the foods, whether onboarding has run, the resume prompt, and opening the
  * workout from its notification.
  */
 @HiltViewModel
@@ -43,6 +44,7 @@ class MainViewModel @Inject constructor(
     private val workouts: WorkoutRepository,
     private val restTimer: RestTimer,
     personas: PersonaRepository,
+    foodSeeder: FoodSeeder,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -65,6 +67,7 @@ class MainViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { training.ensureLibrarySeeded() }
+        viewModelScope.launch { foodSeeder.ensureSeeded() }
     }
 
     /** Runs once per process: an ACTIVE session found at launch means the app was killed mid-workout. */
