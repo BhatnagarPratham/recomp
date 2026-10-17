@@ -57,6 +57,25 @@ class PrefillTest {
     }
 
     @Test
+    fun `working sets take today's target before last session`() {
+        val last = listOf(LoggedSet(WARMUP, 20_000, 10), LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 11))
+        val target = listOf(SetValues(45_000, 12), SetValues(45_000, 12), SetValues(45_000, 10))
+        val ghosts = Prefill.ghosts(blank(WARMUP, WORKING, WORKING, WORKING, WORKING), last, defaultReps = 12, target = target)
+        // Warm-ups still come from last session; a set beyond the target copies the one above.
+        assertEquals(
+            listOf(SetValues(20_000, 10), SetValues(45_000, 12), SetValues(45_000, 12), SetValues(45_000, 10), SetValues(45_000, 10)),
+            ghosts,
+        )
+    }
+
+    @Test
+    fun `a working weight you choose carries to later working sets`() {
+        val target = List(3) { SetValues(47_500, 8) }
+        val sets = listOf(DraftSet(WORKING, 45_000, null), DraftSet(WORKING, null, null), DraftSet(WORKING, null, null))
+        assertEquals(List(3) { SetValues(45_000, 8) }, Prefill.ghosts(sets, emptyList(), defaultReps = 12, target = target))
+    }
+
+    @Test
     fun `initial sets repeat last session's warm-ups then the target working sets`() {
         val last = listOf(LoggedSet(WARMUP, 20_000, 10), LoggedSet(WORKING, 50_000, 8), LoggedSet(DROP, 40_000, 8))
         assertEquals(listOf(WARMUP, WORKING, WORKING, WORKING), Prefill.initialTypes(last, targetSets = 3))

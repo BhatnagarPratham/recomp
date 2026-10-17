@@ -90,6 +90,34 @@ interface WorkoutDao {
     )
     suspend fun lastCompletedExposures(exerciseId: Long, limit: Int): List<SessionExerciseEntity>
 
+    /** Completed exposures with their start time, newest first; the progression engine's history. */
+    @Query(
+        """
+        SELECT se.*, ws.started_at, ws.routine_id FROM session_exercise se JOIN workout_session ws ON ws.id = se.session_id
+        WHERE se.exercise_id = :exerciseId AND ws.status = 'COMPLETED'
+          AND EXISTS (SELECT 1 FROM set_entry s WHERE s.session_exercise_id = se.id AND s.completed_at IS NOT NULL)
+        ORDER BY ws.started_at DESC, se.position LIMIT :limit
+        """,
+    )
+    suspend fun exposureRows(exerciseId: Long, limit: Int): List<ExposureRow>
+
+    @Query("UPDATE session_exercise SET recommendation_json = :json WHERE id = :id")
+    suspend fun setRecommendation(id: Long, json: String?)
+
+    @Query("UPDATE session_exercise SET user_overrode = 1 WHERE id = :id")
+    suspend fun markOverrode(id: Long)
+
+    // Personal records (PO-04)
+
+    @Insert
+    suspend fun insertRecords(records: List<PersonalRecordEntity>)
+
+    @Query("SELECT * FROM personal_record WHERE session_id = :sessionId ORDER BY id")
+    fun observeSessionRecords(sessionId: Long): Flow<List<PersonalRecordEntity>>
+
+    @Query("SELECT * FROM personal_record WHERE exercise_id = :exerciseId")
+    suspend fun exerciseRecords(exerciseId: Long): List<PersonalRecordEntity>
+
     // Sets
 
     @Query("SELECT * FROM set_entry WHERE session_exercise_id = :sessionExerciseId AND completed_at IS NOT NULL ORDER BY set_index")

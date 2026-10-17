@@ -39,6 +39,7 @@ class WorkoutRepository @Inject constructor(
     private val routineDao: RoutineDao,
     private val exerciseDao: ExerciseDao,
     private val training: TrainingRepository,
+    private val progression: ProgressionRepository,
 ) {
     private val zone: ZoneId get() = ZoneId.systemDefault()
 
@@ -97,6 +98,8 @@ class WorkoutRepository @Inject constructor(
             ),
         )
         insertInitialSets(id, exercise.id, sets)
+        // Frozen now, so the summary grades against what you were shown (TRD §5.1).
+        workoutDao.setRecommendation(id, ProgressionRepository.encode(progression.recommend(exercise, sets, repMin, repMax)))
         return id
     }
 
@@ -141,9 +144,18 @@ class WorkoutRepository @Inject constructor(
 
     // Sets
 
-    /** Ticking a set (WL-02, WL-06): one UPDATE, written before the UI moves on. */
-    suspend fun completeSet(setId: Long, loadG: Int?, reps: Int, rir: Int?, now: Long = System.currentTimeMillis()) =
+    /**
+     * Ticking a set (WL-02, WL-06), written before the UI moves on. A working set at a load other than
+     * the target's records an override (PO-07).
+     */
+    suspend fun completeSet(setId: Long, loadG: Int?, reps: Int, rir: Int?, now: Long = System.currentTimeMillis()) = db.withTransaction {
         workoutDao.completeSet(setId, loadG, reps, rir, now)
+        val set = workoutDao.set(setId) ?: return@withTransaction
+        if (set.setType != SetType.WORKING) return@withTransaction
+        val row = workoutDao.sessionExercise(set.sessionExerciseId) ?: return@withTransaction
+        val target = ProgressionRepository.decode(row.recommendationJson)?.loadG ?: return@withTransaction
+        if (loadG != target && !row.userOverrode) workoutDao.markOverrode(row.id)
+    }
 
     suspend fun uncompleteSet(setId: Long) = workoutDao.uncompleteSet(setId)
 
@@ -183,7 +195,12 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun hasCompletedSets(sessionId: Long): Boolean = workoutDao.lastSetCompletedAt(sessionId) != null
 
-    suspend fun finish(sessionId: Long, endedAt: Long = System.currentTimeMillis()) = workoutDao.finish(sessionId, endedAt)
+    /** Finishing (TRD §6.1): PRs are found while the session is still active, then it's completed. */
+    suspend fun finish(sessionId: Long, endedAt: Long = System.currentTimeMillis()) = db.withTransaction {
+        workoutDao.deleteIncompleteSets(sessionId)
+        progression.recordPrs(sessionId, endedAt)
+        workoutDao.finish(sessionId, endedAt)
+    }
 
     suspend fun discard(sessionId: Long, now: Long = System.currentTimeMillis()) =
         workoutDao.setStatus(sessionId, SessionStatus.DISCARDED, now)

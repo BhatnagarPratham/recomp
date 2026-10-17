@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v0.6, 2026-10-17. Implements [PRD.md](PRD.md) v0.6. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v0.7, 2026-10-17. Implements [PRD.md](PRD.md) v0.7. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -83,6 +83,7 @@ exercise            id, name, primary_muscle, secondary_muscles[], equipment, me
                     increment_g, default_rep_min, default_rep_max, default_rest_sec, is_unilateral,
                     setup_notes, is_custom, archived,
                     seed_key?             -- unique; ties a row to assets/seed/exercises.json
+                    stall_reset_at?, stall_reset_keeps_baseline   -- PO-05 Hold or Deload (§5.1)
 routine             id, name, kind(STRENGTH|YOGA|MOBILITY|CARDIO|SPORT), rotation_index, archived
                                           -- STRENGTH rotates; the other kinds are extra sessions
 routine_exercise    id, routine_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec,
@@ -97,8 +98,10 @@ session_exercise    id, session_id, exercise_id, position,
 set_entry           id, session_exercise_id, set_index, set_type(WARMUP|WORKING|DROP|FAILURE),
                     load_g?, reps?, rir?, completed_at?
                                           -- rows exist from the start; null load/reps = not entered (ghost)
-personal_record     id, exercise_id, type(MAX_LOAD|REPS_AT_LOAD|E1RM|SESSION_VOLUME), value, load_g?,
-                    set_entry_id, achieved_at
+personal_record     id, exercise_id, session_id, type(MAX_LOAD|REPS_AT_LOAD|E1RM|SESSION_VOLUME),
+                    value,                -- grams, reps, grams or gram-reps by type
+                    load_g?, set_entry_id?  -- no single set for SESSION_VOLUME
+                    achieved_at
 yoga_detail         session_id (PK), style, duration_min, intensity?, focus_areas[], poses[]
                                           -- details for every extra-session kind, not only yoga
 body_weight         id, log_date, weight_g, measured_at, source(INBODY|GYM_SCALE|HOME_SCALE|HEALTH_CONNECT)
@@ -214,11 +217,17 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
     rec.stall = StallOptions(DELOAD_10, SWAP(substitutes(cfg)), HOLD)   // offered, never auto-applied
 ```
 
-- **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load. `ASSISTED` progresses by *reducing* the assistance load.
+- **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load; with no load yet the jump ratio is unbounded, so the big-jump guard asks for `repMax + 2` before the first plate. `ASSISTED` (P1) progresses by *reducing* the assistance load; until then it's treated as weighted.
+- **Steps.** `INCREASE` adds one increment to the top load. `DELOAD` takes 90% of the top load and rounds *down* to a multiple of the increment. Targets list one rep count per target set; `ADD_REPS` pads a short last exposure with its last set's reps.
+- **Stall metric.** Best estimated 1RM over working sets of 12 reps or fewer, falling back to all working sets when none qualify (high-rep isolation work). Bodyweight sets use reps.
+- **Hold and Deload (PO-05).** Both store a reset point on the exercise: the start of the session where you chose. After a *Deload*, stall detection runs only on exposures after the reset, with the usual rule. After a *Hold*, the card returns once at least `window` exposures follow the reset and none beats the best from before it.
+- **In a deficit.** `ctx.inDeficit` is false until M3 has nutrition targets to compare with TDEE (`TODO(M3)`).
 - **Rounding.** `roundToStep` uses the exercise's increment as the equipment step (e.g. dumbbells at 2.5 kg). With 1.25 kg plates, the barbell step is 2.5 kg total. Load is always per dumbbell, never the pair.
 - **Estimated 1RM** uses Epley: `load × (1 + reps / 30)`. It's computed only for sets of 12 reps or fewer. Higher-rep sets still count for rep PRs.
 - **PRs** are computed once, when the workout finishes, and written to `personal_record`. At most one PR of each type per exercise per session.
-- **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts. The summary then grades against what you were actually shown, even if the history changes later.
+- **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `baseline`). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
+- **Overrides (PO-07).** `user_overrode` is set when a ticked working set's load differs from the target load.
+- **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
 
 ### 5.2 Weight trend (BM-01)
 

@@ -64,4 +64,21 @@ object Migrations {
             )
         }
     }
+
+    /** M2, progression: PRs, plus each exercise's stall Hold or Deload point. SQL from schemas/3.json. */
+    val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `exercise` ADD COLUMN `stall_reset_at` INTEGER")
+            db.execSQL("ALTER TABLE `exercise` ADD COLUMN `stall_reset_keeps_baseline` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `personal_record` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`exercise_id` INTEGER NOT NULL, `session_id` INTEGER NOT NULL, `type` TEXT NOT NULL, `value` INTEGER NOT NULL, " +
+                    "`load_g` INTEGER, `set_entry_id` INTEGER, `achieved_at` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`exercise_id`) REFERENCES `exercise`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION , " +
+                    "FOREIGN KEY(`session_id`) REFERENCES `workout_session`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_personal_record_exercise_id` ON `personal_record` (`exercise_id`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_personal_record_session_id` ON `personal_record` (`session_id`)")
+        }
+    }
 }

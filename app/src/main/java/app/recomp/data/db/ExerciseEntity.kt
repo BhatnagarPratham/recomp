@@ -12,6 +12,7 @@ import app.recomp.domain.model.Mechanic
  * `exercise` table (TRD §4). Loads are integer grams so progression comparisons are exact.
  * [seedKey] ties a row to its entry in `assets/seed/exercises.json`, so seeding is idempotent and
  * templates can reference exercises after you rename them. Custom exercises have none.
+ * [stallResetAt] records a stall Hold or Deload (PO-05, TRD §5.1).
  */
 @Entity(tableName = "exercise", indices = [Index(value = ["seed_key"], unique = true)])
 data class ExerciseEntity(
@@ -32,4 +33,6 @@ data class ExerciseEntity(
     @ColumnInfo(name = "is_custom") val isCustom: Boolean = false,
     val archived: Boolean = false,
     @ColumnInfo(name = "seed_key") val seedKey: String? = null,
+    @ColumnInfo(name = "stall_reset_at") val stallResetAt: Long? = null,
+    @ColumnInfo(name = "stall_reset_keeps_baseline", defaultValue = "0") val stallResetKeepsBaseline: Boolean = false,
 )

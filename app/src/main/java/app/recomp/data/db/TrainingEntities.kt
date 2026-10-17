@@ -11,6 +11,7 @@ import app.recomp.domain.model.ProgressionScheme
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
+import app.recomp.domain.progression.PrType
 import java.time.LocalDate
 
 /**
@@ -124,6 +125,33 @@ data class YogaDetailEntity(
     val intensity: Int? = null,
     @ColumnInfo(name = "focus_areas") val focusAreas: List<String> = emptyList(),
     val poses: List<String> = emptyList(),
+)
+
+/** A PR (PO-04), written once when a workout finishes. [value] is grams, reps or gram-reps by [type]. */
+@Entity(
+    tableName = "personal_record",
+    foreignKeys = [
+        ForeignKey(ExerciseEntity::class, ["id"], ["exercise_id"]),
+        ForeignKey(WorkoutSessionEntity::class, ["id"], ["session_id"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index("exercise_id"), Index("session_id")],
+)
+data class PersonalRecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "exercise_id") val exerciseId: Long,
+    @ColumnInfo(name = "session_id") val sessionId: Long,
+    val type: PrType,
+    val value: Long,
+    @ColumnInfo(name = "load_g") val loadG: Int? = null,
+    @ColumnInfo(name = "set_entry_id") val setEntryId: Long? = null,
+    @ColumnInfo(name = "achieved_at") val achievedAt: Long,
+)
+
+/** A completed exposure (TRD §4 hot query) with its session's start time. */
+data class ExposureRow(
+    @Embedded val entry: SessionExerciseEntity,
+    @ColumnInfo(name = "started_at") val startedAt: Long,
+    @ColumnInfo(name = "routine_id") val routineId: Long?,
 )
 
 data class RoutineExerciseWithExercise(
