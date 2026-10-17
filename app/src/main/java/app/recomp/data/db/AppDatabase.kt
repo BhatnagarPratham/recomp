@@ -20,8 +20,9 @@ import kotlinx.serialization.json.Json
         SessionExerciseEntity::class,
         SetEntryEntity::class,
         YogaDetailEntity::class,
+        PersonalRecordEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -32,7 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "recomp.db"
-        val MIGRATIONS = arrayOf(Migrations.MIGRATION_1_2)
+        val MIGRATIONS = arrayOf(Migrations.MIGRATION_1_2, Migrations.MIGRATION_2_3)
     }
 }
 

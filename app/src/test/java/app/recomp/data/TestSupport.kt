@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.prefs.TrainingPrefs
+import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.data.seed.SeedData
@@ -32,6 +33,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var workouts: WorkoutRepository
         private set
+    lateinit var progression: ProgressionRepository
+        private set
 
     init {
         open()
@@ -43,7 +46,8 @@ class TestApp(private val dir: File) {
             .allowMainThreadQueries()
             .build()
         training = TrainingRepository(db, db.exerciseDao(), db.routineDao(), db.workoutDao(), FileSeedSource, prefs)
-        workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training)
+        progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs)
+        workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

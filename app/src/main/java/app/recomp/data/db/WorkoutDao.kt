@@ -90,6 +90,45 @@ interface WorkoutDao {
     )
     suspend fun lastCompletedExposures(exerciseId: Long, limit: Int): List<SessionExerciseEntity>
 
+    /**
+     * The completed sets of an exercise's latest [limit] exposures that started at or before
+     * [maxStartedAt], newest exposure first, in one query: the progression engine's history.
+     */
+    @Query(
+        """
+        SELECT s.*, ws.id AS x_session_id, ws.started_at AS x_started_at, ws.log_date AS x_log_date, r.name AS x_routine_name
+        FROM set_entry s
+        JOIN session_exercise se ON se.id = s.session_exercise_id
+        JOIN workout_session ws ON ws.id = se.session_id
+        LEFT JOIN routine r ON r.id = ws.routine_id
+        WHERE s.completed_at IS NOT NULL AND se.id IN (
+            SELECT se2.id FROM session_exercise se2 JOIN workout_session ws2 ON ws2.id = se2.session_id
+            WHERE se2.exercise_id = :exerciseId AND ws2.status = 'COMPLETED' AND ws2.started_at <= :maxStartedAt
+              AND EXISTS (SELECT 1 FROM set_entry s2 WHERE s2.session_exercise_id = se2.id AND s2.completed_at IS NOT NULL)
+            ORDER BY ws2.started_at DESC, se2.position LIMIT :limit
+        )
+        ORDER BY ws.started_at DESC, se.position, s.set_index
+        """,
+    )
+    suspend fun exposureSets(exerciseId: Long, limit: Int, maxStartedAt: Long = Long.MAX_VALUE): List<ExposureSetRow>
+
+    @Query("UPDATE session_exercise SET recommendation_json = :json WHERE id = :id")
+    suspend fun setRecommendation(id: Long, json: String?)
+
+    @Query("UPDATE session_exercise SET user_overrode = :overrode WHERE id = :id")
+    suspend fun setOverrode(id: Long, overrode: Boolean)
+
+    // Personal records (PO-04)
+
+    @Insert
+    suspend fun insertRecords(records: List<PersonalRecordEntity>)
+
+    @Query("SELECT * FROM personal_record WHERE session_id = :sessionId ORDER BY id")
+    fun observeSessionRecords(sessionId: Long): Flow<List<PersonalRecordEntity>>
+
+    @Query("SELECT * FROM personal_record WHERE exercise_id = :exerciseId")
+    suspend fun exerciseRecords(exerciseId: Long): List<PersonalRecordEntity>
+
     // Sets
 
     @Query("SELECT * FROM set_entry WHERE session_exercise_id = :sessionExerciseId AND completed_at IS NOT NULL ORDER BY set_index")

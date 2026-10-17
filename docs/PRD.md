@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v0.6, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v0.7, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -329,7 +329,7 @@ The templates and the ~80-exercise library are data files (`app/src/main/assets/
 
 **Workout screen (WL-01 to WL-09).** Built for one hand between sets:
 - **Exercise cards** scroll in the upper part of the screen. Each shows the exercise, its rep range and rest, setup notes, *Last: 45 × 12/11/10*, and compact set rows. A row shows the set type, weight × reps, RIR and a ✓. Values you haven't entered show as ghost values in a dimmer style.
-- **Ghost values (WL-02).** Each set takes the matching set from last session, pairing the nth set of a type with the nth set of that type last time, so warm-ups never prefill working sets. Without a match it copies the set above. With no history at all, reps start at the top of the range and the weight is blank until you enter one. Last session's warm-ups are recreated at the start; drop and failure sets aren't.
+- **Ghost values (WL-02).** From M2, working sets prefill from **today's target** (PO-02), so ticking ✓ hits the plan; repeating last time instead is a −1/+1 tap and ✓. Warm-ups, drop sets and sets beyond the target keep the rules below. Before M2, each set took the matching set from last session, pairing the nth set of a type with the nth set of that type last time, so warm-ups never prefill working sets. Without a match it copies the set above. With no history at all, reps start at the top of the range and the weight is blank until you enter one. Last session's warm-ups are recreated at the start; drop and failure sets aren't.
 - **The set dock** sits at the bottom. It holds the selected set: weight − / + by the exercise's increment, reps − / + 1 (each control at least 56 dp), tap a value to type it, optional RIR chips (0, 1, 2, 3+), and a full-width ✓. Ticking saves the set and selects the next unticked one, so repeating last time's set is one tap. Tapping a row selects that set instead.
 - **Set types:** tap the set's badge to make it a warm-up, working, drop or failure set. Bodyweight exercises show reps only; weighted bodyweight shows "+ kg"; dumbbell loads are per dumbbell and unilateral reps are per side.
 - **Rest (WL-05):** ticking a set starts the exercise's rest. A banner in the dock and the ongoing notification count down, both with *Skip* and *+30 s*.
@@ -354,6 +354,18 @@ The templates and the ~80-exercise library are data files (`app/src/main/assets/
 | PO-09 | P1 | Per-exercise charts of estimated 1RM and top set over time. |
 | PO-10 | P1 | ★ Weekly hard sets per muscle group, for information rather than as a nag, with an editable reference band. |
 | PO-11 | P1 | ★ A workout-morning notification: "3 lifts are due for a weight increase today." |
+
+**Progression in the app (M2):**
+- **Target line.** Each exercise card shows *Last: 45 × 12/11/10* and *Today: 45 × 12/12/10 · add reps*. The first time it shows the baseline hint instead. Today's next-workout card previews every exercise's target, with ↑ where the weight goes up, e.g. "Bench press 42.5 × 8 ↑".
+- **Live feedback (PO-03).** A ticked working set that meets or beats its target says how it compares with last time, e.g. "+1 rep", "+2.5 kg" or "target hit". A missed target says nothing: nudge, don't nag.
+- **Stall card (PO-05).** When a lift stalls, a card sits at the top of that exercise in the workout. *No gain in 3 sessions* offers:
+  - *Deload 10%*: today's target drops to 90% of the load at the bottom of the range, and stall detection starts afresh from today.
+  - *Swap*: opens the picker, swaps the exercise in today's workout and in the routine.
+  - *Hold*: hides the card until another full stall window passes with no gain over the best before the hold.
+- **Overrides (PO-07).** Ticking a working set at a load other than the target's records an override on that exercise for the session. The engine always works from what you actually lifted, so an override never counts against you.
+- **PRs (PO-04)** are found when the workout finishes: heaviest weight, most reps at a weight, best estimated 1RM, best session volume. At most one of each type per exercise per session, and none on the first session of an exercise, where everything would count.
+- **Summary (WL-08):** adds PRs, targets hit or missed, and what changes next time, e.g. "Lat pulldown goes to 50 kg".
+- **Exercise history (HM-02):** every past session for an exercise, newest first, with its sets, best estimated 1RM and PR badges. Opened from the exercise's menu in a workout and from its settings.
 
 ### 7.6 Extra sessions (yoga, mobility, cardio, sport)
 

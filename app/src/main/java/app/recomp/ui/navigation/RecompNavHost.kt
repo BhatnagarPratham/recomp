@@ -25,6 +25,7 @@ import app.recomp.ui.MainViewModel
 import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.dev.DevScreen
+import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
 import app.recomp.ui.routines.RoutineScreen
@@ -56,6 +57,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class RoutineRoute(val routineId: Long)
 
 @Serializable data class ExerciseRoute(val exerciseId: Long)
+
+@Serializable data class ExerciseHistoryRoute(val exerciseId: Long)
 
 private data class TopLevel(val label: String, val glyph: String, val route: Any)
 
@@ -123,7 +126,8 @@ fun RecompNavHost(main: MainViewModel) {
             composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
             composable<LibraryRoute> { LibraryScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) }) }
-            composable<ExerciseRoute> { ExerciseScreen(onBack = { nav.popBackStack() }) }
+            composable<ExerciseRoute> { ExerciseScreen(onBack = { nav.popBackStack() }, onOpenHistory = { nav.navigate(ExerciseHistoryRoute(it)) }) }
+            composable<ExerciseHistoryRoute> { ExerciseHistoryScreen(onBack = { nav.popBackStack() }) }
             composable<RoutineRoute> {
                 RoutineScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) })
             }
@@ -131,6 +135,7 @@ fun RecompNavHost(main: MainViewModel) {
                 WorkoutScreen(
                     onBack = { nav.popBackStack() },
                     onOpenExercise = { nav.navigate(ExerciseRoute(it)) },
+                    onOpenHistory = { nav.navigate(ExerciseHistoryRoute(it)) },
                     onFinished = { id ->
                         nav.navigate(SummaryRoute(id)) { popUpTo<TodayRoute>() }
                     },

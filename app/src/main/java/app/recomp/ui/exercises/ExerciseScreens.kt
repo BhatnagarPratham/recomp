@@ -139,7 +139,7 @@ private val restChoices = listOf(45, 60, 90, 120, 150, 180, 240)
 /** Per-exercise settings (EX-03): equipment, step, rep range, rest, unilateral, setup notes. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExerciseScreen(onBack: () -> Unit, viewModel: ExerciseViewModel = hiltViewModel()) {
+fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel: ExerciseViewModel = hiltViewModel()) {
     val loaded by viewModel.exercise.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf<ExerciseEntity?>(null) }
     LaunchedEffect(loaded) { if (draft == null) draft = loaded }
@@ -151,6 +151,7 @@ fun ExerciseScreen(onBack: () -> Unit, viewModel: ExerciseViewModel = hiltViewMo
             TopAppBar(
                 title = { Text(ex?.name ?: "") },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                actions = { ex?.let { TextButton(onClick = { onOpenHistory(it.id) }) { Text("History") } } },
             )
         },
     ) { padding ->

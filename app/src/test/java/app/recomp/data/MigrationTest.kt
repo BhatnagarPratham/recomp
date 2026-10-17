@@ -79,8 +79,33 @@ class MigrationTest {
         }
         room.openHelper.readableDatabase.query("SELECT identity_hash FROM room_master_table").use { c ->
             c.moveToFirst()
-            // The checked-in 2.json matches the compiled schema.
-            assertEquals(schema(2).getValue("identityHash").jsonPrimitive.content, c.getString(0))
+            // The checked-in schema for the current version matches the compiled one.
+            val current = schemaDir.listFiles()!!.maxOf { it.nameWithoutExtension.toInt() }
+            assertEquals(schema(current).getValue("identityHash").jsonPrimitive.content, c.getString(0))
+        }
+        room.close()
+    }
+
+    @Test
+    fun `2 to 3 keeps workouts and adds PRs and stall resets`() {
+        val file = File(tmp.root, "v2.db")
+        createAt(2, file).use { db ->
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, " +
+                    "increment_g, default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, seed_key) " +
+                    "VALUES (3, 'Bench press', 'chest', '[]', 'BARBELL', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 2500, 8, 12, 150, 0, 0, 0, 'bench_press')",
+            )
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL("INSERT INTO session_exercise (id, session_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec, user_overrode) VALUES (1, 1, 3, 0, 3, 8, 12, 150, 0)")
+            db.execSQL("INSERT INTO set_entry (session_exercise_id, set_index, set_type, load_g, reps, completed_at) VALUES (1, 0, 'WORKING', 40000, 12, 1)")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val bench = room.exerciseDao().get(3)!!
+            assertNull(bench.stallResetAt)
+            assertEquals(false, bench.stallResetKeepsBaseline)
+            assertEquals(1, room.workoutDao().exposureSets(3, 10).size)
+            assertEquals(emptyList<Any>(), room.workoutDao().exerciseRecords(3))
         }
         room.close()
     }

@@ -266,6 +266,17 @@ class TrainingRepository @Inject constructor(
 
     suspend fun saveRoutineExercises(routineId: Long, rows: List<RoutineExerciseEntity>) = routineDao.replaceExercises(routineId, rows)
 
+    /** A stall *Swap* (PO-05) also changes the routine, keeping that slot's targets. */
+    suspend fun swapInRoutine(routineId: Long, oldExerciseId: Long, newExerciseId: Long) = db.withTransaction {
+        val replacement = exerciseDao.get(newExerciseId) ?: return@withTransaction
+        val rows = routineDao.exercises(routineId).map { it.entry }
+        if (rows.none { it.exerciseId == oldExerciseId }) return@withTransaction
+        routineDao.replaceExercises(
+            routineId,
+            rows.map { if (it.exerciseId == oldExerciseId) planRowFor(replacement, it.targetSets).copy(scheme = it.scheme, supersetGroup = it.supersetGroup) else it },
+        )
+    }
+
     // Exercises (EX-02, EX-03)
 
     /**
