@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v0.5, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v0.6, 2026-10-17. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -86,11 +86,13 @@ Each goal has three paces. **Standard** is the default, and exact values are edi
 
 These are starting defaults, to be tuned with real data.
 
-| Experience | Rep ranges (compound / isolation) | Stall window, in sessions | Jumps | Deloads |
-|------------|-----------------------------------|---------------------------|-------|---------|
-| **Beginner** | 8–12 / 10–15 | 3 (4 in a deficit) | Double increment allowed when every set hits the top with RIR ≥ 3 | Only on a stall |
-| **Intermediate** | 6–10 / 10–15 | 4 (5 in a deficit) | Single increment | Suggested every 6–8 weeks, or on a stall |
-| **Advanced** | 5–8 / 8–12 | 5 (6 in a deficit) | Single increment. Periodised blocks are P2. | Suggested every 4–6 weeks |
+| Experience | Rep ranges (compound / isolation / high-rep) | Stall window, in sessions | Jumps | Deloads |
+|------------|----------------------------------------------|---------------------------|-------|---------|
+| **Beginner** | 8–12 / 10–15 / 12–20 | 3 (4 in a deficit) | Double increment allowed when every set hits the top with RIR ≥ 3 | Only on a stall |
+| **Intermediate** | 6–10 / 10–15 / 12–20 | 4 (5 in a deficit) | Single increment | Suggested every 6–8 weeks, or on a stall |
+| **Advanced** | 5–8 / 8–12 / 10–15 | 5 (6 in a deficit) | Single increment. Periodised blocks are P2. | Suggested every 4–6 weeks |
+
+Each exercise in the library has a rep class. **High-rep** covers small muscles that respond to higher reps: lateral raises, rear delts and face pulls, calves, and hip abduction and adduction. A changed experience level moves every rep range you haven't edited.
 
 ### 4.4 Presets
 
@@ -239,6 +241,13 @@ Examples use the reference persona.
 | PR-03 | P0 | ★ Configurable "day starts at" time (default 4 AM), so a late-night snack counts toward the right day. |
 | PR-04 | P0 | Onboarding walks through the chosen split once to confirm the equipment and smallest weight step for each exercise. That sets the progression increments. |
 
+**Equipment walkthrough (PR-04).** One scrolling list of the split's exercises, grouped by routine:
+- Where the template lists alternatives (the "/" rows in §7.3), you pick the variant your gym has, e.g. dumbbell or machine shoulder press. Picking one swaps the exercise in the routine, because a machine press and a dumbbell press keep separate histories.
+- Every exercise shows its smallest weight step as chips (1, 1.25, 2, 2.5, 4 or 5 kg, or a custom value). Defaults come from the equipment: 2.5 kg for barbells (1.25 kg plates each side), dumbbells (per dumbbell) and plate-loaded machines, 5 kg for pin-loaded machines and cables, 4 kg for kettlebells.
+- Running it again on the same split swaps variants in place and keeps your other routine edits. Choosing a different split archives the current routines (history stays) and builds the new ones.
+
+**Until M3's onboarding exists**, a short *Training setup* runs the parts of §4 that training needs: split, experience, strength days per week, and extra sessions with their days. The walkthrough follows it. It can be re-run from the Train tab, and M3 folds it into onboarding.
+
 ### 7.2 Exercise library
 
 | ID | Pri | Requirement |
@@ -259,29 +268,47 @@ Examples use the reference persona.
 | RT-04 | P0 | Split templates ship pre-loaded: Push/Pull/Legs, Full body A/B and Upper/Lower. Nothing is fixed: you can add, remove, reorder or swap any exercise, and change its sets, rep range, rest time, equipment and increment at any time. Rep ranges default from the experience policy (§4.3). |
 | RT-05 | P1 | Supersets. |
 
-**Reference Push/Pull/Legs template.** Defaults are 3 working sets per exercise. Equipment marked with "/" is confirmed at onboarding.
+**Reference Push/Pull/Legs template.** Defaults are 3 working sets per exercise. Equipment marked with "/" is confirmed at onboarding. Rep ranges come from the rep class and the experience policy (§4.3); the column shows a beginner's.
 
-| Day | Exercise | Equipment (assumed) | Rep range |
-|-----|----------|---------------------|-----------|
-| Push | Bench press | Barbell | 6–10 |
-| Push | Shoulder press | Dumbbell / machine | 8–12 |
-| Push | Chest fly | Pec deck / cable | 10–15 |
-| Push | Triceps pushdown | Cable | 10–15 |
-| Push | Overhead triceps extension | Cable / dumbbell | 10–15 |
-| Push | Lateral raise | Dumbbell | 12–20 |
-| Pull | Lat pulldown | Cable | 8–12 |
-| Pull | Chest-supported row | Machine / dumbbell | 8–12 |
-| Pull | Back extension | Bodyweight, then + plate | 10–15 |
-| Pull | Incline dumbbell curl | Dumbbell | 10–15 |
-| Pull | Face pull | Cable | 12–20 |
-| Pull | Shrug | Dumbbell | 10–15 |
-| Legs | Hack squat | Plate-loaded machine | 8–12 |
-| Legs | Leg extension | Machine | 10–15 |
-| Legs | Leg curl | Machine | 10–15 |
-| Legs | Calf raise | Machine | 12–20 |
-| Legs | Hip adduction | Machine | 12–20 |
-| Legs | Hip abduction | Machine | 12–20 |
-| Legs | Hip thrust | Barbell / machine | 8–12 |
+| Day | Exercise | Equipment (assumed) | Rep class | Beginner reps |
+|-----|----------|---------------------|-----------|---------------|
+| Push | Bench press | Barbell | Compound | 8–12 |
+| Push | Shoulder press | Dumbbell / machine | Compound | 8–12 |
+| Push | Chest fly | Pec deck / cable | Isolation | 10–15 |
+| Push | Triceps pushdown | Cable | Isolation | 10–15 |
+| Push | Overhead triceps extension | Cable / dumbbell | Isolation | 10–15 |
+| Push | Lateral raise | Dumbbell | High-rep | 12–20 |
+| Pull | Lat pulldown | Cable | Compound | 8–12 |
+| Pull | Chest-supported row | Machine / dumbbell | Compound | 8–12 |
+| Pull | Back extension | Bodyweight, then + plate | Isolation | 10–15 |
+| Pull | Incline dumbbell curl | Dumbbell | Isolation | 10–15 |
+| Pull | Face pull | Cable | High-rep | 12–20 |
+| Pull | Shrug | Dumbbell | Isolation | 10–15 |
+| Legs | Hack squat | Plate-loaded machine | Compound | 8–12 |
+| Legs | Leg extension | Machine | Isolation | 10–15 |
+| Legs | Leg curl | Machine | Isolation | 10–15 |
+| Legs | Calf raise | Machine | High-rep | 12–20 |
+| Legs | Hip adduction | Machine | High-rep | 12–20 |
+| Legs | Hip abduction | Machine | High-rep | 12–20 |
+| Legs | Hip thrust | Barbell / machine | Compound | 8–12 |
+
+**Full body A/B** (the Fat loss starter and Maintain presets), alternating A and B:
+
+| Day | Exercises (alternatives after "/") |
+|-----|------------------------------------|
+| A | Back squat / hack squat / goblet squat · Bench press / dumbbell bench press / machine chest press · Seated cable row / machine chest-supported row · Dumbbell shoulder press / machine shoulder press · Leg curl · Cable crunch |
+| B | Romanian deadlift / dumbbell Romanian deadlift · Lat pulldown · Incline dumbbell press / incline machine press · Leg press · Dumbbell lateral raise · Hanging knee raise |
+
+**Upper/Lower** (the Lean bulk preset), alternating Upper and Lower:
+
+| Day | Exercises (alternatives after "/") |
+|-----|------------------------------------|
+| Upper | Bench press / dumbbell bench press · Barbell row / machine chest-supported row / seated cable row · Dumbbell shoulder press / machine shoulder press / overhead press · Lat pulldown / pull-up · EZ-bar curl / dumbbell curl · Triceps pushdown |
+| Lower | Back squat / hack squat · Romanian deadlift / dumbbell Romanian deadlift · Leg press · Leg curl · Standing calf raise · Cable crunch |
+
+The templates and the ~80-exercise library are data files (`app/src/main/assets/seed/`), so a fork can change them without code.
+
+**Rotation details (RT-02).** The next routine is the one after the last strength routine you completed. Discarded workouts, ad-hoc workouts and routines from an old split don't move it. Doing Legs when Pull was due makes Push next. Today offers *Start*, *Choose another* and *Empty workout*.
 
 ### 7.4 Strength workout logging
 
@@ -299,6 +326,18 @@ Examples use the reference persona.
 | WL-10 | P1 | Edit or delete past workouts. |
 | WL-11 | P1 | ★ Warm-up set suggestions for the first heavy lift of the day. |
 | WL-12 | P2 | ★ Plate calculator. |
+
+**Workout screen (WL-01 to WL-09).** Built for one hand between sets:
+- **Exercise cards** scroll in the upper part of the screen. Each shows the exercise, its rep range and rest, setup notes, *Last: 45 × 12/11/10*, and compact set rows. A row shows the set type, weight × reps, RIR and a ✓. Values you haven't entered show as ghost values in a dimmer style.
+- **Ghost values (WL-02).** Each set takes the matching set from last session, pairing the nth set of a type with the nth set of that type last time, so warm-ups never prefill working sets. Without a match it copies the set above. With no history at all, reps start at the top of the range and the weight is blank until you enter one. Last session's warm-ups are recreated at the start; drop and failure sets aren't.
+- **The set dock** sits at the bottom. It holds the selected set: weight − / + by the exercise's increment, reps − / + 1 (each control at least 56 dp), tap a value to type it, optional RIR chips (0, 1, 2, 3+), and a full-width ✓. Ticking saves the set and selects the next unticked one, so repeating last time's set is one tap. Tapping a row selects that set instead.
+- **Set types:** tap the set's badge to make it a warm-up, working, drop or failure set. Bodyweight exercises show reps only; weighted bodyweight shows "+ kg"; dumbbell loads are per dumbbell and unilateral reps are per side.
+- **Rest (WL-05):** ticking a set starts the exercise's rest. A banner in the dock and the ongoing notification count down, both with *Skip* and *+30 s*.
+- **Changing the plan (RT-03):** from a card's menu, swap (only before its first set is ticked), remove, move up or down, edit notes. *Add exercise* and *Add set* are always there. Adding or deleting a working set changes that exercise's target, so it can be saved back.
+- **Finishing:** unticked sets are dropped after a confirmation. An exercise with no sets is kept as skipped. If you changed the plan, the summary offers *Save changes to the routine*.
+- **Resume (WL-06):** opening the app with an active workout asks *Resume workout?* with Resume, Finish and Discard. After 4 hours it suggests finishing, using the last ticked set's time as the end.
+- **Keep screen on (WL-07)** is a switch in the workout menu, off by default; the lock-screen notification already shows the rest timer.
+- The summary (WL-08) shows duration, sets, reps, volume and each exercise's sets in M1. PRs, targets hit and what changes next time arrive with the progression engine in M2.
 
 ### 7.5 Progressive overload coaching (the core)
 
@@ -324,6 +363,8 @@ Examples use the reference persona.
 | YG-02 | P0 | Configured extra sessions are part of the weekly plan. On a scheduled class day the Today screen shows it, and the strength rotation carries on around it. Sessions count toward weekly adherence. |
 | YG-03 | P1 | Optional focus areas (hips, hamstrings, back…). |
 | YG-04 | P1 | ★ **Monthly mobility markers** (sit-and-reach distance, deep-squat hold time, toe touch yes/no), so mobility work has measurable progress too. |
+
+Each configured extra session has a kind (yoga, mobility, cardio or sport), a name such as "Yoga class" and optional weekdays. On a scheduled day Today shows it with *Log class*; other days it's a smaller button. Logging opens a short form prefilled from the last session of that name (style, duration, intensity 1–5, notes), and *Save* is the second tap. Weekly progress counts strength days against the target and each extra against its scheduled days. Weeks start on Monday.
 
 ### 7.7 Nutrition
 

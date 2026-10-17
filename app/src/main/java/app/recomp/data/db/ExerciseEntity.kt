@@ -2,14 +2,18 @@ package app.recomp.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
+import app.recomp.domain.model.Equipment
+import app.recomp.domain.model.LoadType
+import app.recomp.domain.model.Mechanic
 
-enum class Equipment { BARBELL, DUMBBELL, MACHINE, PLATE_LOADED, CABLE, BODYWEIGHT, KETTLEBELL, BAND }
-enum class Mechanic { COMPOUND, ISOLATION }
-enum class LoadType { WEIGHTED, BODYWEIGHT, BODYWEIGHT_PLUS, ASSISTED }
-
-/** `exercise` table (TRD §4). Loads are integer grams so progression comparisons are exact. */
-@Entity(tableName = "exercise")
+/**
+ * `exercise` table (TRD §4). Loads are integer grams so progression comparisons are exact.
+ * [seedKey] ties a row to its entry in `assets/seed/exercises.json`, so seeding is idempotent and
+ * templates can reference exercises after you rename them. Custom exercises have none.
+ */
+@Entity(tableName = "exercise", indices = [Index(value = ["seed_key"], unique = true)])
 data class ExerciseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -27,4 +31,5 @@ data class ExerciseEntity(
     @ColumnInfo(name = "setup_notes") val setupNotes: String? = null,
     @ColumnInfo(name = "is_custom") val isCustom: Boolean = false,
     val archived: Boolean = false,
+    @ColumnInfo(name = "seed_key") val seedKey: String? = null,
 )

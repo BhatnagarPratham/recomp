@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v0.5, 2026-10-17. Implements [PRD.md](PRD.md) v0.5. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v0.6, 2026-10-17. Implements [PRD.md](PRD.md) v0.6. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -59,11 +59,12 @@
 ```
 app/src/main/java/…/recomp/
   ui/{today,workout,routines,exercises,nutrition,body,progress,settings,components,theme}
-  data/{db,repo,ai,food,health,backup,prefs}
-  service/ActiveWorkoutService.kt
+  data/{db,repo,seed,ai,food,health,backup,prefs}
+  workout/ActiveWorkoutService.kt, RestTimer.kt
+  assets/seed/{exercises,split_templates}.json
   work/{BackupWorker,ReminderWorker,HealthSyncWorker}.kt
 domain/src/main/kotlin/…/recomp/domain/
-  persona/  model/  progression/  nutrition/  trend/  usecase/
+  persona/  model/  training/  progression/  nutrition/  trend/  usecase/
 ```
 
 ## 4. Data model (Room)
@@ -80,20 +81,26 @@ domain/src/main/kotlin/…/recomp/domain/
 exercise            id, name, primary_muscle, secondary_muscles[], equipment, mechanic(COMPOUND|ISOLATION),
                     movement_pattern, load_type(WEIGHTED|BODYWEIGHT|BODYWEIGHT_PLUS|ASSISTED),
                     increment_g, default_rep_min, default_rep_max, default_rest_sec, is_unilateral,
-                    setup_notes, is_custom, archived
-routine             id, name, kind(STRENGTH|YOGA), rotation_index, archived
+                    setup_notes, is_custom, archived,
+                    seed_key?             -- unique; ties a row to assets/seed/exercises.json
+routine             id, name, kind(STRENGTH|YOGA|MOBILITY|CARDIO|SPORT), rotation_index, archived
+                                          -- STRENGTH rotates; the other kinds are extra sessions
 routine_exercise    id, routine_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec,
                     scheme(DOUBLE_PROGRESSION|REPS_ONLY|MANUAL), superset_group?
-workout_session     id, routine_id?, kind(STRENGTH|YOGA|OTHER), status(ACTIVE|COMPLETED|DISCARDED),
-                    started_at, ended_at?, log_date, notes, hc_record_id?
-session_exercise    id, session_id, exercise_id, position, notes,
-                    recommendation_json   -- engine output frozen at workout start
+workout_session     id, routine_id?, kind(as routine), status(ACTIVE|COMPLETED|DISCARDED),
+                    started_at, ended_at?, log_date, notes?, hc_record_id?
+session_exercise    id, session_id, exercise_id, position,
+                    target_sets, rep_min, rep_max, rest_sec   -- copied from the routine at start (RT-03)
+                    notes?,
+                    recommendation_json?  -- engine output frozen at workout start (M2)
                     user_overrode         -- PO-07
 set_entry           id, session_exercise_id, set_index, set_type(WARMUP|WORKING|DROP|FAILURE),
-                    load_g, reps, rir?, completed_at?
+                    load_g?, reps?, rir?, completed_at?
+                                          -- rows exist from the start; null load/reps = not entered (ghost)
 personal_record     id, exercise_id, type(MAX_LOAD|REPS_AT_LOAD|E1RM|SESSION_VOLUME), value, load_g?,
                     set_entry_id, achieved_at
-yoga_detail         session_id (PK), style, duration_min, intensity, focus_areas[], poses[]
+yoga_detail         session_id (PK), style, duration_min, intensity?, focus_areas[], poses[]
+                                          -- details for every extra-session kind, not only yoga
 body_weight         id, log_date, weight_g, measured_at, source(INBODY|GYM_SCALE|HOME_SCALE|HEALTH_CONNECT)
 body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CONNECT), weight_g,
                     skeletal_muscle_g, body_fat_g, body_fat_pct, visceral_fat_level, bmr_kcal?,
@@ -119,11 +126,13 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
                     input_tokens, output_tokens, cost_usd, status, response_json   -- AI-03 spend + debugging
 ```
 
-**Settings** live in DataStore: the persona (§5.0, serialized), day boundary, primary weight source, usual scan slot, extra-session schedule, AI mode (`OFF|ON`), AI model, monthly AI cap, reminder times, and the protein ramp state. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
+**Seed data.** The ~80-exercise library and the split templates are JSON assets, parsed with kotlinx.serialization. Seeding runs on every launch and inserts only exercises whose `seed_key` is missing, so a fork can add exercises and existing installs pick them up. Each seed entry has a rep class (`COMPOUND | ISOLATION | HIGH_REP`, PRD §4.3) that sets its default rep range from the experience policy. Templates reference exercises by seed key and list the walkthrough's alternatives.
+
+**Settings** live in DataStore: the persona (§5.0, serialized), day boundary, primary weight source, usual scan slot, extra-session schedule, AI mode (`OFF|ON`), AI model, monthly AI cap, reminder times, and the protein ramp state. Until M3 builds the persona, M1 keeps a `TrainingSettings` JSON (split, experience, strength days per week, extra-session schedules, keep-screen-on) under one key. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet`.
 
-**Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, then pulls the working sets for each.
+**Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
 ## 5. Core algorithms (`:domain`)
 
@@ -150,18 +159,18 @@ data class GoalPlan(
 
 data class ExperiencePolicy(
     val level: Experience,
-    val compoundReps: IntRange, val isolationReps: IntRange,
+    val compoundReps: IntRange, val isolationReps: IntRange, val highRepReps: IntRange,
     val stallWindow: Int,               // +1 in a deficit
     val allowsDoubleJump: Boolean,
-    val deloadEveryWeeks: Int?,         // null = only on a stall
+    val deloadEveryWeeks: IntRange?,    // null = only on a stall
 )
 ```
 
-| Experience | Compound / isolation reps | Stall window | Double jump | Deload |
-|------------|---------------------------|--------------|-------------|--------|
-| Beginner | 8–12 / 10–15 | 3 | Yes | On a stall only |
-| Intermediate | 6–10 / 10–15 | 4 | No | Every 6–8 weeks |
-| Advanced | 5–8 / 8–12 | 5 | No | Every 4–6 weeks |
+| Experience | Compound / isolation / high-rep reps | Stall window | Double jump | Deload |
+|------------|--------------------------------------|--------------|-------------|--------|
+| Beginner | 8–12 / 10–15 / 12–20 | 3 | Yes | On a stall only |
+| Intermediate | 6–10 / 10–15 / 12–20 | 4 | No | Every 6–8 weeks |
+| Advanced | 5–8 / 8–12 / 10–15 | 5 | No | Every 4–6 weeks |
 
 - **Presets** bundle a full `Persona`. They're Kotlin objects in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code.
 - **Who reads the persona:**
@@ -354,13 +363,16 @@ Each rejected or clamped choice carries a reason string for the UI.
 
 ### 6.1 Active workout lifecycle (WL-05, WL-06)
 
-1. **Start.** Insert `workout_session(status = ACTIVE)` and its `session_exercise` rows, with the recommendations frozen. Only one session can be ACTIVE at a time.
-2. **Every ticked set is written to Room immediately**, in a single transaction. The workout UI is a Flow over the database, so process death loses nothing. On launch, an ACTIVE session triggers a "Resume workout?" prompt. If the session is more than 4 hours old, the prompt offers to finish it, using the last set's time as the end time.
-3. **`ActiveWorkoutService`** is a foreground service that runs only while a session is ACTIVE. Its ongoing notification shows elapsed time, the current exercise and the rest countdown, with *Skip rest* and *+30 s* actions.
+1. **Start.** Insert `workout_session(status = ACTIVE)`, its `session_exercise` rows (targets copied from the routine, recommendations frozen from M2) and their `set_entry` rows: last session's warm-ups, then `target_sets` working sets, all with null values. Only one session can be ACTIVE at a time; a second start throws.
+2. **Every ticked set is written to Room immediately** as a single `UPDATE` of load, reps, RIR and `completed_at`. Edits before the tick are written too. The workout UI is a Flow over the database, so process death loses nothing. Ghost values are computed in the ViewModel from the hot query (`Prefill` in `:domain`), never stored. On launch, an ACTIVE session triggers a "Resume workout?" prompt. If the session is more than 4 hours old, the prompt offers to finish it, using the last set's time as the end time.
+3. **`ActiveWorkoutService`** is a foreground service that runs only while a session is ACTIVE. It observes the active session and the rest timer, and stops itself when there's no active session. Its ongoing notification shows elapsed time, the current exercise and set, and the rest countdown, with *Skip rest* and *+30 s* actions; tapping it opens the workout.
    - Android 14+ needs a declared service type. Use `health`, which requires the `ACTIVITY_RECOGNITION` runtime permission. **Confirmed in M0** on the reference phone (Android 15).
-4. **Rest timer.** Store an absolute end time, not a countdown, so it survives process death. The service fires the high-priority "rest over" alert and vibration. Exact alarms aren't needed, since the service is already alive. M0 showed the alert channel's vibration supersedes a direct `Vibrator` call, so vibrate directly only when that channel's vibration is turned off.
-5. **Finish.** Set `status = COMPLETED` and `ended_at`, compute PRs and outcomes, write a Health Connect `ExerciseSessionRecord` (P1), then stop the service.
+   - *Start* asks for `ACTIVITY_RECOGNITION` and `POST_NOTIFICATIONS` first. If they're refused, the workout still runs with the in-app rest banner, which vibrates when rest ends while the app is open.
+   - `START_NOT_STICKY`: if the process dies, the resume prompt restarts the service on the next launch.
+4. **Rest timer.** `RestTimer` stores an absolute end time and the rest length in a small DataStore, not a countdown, so it survives process death. The UI and the service both observe it. The service fires the high-priority "rest over" alert and vibration. A coroutine `delay` counts uptime, which stops while the CPU sleeps, so the service holds a `PARTIAL_WAKE_LOCK` for the rest's length plus a 10 s margin. A foreground service's wake lock is honoured even in Doze, so exact alarms (and their permission) aren't needed. "+30 s" after a rest has ended starts a fresh 30 s rest. M0 showed the alert channel's vibration supersedes a direct `Vibrator` call, so the service vibrates directly only when the channel can't: notifications are off for the app, the channel is blocked, or its vibration is turned off.
+5. **Finish.** Delete unticked sets, set `status = COMPLETED` and `ended_at`, compute PRs and outcomes (M2), write a Health Connect `ExerciseSessionRecord` (P1), then stop the service. Exercises with no sets stay, as a record that they were skipped. **Discard** sets `status = DISCARDED`; discarded sessions never count as history.
 6. **Keep screen on.** Use `FLAG_KEEP_SCREEN_ON` on the workout screen when the setting is enabled. No wake lock is needed.
+7. **Save back (RT-03).** The session's plan (exercise ids in order, with sets, rep range and rest) is compared with the routine's. If they differ, the summary offers to rewrite the routine from the session in one transaction.
 
 ### 6.2 AI features (optional; PRD §7.12)
 
@@ -534,7 +546,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | Layer | What | How |
 |-------|------|-----|
 | Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
-| Data | DAOs, migrations, backup round-trip, food DB import (vegetarian-only filter holds) | In-memory Room, `MigrationTestHelper` |
+| Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds) | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
 | AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit. The eval runs manually before changing the model or prompt. |
 | UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
 | Manual | A gym dogfood checklist before each release | |
@@ -565,6 +577,18 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | (d) Food database | ✅ INDB (§6.4). |
 | (e) InBody → Health Connect | ✅ Weight, body fat % and BMR only (§6.3). The InBody app's Health Connect access is off. |
 
+**M1 results (2026-10-17, reference phone on Android 15, release build):**
+
+| Check | Result |
+|-------|--------|
+| Upgrade from the M0 install | ✅ Migration 1→2 ran on the phone; the library seeded 81 exercises. |
+| Training setup and walkthrough | ✅ PPL, beginner, 3 days a week, a Saturday yoga class; picking the machine shoulder press swapped it into Push. |
+| Full Push workout | ✅ Ghost values, steppers, RIR, rest banner, and the ongoing notification ("Push · resting" with a countdown, *Skip rest* and *+30 s*). Rotation moved to Pull and the week showed 1 of 3. |
+| Killed mid-workout | ✅ `am force-stop` after 5 sets, then relaunch: *Resume workout?* restored every set and the remaining rest. The first run showed the service didn't restart on resume; fixed and re-checked. |
+| Summary and save-back | ✅ Duration, sets, reps, volume and per-exercise sets; an added set was saved back to Push. |
+| Extra session | ✅ Logged from Today, counted 1 of 1, and the next log prefilled from it. |
+| Next session | ✅ Started Push again: every set showed last session's values as ghosts. Discarding it left the rotation alone and stopped the service. |
+
 ## 11. Risks and mitigations
 
 | Risk | Mitigation |
@@ -582,6 +606,6 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 ## 12. Open technical decisions
 
 1. **Model for text logging:** Opus 5.5 (default) or Haiku 5.5. Decide on latency with the eval set; cost matters only on pay-as-you-go. *(AI access is settled: an API key funded by those credits.)*
-2. **Exercise seed data:** curate about 80 entries from an open dataset such as free-exercise-db (check the license first), or write them by hand. The split templates' exercises are needed either way.
+2. ~~**Exercise seed data**~~ *Settled in M1:* 81 hand-written entries in `assets/seed/exercises.json`, so there's no third-party licence to track.
 3. **Indian food database:** INDB, fetched at build time (§6.4). Remaining work: the download-and-convert Gradle task and the diet tagging, in M3.
 4. **Package name and app name:** "Recomp" is a placeholder.

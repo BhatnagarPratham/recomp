@@ -38,6 +38,11 @@ android {
         compose = true
     }
 
+    testOptions {
+        // Robolectric gives the DAO and migration tests a real Android context and SQLite.
+        unitTests.isIncludeAndroidResources = true
+    }
+
     packaging {
         resources {
             excludes += setOf(
@@ -74,7 +79,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     implementation(libs.hilt.android)
-    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     ksp(libs.hilt.compiler)
 
     implementation(libs.room.runtime)
@@ -86,4 +91,7 @@ dependencies {
     implementation(libs.anthropic.java)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -1,0 +1,97 @@
+{
+  "templates": [
+    {
+      "split": "PPL",
+      "routines": [
+        {
+          "name": "Push",
+          "exercises": [
+            { "exercise": "bench_press" },
+            { "exercise": "dumbbell_shoulder_press", "alternatives": ["machine_shoulder_press"] },
+            { "exercise": "pec_deck", "alternatives": ["cable_fly"] },
+            { "exercise": "triceps_pushdown" },
+            { "exercise": "cable_overhead_triceps_extension", "alternatives": ["dumbbell_overhead_triceps_extension"] },
+            { "exercise": "dumbbell_lateral_raise" }
+          ]
+        },
+        {
+          "name": "Pull",
+          "exercises": [
+            { "exercise": "lat_pulldown" },
+            { "exercise": "machine_chest_supported_row", "alternatives": ["dumbbell_chest_supported_row"] },
+            { "exercise": "back_extension" },
+            { "exercise": "incline_dumbbell_curl" },
+            { "exercise": "face_pull" },
+            { "exercise": "dumbbell_shrug" }
+          ]
+        },
+        {
+          "name": "Legs",
+          "exercises": [
+            { "exercise": "hack_squat" },
+            { "exercise": "leg_extension" },
+            { "exercise": "leg_curl" },
+            { "exercise": "standing_calf_raise" },
+            { "exercise": "hip_adduction" },
+            { "exercise": "hip_abduction" },
+            { "exercise": "barbell_hip_thrust", "alternatives": ["machine_hip_thrust"] }
+          ]
+        }
+      ]
+    },
+    {
+      "split": "FULL_BODY_AB",
+      "routines": [
+        {
+          "name": "Full body A",
+          "exercises": [
+            { "exercise": "back_squat", "alternatives": ["hack_squat", "goblet_squat"] },
+            { "exercise": "bench_press", "alternatives": ["dumbbell_bench_press", "machine_chest_press"] },
+            { "exercise": "seated_cable_row", "alternatives": ["machine_chest_supported_row"] },
+            { "exercise": "dumbbell_shoulder_press", "alternatives": ["machine_shoulder_press"] },
+            { "exercise": "leg_curl" },
+            { "exercise": "cable_crunch" }
+          ]
+        },
+        {
+          "name": "Full body B",
+          "exercises": [
+            { "exercise": "romanian_deadlift", "alternatives": ["dumbbell_romanian_deadlift"] },
+            { "exercise": "lat_pulldown" },
+            { "exercise": "incline_dumbbell_press", "alternatives": ["incline_machine_press"] },
+            { "exercise": "leg_press" },
+            { "exercise": "dumbbell_lateral_raise" },
+            { "exercise": "hanging_knee_raise" }
+          ]
+        }
+      ]
+    },
+    {
+      "split": "UPPER_LOWER",
+      "routines": [
+        {
+          "name": "Upper",
+          "exercises": [
+            { "exercise": "bench_press", "alternatives": ["dumbbell_bench_press"] },
+            { "exercise": "barbell_row", "alternatives": ["machine_chest_supported_row", "seated_cable_row"] },
+            { "exercise": "dumbbell_shoulder_press", "alternatives": ["machine_shoulder_press", "overhead_press"] },
+            { "exercise": "lat_pulldown", "alternatives": ["pull_up"] },
+            { "exercise": "ez_bar_curl", "alternatives": ["dumbbell_curl"] },
+            { "exercise": "triceps_pushdown" }
+          ]
+        },
+        {
+          "name": "Lower",
+          "exercises": [
+            { "exercise": "back_squat", "alternatives": ["hack_squat"] },
+            { "exercise": "romanian_deadlift", "alternatives": ["dumbbell_romanian_deadlift"] },
+            { "exercise": "leg_press" },
+            { "exercise": "leg_curl" },
+            { "exercise": "standing_calf_raise" },
+            { "exercise": "cable_crunch" }
+          ]
+        }
+      ]
+    }
+  ]
+}
