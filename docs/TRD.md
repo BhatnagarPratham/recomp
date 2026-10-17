@@ -754,7 +754,8 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
   - the request shape: the hand-written schema, effort `low`, the cached system prompt, and `fallbacks: "default"` for Opus but not Haiku;
   - refusal, `max_tokens` and unreadable replies;
   - 401, 402, 403 and 400 without a retry;
-  - 429 and 5xx retried once, a timeout after one retry, and dropped connections.
+  - 429, 5xx and a refused connection retried once at no cost; a timeout or a connection dropped after sending not retried and costed at its upper bound;
+  - a key OkHttp can't put in a header failing quietly, without the key in anything kept.
 - The repository: off, no key, over cap and offline never send; every failure is logged and costed; the cap lifts on the 1st; the prompt's own foods; saving with the learning loop; *Save + My meals*; drafts; the encrypted key.
 - The Describe screen: a failure keeps a draft, *Cancel* keeps nothing, *Save draft*, and *Estimate now* replaces its draft rather than adding one.
 - Migration 5→6.
