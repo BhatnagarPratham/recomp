@@ -150,7 +150,7 @@ class FoodRepository @Inject constructor(
                 createdAt = now,
             ),
         )
-        food.serving?.let { (label, grams) -> calibrate(id, label, grams) }
+        setServing(id, food.serving)
         id
     }
 
@@ -170,11 +170,25 @@ class FoodRepository @Inject constructor(
                 fiber100g = food.per100g.fiberG,
             ),
         )
-        food.serving?.let { (label, grams) -> calibrate(id, label, grams) }
+        setServing(id, food.serving)
     }
 
     /** The first own unit of a custom food, which the form edits as its serving. */
     suspend fun serving(foodId: Long): FoodUnitEntity? = foodDao.units(foodId).firstOrNull()
+
+    /**
+     * Makes [serving] a custom food's first unit, replacing the previous serving (null clears it). Units
+     * you calibrated for the food stay, after it.
+     */
+    private suspend fun setServing(foodId: Long, serving: Pair<String, Double>?) {
+        val others = foodDao.units(foodId).drop(1).filter { it.label != serving?.first }
+        foodDao.deleteUnits(foodId)
+        val first = serving?.let { (label, grams) ->
+            require(grams > 0 && label != Portions.GRAMS)
+            FoodUnitEntity(foodId = foodId, label = label.trim(), grams = grams, calibrated = true)
+        }
+        foodDao.upsertUnits(listOfNotNull(first) + others.map { it.copy(id = 0) })
+    }
 
     /** Hides a food from search, e.g. one tagged wrongly (PRD §7.7). Settings → Food → Hidden foods restores it. */
     suspend fun hide(id: Long) = foodDao.setArchived(id, true)

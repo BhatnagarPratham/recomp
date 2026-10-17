@@ -27,6 +27,7 @@ import app.recomp.domain.persona.FoodRegion
 import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.Profile
+import app.recomp.ui.food.FoodText
 import java.io.File
 import java.time.LocalDate
 import java.time.LocalTime
@@ -99,6 +100,9 @@ class FoodFlowTest {
     private suspend fun names(query: String) = foods.search(query).map { it.food.name }
 
     private suspend fun today() = app.days.today()
+
+    /** The search row's subtitle, as the add-food screen shows it. */
+    private suspend fun searchSubtitle(query: String): String = foods.search(query).first().let { FoodText.serving(it.food, it.serving) }
 
     private val g = PortionUnit("g", 1.0, PortionUnit.Kind.GRAMS)
 
@@ -334,6 +338,27 @@ class FoodFlowTest {
         // A gram entry offers grams last, like every other food.
         val gid = log.log(today, "lunch", curd, 120.0, g, Origin.HOME)
         assertEquals("g", foods.unitsForEntry(log.entry(gid)!!).last().label)
+    }
+
+    @Test
+    fun `changing a custom food's serving replaces the old one, and clearing it removes it`() = runBlocking {
+        persona(Diet.LACTO_VEGETARIAN)
+        seed()
+        fun bar(serving: Pair<String, Double>?) = CustomFood("Test bar", null, Per100g(400.0, 30.0, 40.0, 15.0), FoodDiet.VEGETARIAN, serving)
+        val id = foods.createCustom(bar("piece" to 30.0))
+        foods.calibrate(id, "glass", 300.0)
+        assertEquals(listOf("piece", "glass"), dao.units(id).map { it.label })
+
+        foods.updateCustom(id, bar("katori" to 120.0))
+        assertEquals(listOf("katori" to 120.0, "glass" to 300.0), dao.units(id).map { it.label to it.grams })
+        assertEquals("katori", foods.serving(id)!!.label)
+        val choice = foods.portion(id)!!
+        assertEquals("katori", choice.unit.label)
+        assertEquals(listOf("katori", "glass", "tbsp", "g"), choice.units.map { it.label })
+        assertEquals("1 katori (120 g) · 480 kcal · 36 g protein", searchSubtitle("Test bar"))
+
+        foods.updateCustom(id, bar(null))
+        assertEquals(listOf("glass"), dao.units(id).map { it.label })
     }
 
     @Test

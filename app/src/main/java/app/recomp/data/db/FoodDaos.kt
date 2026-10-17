@@ -101,6 +101,9 @@ interface FoodDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertUnits(units: List<FoodUnitEntity>)
 
+    @Query("DELETE FROM food_unit WHERE food_id = :foodId")
+    suspend fun deleteUnits(foodId: Long)
+
     @Query("DELETE FROM food_unit WHERE food_id = :foodId AND calibrated = 0")
     suspend fun deleteUncalibratedUnits(foodId: Long)
 }
