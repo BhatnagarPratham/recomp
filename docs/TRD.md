@@ -596,7 +596,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **API key storage:**
   - Entered once in Settings → AI. Only printable ASCII without spaces is accepted, which is all a key is made of: a zero-width space, BOM or en dash picked up in a copy would make OkHttp reject the header with the whole key in its error message. A stored value that fails the same check reads as no key.
   - Encrypted with Tink AEAD (AES-256-GCM, associated data naming the key) whose keyset is wrapped by an Android Keystore master key (`AndroidKeysetManager`; the keyset lives in its own shared-preferences file). The ciphertext is stored in the `secrets` DataStore, apart from the settings, so a settings export can never include it.
-  - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer by `data_extraction_rules.xml` (the `secrets` DataStore and the keyset file). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
+  - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer: `data_extraction_rules.xml` includes only the database and the `settings` DataStore, so the `secrets` DataStore and the keyset file are left out (§6.5). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
   - Each person enters their own key into their own install, so no key ever ships inside an APK. A build distributed with a shared key would need a proxy, because a key inside an APK can be extracted.
 
 **Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
@@ -665,7 +665,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Every table includes M3c's `meal_draft` and `ai_request_log`; the `secrets` DataStore is never read. Written through the system "create document" picker, so Google Drive works as a target.
 - **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
 - **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
-- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`: the `secrets` DataStore and Tink's keyset file, for cloud backup and device transfer).
+- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`, below).
 - **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
 
 **The file (M4, `data/backup/`).** A zip with three JSON entries:
@@ -691,7 +691,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   6. Replace the `settings` DataStore with the backup's settings, keeping any setting that never leaves the device. The DataStore migrations (`LegacyTrainingMigration`) run on old settings first.
 - **Ordering.** The database is replaced before the settings, and the scratch database has already proved the backup valid. Restore runs to the end even if the screen goes away (`NonCancellable`). If the settings write fails after the database was replaced, the message says so and points to the safety copy, which is always there from step 4.
 - Import is refused while a workout is ACTIVE on the phone. A backup taken during a workout restores it as active, and the resume prompt picks it up.
-- **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store, is excluded by omission.
+- **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store (the `secrets` DataStore and Tink's keyset file), is left out by omission. Lint rejects an `<exclude>` outside an included path, so the key files can't also be excluded by name.
 
 ### 6.6 Notifications
 
