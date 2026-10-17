@@ -1,0 +1,28 @@
+.gradle/
+.kotlin/
+build/
+/local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+*.keystore
+*.jks
+
+# Personal data and secrets: never commit (also enforced by .githooks/sensitive_scan.py)
+.env
+.env.*
+*.p12
+*.pem
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.hprof
+*.log
+recomp-backup-*
+/screenshots/
+
+# Personal notes that stay on this machine
+docs/local/

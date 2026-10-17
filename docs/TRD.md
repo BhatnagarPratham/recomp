@@ -1,0 +1,587 @@
+# Recomp: Technical Requirements Document
+
+*Draft v0.5, 2026-10-17. Implements [PRD.md](PRD.md) v0.5. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+
+## 1. Scope and constraints
+
+- One user per install, on Android 14 or later. Each person builds the app (or installs a release APK) and brings their own AI key. No Play Store listing needed.
+- **Offline-first.** Only AI features and barcode lookups need the network.
+- **AI is optional.** With AI off or unreachable, every feature still works (PRD §7.12). No code path may wait on AI without a fallback.
+- **No backend.** Everything lives in a local SQLite database. Backups are files you control.
+- The main design constraint is gym use: one hand, between sets, screen often locked. Tap count and reliability matter more than visual polish.
+- **Configuration over code (PS-03).** Everything that varies by person comes from the persona (§5.0). Engines take policies as parameters and never branch on preset names.
+
+## 2. Tech stack
+
+| Concern | Choice | Notes |
+|---------|--------|-------|
+| Language | Kotlin 2.x | |
+| UI | Jetpack Compose, Material 3 | Dark theme by default. |
+| Pattern | Single activity, MVVM with unidirectional data flow | Each ViewModel exposes `StateFlow<UiState>`. Screens send intents. |
+| Navigation | Navigation Compose, type-safe routes | |
+| Dependency injection | Hilt | |
+| Storage | Room (SQLite) for data; DataStore for settings | |
+| Async | Coroutines, Flow | |
+| Background work | WorkManager; a foreground service for the active workout | |
+| Charts | Vico | Compose-native. |
+| Health data | Health Connect (`androidx.health.connect:connect-client`) | P1. Steps come from whichever app writes them; §6.3. |
+| On-device OCR | ML Kit Text Recognition v2 | P1. Nutrition labels, without AI. |
+| AI | Anthropic Java SDK (`com.anthropic:anthropic-java`) | Kotlin uses the Java SDK. Builds and passes R8 (M0). Its class-based structured outputs don't work on Android (§6.2). |
+| Barcode | ML Kit barcode scanning (on-device) and CameraX | P1. |
+| Serialization | kotlinx.serialization | Seed data and export files. |
+| Secrets | Android Keystore with Tink | Encrypts the API key. Jetpack Security Crypto is deprecated, so not used. |
+| Images | Coil | |
+| Build | Gradle Kotlin DSL, version catalog, KSP | |
+| SDK levels | `minSdk 34`, `compileSdk 37`, `targetSdk 37` (current AndroidX libraries require compiling against 37) | Android 14+ has Health Connect built in, and the newer foreground-service rules apply. |
+
+**Why native Kotlin rather than Flutter or React Native:** the hard parts of this app are Android-specific: a foreground service with a lock-screen rest timer, Health Connect, home-screen widgets and notifications. Native makes all of them first-class, and there's no second platform to share code with.
+
+## 3. Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ui        Compose screens + ViewModels (StateFlow<UiState>)  │
+├──────────────────────────────────────────────────────────────┤
+│ domain    pure Kotlin, no Android imports                    │
+│           persona: Persona · GoalPolicy · ExperiencePolicy   │
+│           models · ProgressionEngine · NutritionCalculator   │
+│           TrendCalculator · AdaptiveTdee · use cases         │
+│           repository + MealEstimator interfaces              │
+├──────────────────────────────────────────────────────────────┤
+│ data      Room DAOs · DataStore · ClaudeMealEstimator        │
+│           HealthConnectSource · FoodDb · BackupManager       │
+└──────────────────────────────────────────────────────────────┘
+          service/ActiveWorkoutService   work/ (WorkManager jobs)
+```
+
+**Modules:** `:app` (ui, data, service, DI) and `:domain` (a pure Kotlin/JVM library). The engines carry the app's real logic. Keeping them in a JVM module means they're tested in milliseconds with no emulator. Don't split further unless build times start to hurt.
+
+```
+app/src/main/java/…/recomp/
+  ui/{today,workout,routines,exercises,nutrition,body,progress,settings,components,theme}
+  data/{db,repo,ai,food,health,backup,prefs}
+  service/ActiveWorkoutService.kt
+  work/{BackupWorker,ReminderWorker,HealthSyncWorker}.kt
+domain/src/main/kotlin/…/recomp/domain/
+  persona/  model/  progression/  nutrition/  trend/  usecase/
+```
+
+## 4. Data model (Room)
+
+**Conventions**
+
+- **Lift loads and body weight are stored as integer grams** (42.5 kg → `42500`). Comparisons in the progression engine are then exact, with no floating-point surprises.
+- **Time** is stored two ways: `*_at` holds epoch milliseconds (UTC), and `log_date` holds an ISO `LocalDate`. `log_date` is computed once, at write time, using the "day starts at" setting (PR-03). Every daily rollup groups by `log_date`.
+- **Food log rows snapshot their macros.** Editing a food later never rewrites history.
+- **Referenced rows are archived, never deleted.** This applies to exercises and foods.
+- `exportSchema = true`, with the schema JSON checked into git. Every schema change ships a tested `Migration`. **Destructive migration fallback is never enabled.**
+
+```text
+exercise            id, name, primary_muscle, secondary_muscles[], equipment, mechanic(COMPOUND|ISOLATION),
+                    movement_pattern, load_type(WEIGHTED|BODYWEIGHT|BODYWEIGHT_PLUS|ASSISTED),
+                    increment_g, default_rep_min, default_rep_max, default_rest_sec, is_unilateral,
+                    setup_notes, is_custom, archived
+routine             id, name, kind(STRENGTH|YOGA), rotation_index, archived
+routine_exercise    id, routine_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec,
+                    scheme(DOUBLE_PROGRESSION|REPS_ONLY|MANUAL), superset_group?
+workout_session     id, routine_id?, kind(STRENGTH|YOGA|OTHER), status(ACTIVE|COMPLETED|DISCARDED),
+                    started_at, ended_at?, log_date, notes, hc_record_id?
+session_exercise    id, session_id, exercise_id, position, notes,
+                    recommendation_json   -- engine output frozen at workout start
+                    user_overrode         -- PO-07
+set_entry           id, session_exercise_id, set_index, set_type(WARMUP|WORKING|DROP|FAILURE),
+                    load_g, reps, rir?, completed_at?
+personal_record     id, exercise_id, type(MAX_LOAD|REPS_AT_LOAD|E1RM|SESSION_VOLUME), value, load_g?,
+                    set_entry_id, achieved_at
+yoga_detail         session_id (PK), style, duration_min, intensity, focus_areas[], poses[]
+body_weight         id, log_date, weight_g, measured_at, source(INBODY|GYM_SCALE|HOME_SCALE|HEALTH_CONNECT)
+body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CONNECT), weight_g,
+                    skeletal_muscle_g, body_fat_g, body_fat_pct, visceral_fat_level, bmr_kcal?,
+                    ecw_tbw_ratio?, inbody_score?, segmental_lean_json?,
+                    mins_since_meal, workout_before_scan, protocol_ok, image_path?, notes  -- IB-01/02
+measurement         id, log_date, type(WAIST|CHEST|ARM|THIGH|HIP|MOBILITY_*), value
+progress_photo      id, log_date, pose(FRONT|SIDE|BACK), file_path   -- app-private storage
+food                id, name, brand?, source(CUSTOM|IFCT|INDB|OFF|LABEL_OCR|AI), barcode?,
+                    diet(VEG|EGG|NON_VEG|VEGAN), kcal_100g, protein_100g, carbs_100g, fat_100g,
+                    fiber_100g, use_count, last_used_at, archived
+food_unit           id, food_id, label("roti","katori","piece"…), grams
+food_log            id, log_date, meal_slot, food_id?, name, quantity, unit_label, grams,
+                    kcal, protein_g, carbs_g, fat_g, fiber_g, origin(HOME|ORDERED|PACKAGED),
+                    source(MANUAL|SAVED_MEAL|QUICK_ADD|AI_TEXT|AI_PHOTO|LOCAL_PARSE|LABEL|BARCODE),
+                    ai_request_id?, logged_at
+meal_draft          id, created_at, log_date, meal_slot, text, photo_path?, origin  -- AI-02: estimate later
+saved_meal          id, name, default_slot, use_count
+saved_meal_item     id, saved_meal_id, food_id, quantity, unit_label, grams
+nutrition_target    id, effective_from, kcal, protein_g, fat_g, carbs_g, tdee_estimate,
+                    reason(INITIAL|CHECKIN|MANUAL)
+daily_activity      log_date (PK), steps?, steps_synced_at?, sleep_hours?   -- steps from HC, sleep typed in
+ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
+                    input_tokens, output_tokens, cost_usd, status, response_json   -- AI-03 spend + debugging
+```
+
+**Settings** live in DataStore: the persona (§5.0, serialized), day boundary, primary weight source, usual scan slot, extra-session schedule, AI mode (`OFF|ON`), AI model, monthly AI cap, reminder times, and the protein ramp state. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
+
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet`.
+
+**Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, then pulls the working sets for each.
+
+## 5. Core algorithms (`:domain`)
+
+### 5.0 Persona model (PRD §4, PS-01 to PS-03)
+
+```kotlin
+data class Persona(
+    val goal: GoalPlan,                // policy + pace + optional finish line + start date (§5.3, §5.7, §5.8)
+    val experience: ExperiencePolicy,  // BEGINNER | INTERMEDIATE | ADVANCED (below)
+    val diet: Diet,                    // VEGAN | LACTO_VEGETARIAN | EGGETARIAN | PESCATARIAN | NON_VEGETARIAN
+    val region: FoodRegion,            // INDIAN | INTERNATIONAL: food database, portion units, AI conventions
+    val split: SplitTemplate,          // PPL | FULL_BODY_AB | UPPER_LOWER | CUSTOM: seeds routines
+    val extras: List<ExtraSession>,    // e.g. yoga class on Saturdays
+    val weightSource: WeightSource,    // HOME_SCALE | SCAN | GYM_SCALE
+    val units: Units,                  // METRIC | IMPERIAL (display only)
+)
+
+data class GoalPlan(
+    val policy: GoalPolicy,            // FAT_LOSS | RECOMP | MAINTAIN | LEAN_BULK with editable rate and protein
+    val pace: Pace?,                   // GENTLE | STANDARD | AGGRESSIVE; null = custom values under Advanced
+    val finishLine: FinishLine?,       // TargetWeight | TargetBodyFatPct | ByDate, or none
+    val startedOn: LocalDate,
+)
+
+data class ExperiencePolicy(
+    val level: Experience,
+    val compoundReps: IntRange, val isolationReps: IntRange,
+    val stallWindow: Int,               // +1 in a deficit
+    val allowsDoubleJump: Boolean,
+    val deloadEveryWeeks: Int?,         // null = only on a stall
+)
+```
+
+| Experience | Compound / isolation reps | Stall window | Double jump | Deload |
+|------------|---------------------------|--------------|-------------|--------|
+| Beginner | 8–12 / 10–15 | 3 | Yes | On a stall only |
+| Intermediate | 6–10 / 10–15 | 4 | No | Every 6–8 weeks |
+| Advanced | 5–8 / 8–12 | 5 | No | Every 4–6 weeks |
+
+- **Presets** bundle a full `Persona`. They're Kotlin objects in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code.
+- **Who reads the persona:**
+  - Calorie and protein targets read `goal` (§5.3).
+  - The progression engine reads `experience` (§5.1).
+  - Food search filters on `diet` and `region` (§6.4).
+  - AI prompts are built from `diet` and `region` (§6.2).
+  - The weekly plan reads `split` and `extras`.
+- **No other code branches on persona values.**
+- **Persona changes take effect from that day on.** A new `nutrition_target` row is written, and history is never rewritten (PS-02).
+
+### 5.1 Progression engine (PO-01 to PO-08)
+
+**Definitions.** An *exposure* is one completed session's working sets for one exercise. The *top load* is the heaviest working load in that exposure. Only working sets at the top load count toward progression; back-off sets are ignored.
+
+```kotlin
+fun recommend(cfg: ExerciseConfig, history: List<Exposure> /* newest first */, ctx: Context): Recommendation
+
+// cfg: repMin, repMax, targetSets, incrementG, loadType, scheme
+// ctx: inDeficit (true when the current target is below estimated TDEE), experience (ExperiencePolicy, §5.0)
+
+if (history.isEmpty())           -> BASELINE   "Pick a weight you could do for ${repMax} with ~2 reps left"
+val last = history[0]
+val jumpRatio  = cfg.incrementG / last.topLoadG
+val effRepMax  = cfg.repMax + if (jumpRatio > 0.10) 2 else 0          // PO-06 big-jump guard
+val allAtTop   = last.workingSets.size >= cfg.targetSets && last.workingSets.all { it.reps >= effRepMax }
+val missedBottom = last.workingSets.any { it.reps < cfg.repMin }
+
+when {
+  allAtTop -> INCREASE   load = roundToStep(last.topLoadG + inc), reps = repMin × targetSets
+              // P1 (PO-08): inc = 2 × incrementG if ctx.experience.allowsDoubleJump, every set had RIR ≥ 3 and jumpRatio ≤ 0.05
+  missedBottom && history.getOrNull(1)?.let { it.topLoadG == last.topLoadG && it.missedBottom } == true
+           -> DELOAD     load = roundDownToStep(last.topLoadG × 0.9), reps = repMin × targetSets
+  missedBottom -> REPEAT  same load, target = repMin on every set
+  else     -> ADD_REPS   same load, target = last reps with +1 on the first set below effRepMax
+}
+
+// Stall check, layered on top of any action above (PO-05)
+val window = ctx.experience.stallWindow + if (ctx.inDeficit) 1 else 0   // §5.0 experience policy
+if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= history.drop(window).maxOf { it.bestE1rm })
+    rec.stall = StallOptions(DELOAD_10, SWAP(substitutes(cfg)), HOLD)   // offered, never auto-applied
+```
+
+- **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load. `ASSISTED` progresses by *reducing* the assistance load.
+- **Rounding.** `roundToStep` uses the exercise's increment as the equipment step (e.g. dumbbells at 2.5 kg). With 1.25 kg plates, the barbell step is 2.5 kg total. Load is always per dumbbell, never the pair.
+- **Estimated 1RM** uses Epley: `load × (1 + reps / 30)`. It's computed only for sets of 12 reps or fewer. Higher-rep sets still count for rep PRs.
+- **PRs** are computed once, when the workout finishes, and written to `personal_record`. At most one PR of each type per exercise per session.
+- **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts. The summary then grades against what you were actually shown, even if the history changes later.
+
+### 5.2 Weight trend (BM-01)
+
+Only weigh-ins from the primary source (BM-01) feed the trend. Readings from other sources are plotted as dots but left out, because each scale and setting reads differently.
+
+```
+Δd     = days since the previous primary weigh-in
+α_eff  = 1 − (1 − 0.1)^Δd          // 0.10 for daily data, ≈ 0.52 for weekly
+trend  = trend_prev + α_eff × (w − trend_prev)
+```
+
+The smoothing accounts for the gap between weigh-ins, so daily and weekly data both give a sensible trend. A weekly InBody reading moves the trend about halfway toward it, the same effect seven daily readings at that weight would have. The trend is seeded with the first weigh-in. Weekly rate = `trend_today − trend_7_days_ago`, interpolated between points and also shown as a percentage of body weight. The UI plots weigh-ins as dots and the trend as a line.
+
+### 5.3 Starting targets (NU-01 to NU-04, IB-05)
+
+```
+BMR    = Katch-McArdle when a body-composition scan ≤ 60 days old exists (IB-05):
+             370 + 21.6 × lean_kg              // lean_kg = scan weight − body fat mass
+         otherwise Mifflin-St Jeor:
+             10·kg + 6.25·cm − 5·age + 5   (male)   | … − 161 (female)
+TDEE   = BMR × activity factor   (1.2 sedentary · 1.375 desk job + 3–4 sessions [default] · 1.55 active)
+adjustment (from the goal policy and pace, PRD §4.2):
+    FAT_LOSS, RECOMP:  −min(rate% × trend_kg × 7700 / 7,  25% of TDEE)
+    MAINTAIN:          0
+    LEAN_BULK:         +min(surplus fraction, 15%) × TDEE
+
+pace → rate                 Gentle    Standard   Aggressive
+    FAT_LOSS (% BW/week)      0.5       0.75       1.0
+    RECOMP   (% BW/week)      0.25      0.5        0.75
+    LEAN_BULK (% of TDEE)     5         10         15
+    CUSTOM: any value under Advanced, still capped
+kcal   = max(TDEE + adjustment, BMR, 1500 male / 1200 female), rounded to 10
+reference_kg = goal weight if set, else current trend weight
+protein_g = goal policy g/kg × reference_kg, then ramped (below)
+fat_g  = max(0.25 × kcal / 9, 0.6 × reference_kg)
+carbs_g = (kcal − 4·protein_g − 9·fat_g) / 4
+```
+
+Implemented in `NutritionCalculator` and `GoalPolicy` (`:domain`).
+
+**Golden test vectors** (illustrative inputs, not anyone's real data):
+
+| Vector | Inputs | BMR | TDEE | Adjustment | kcal | Protein | Fat | Carbs |
+|--------|--------|-----|------|------------|------|---------|-----|-------|
+| A: recomp, Standard | male, 30 y, 175 cm, 95 kg, goal 78 kg, ×1.375 | 1899 | 2611 | −523 | 2090 | 125 | 58 | 267 |
+| B: recomp, Aggressive + scan | as A at 0.75%/week, scan lean mass 66 kg (Katch-McArdle); deficit capped at 25% <!-- pii-ok: illustrative test vector --> | 1796 | 2469 | −617 | 1850 | 125 | 51 | 222 |
+| C: lean bulk, Standard | male, 30 y, 175 cm, 70 kg, no goal weight, ×1.55 | 1649 | 2556 | +256 | 2810 | 112 | 78 | 415 |
+| D: fat loss, Standard | female, 35 y, 165 cm, 80 kg, goal 65 kg, ×1.375; deficit capped | 1495 | 2056 | −514 | 1540 | 130 | 43 | 159 |
+| E: maintain | as A, goal Maintain | 1899 | 2611 | 0 | 2610 | 125 | 73 | 365 |
+
+**Exercise calories are never added to the food budget.** The activity factor, and later the adaptive TDEE, already include training.
+
+**Protein ramp (NU-03).** The first 7 days are a baseline week, which needs at least 5 logged days. During it, protein is shown but has no target. After that:
+
+```
+target(week n) = min(full_target, baseline_mean + 15 g × n)
+```
+
+- On by default for vegan and vegetarian diets.
+- The ramp state lives in DataStore.
+- Editing the full target doesn't reset the ramp. Turning the ramp off jumps straight to the full target.
+
+### 5.4 Adaptive maintenance (NU-05, P1)
+
+```
+window      = 21 days with daily weigh-ins; 28 days with weekly ones (needs ≥ 4 weigh-ins)
+              usable only if ≥ 80% of days have food logged
+              (a day with no logs, or one you mark "incomplete", is excluded)
+tdee_obs    = mean(kcal on logged days) − (trend_end − trend_start) × 7700 / days
+tdee_new    = tdee_prev + clamp(0.5 × (tdee_obs − tdee_prev), −150, +150)   // at most 150 kcal/week
+new target  = §5.3 applied with TDEE = tdee_new
+```
+
+Example: you average 2000 kcal over 21 days and the trend falls 1.0 kg, so `tdee_obs ≈ 2367`. The Sunday check-in shows the observed number, the proposed target and the reason. Accepting it writes a new `nutrition_target` row.
+
+If logging consistently under- or over-counts by some percentage, that error moves `tdee_obs` by the same amount, so the targets still steer you correctly.
+
+**Check-in flags per goal (GL-08, PRD §4.8).** The weekly check-in runs adaptive TDEE for every goal. A goal's flag decides when a change is proposed:
+- Fat loss: loss under 50% of pace for 2 weeks.
+- Recomp: waist and trend both flat for 4 weeks.
+- Maintain: drift beyond ±1% over 4 weeks.
+- Lean bulk: gain under 0.1% or over 0.5% a week for 2 weeks.
+
+A proposal is always §5.3 recomputed with `tdee_new` at the current pace.
+
+### 5.5 Weekly volume per muscle (PO-10, P1)
+
+Each working set counts as 1 set for the exercise's primary muscle and 0.5 for each secondary muscle. The weekly total per muscle is compared against an editable reference band (default 10–20). It's for information only and never triggers a notification.
+
+### 5.6 InBody trends (IB-02, IB-04)
+
+```
+protocol_ok = |time_of_day − usual_slot| ≤ 90 min && mins_since_meal ≥ 120 && !workout_before_scan
+Δ between consecutive protocol_ok scans:
+    |Δ skeletal_muscle| < 1.0 kg   → "within noise"
+    |Δ body_fat_pct|    < 1.0      → "within noise"
+trend over ≥ 3 protocol_ok scans = least-squares slope per 4 weeks
+```
+
+Scans taken off protocol are drawn hollow and excluded from both the deltas and the slope. Lean mass for Katch-McArdle (§5.3) comes from the latest protocol-ok scan.
+
+### 5.7 Goal recommendation (PRD §4.6, GL-02, GL-03)
+
+Runs only after "Describe your goal". Inputs: an intent (`LOSE_FAT | BUILD_MUSCLE | BOTH | MAINTAIN`), training age, sex, and body fat from a scan in the last 60 days. Without a scan, it falls back to BMI.
+
+```
+highFat(sex)     = bodyFat ≥ (20% male | 28% female)   else  BMI ≥ 27   // pii-ok: thresholds
+veryHighFat(sex) = bodyFat ≥ (25% male | 32% female)   else  BMI ≥ 30   // pii-ok: thresholds
+underweight      = BMI < 18.5
+
+LOSE_FAT      → underweight ? MAINTAIN : FAT_LOSS
+BOTH          → underweight ? MAINTAIN
+              : (trainingAge < 1 year || highFat) ? RECOMP
+              : LEAN_BULK   (reason: "recomposition is slow for lean, trained lifters; bulk now, cut later")
+BUILD_MUSCLE  → veryHighFat ? RECOMP : LEAN_BULK
+MAINTAIN      → MAINTAIN
+```
+
+- **Output:** `Recommendation(goal, reasonKey)`. The reason is a short template with the deciding inputs filled in.
+- **With AI on (GL-03):** Claude maps the free text to `{intent, follow_up_question?}` with a hand-written JSON schema (§6.2). The rules above then decide. AI never picks the goal directly, so the outcome is testable and identical offline.
+- **Thresholds** live in one table in `:domain`, so they're easy to tune.
+
+### 5.8 Finish line, projection and guardrails (PRD §4.7, §4.9)
+
+```
+projection_kg_per_week ≈ adjustment × 7 / 7700          // shown as approximate
+weeks_to_finish        ≈ |trend − target| / |projection|  // recomputed weekly from the trend
+reached                = trend crosses the target weight or body-fat %, or the date passes
+
+maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached ∧ no break in the last 12 weeks
+```
+
+**Guardrails** are checked whenever a goal, pace or profile changes:
+- Below BMI 18.5, deficit goals are rejected and the suggestion is Maintain.
+- Under 18, the pace is clamped to Gentle.
+- An Aggressive pace needs one acknowledgement of a warning.
+- The intake floor (§5.3) always applies.
+
+Each rejected or clamped choice carries a reason string for the UI.
+
+## 6. Key technical flows
+
+### 6.1 Active workout lifecycle (WL-05, WL-06)
+
+1. **Start.** Insert `workout_session(status = ACTIVE)` and its `session_exercise` rows, with the recommendations frozen. Only one session can be ACTIVE at a time.
+2. **Every ticked set is written to Room immediately**, in a single transaction. The workout UI is a Flow over the database, so process death loses nothing. On launch, an ACTIVE session triggers a "Resume workout?" prompt. If the session is more than 4 hours old, the prompt offers to finish it, using the last set's time as the end time.
+3. **`ActiveWorkoutService`** is a foreground service that runs only while a session is ACTIVE. Its ongoing notification shows elapsed time, the current exercise and the rest countdown, with *Skip rest* and *+30 s* actions.
+   - Android 14+ needs a declared service type. Use `health`, which requires the `ACTIVITY_RECOGNITION` runtime permission. **Confirmed in M0** on the reference phone (Android 15).
+4. **Rest timer.** Store an absolute end time, not a countdown, so it survives process death. The service fires the high-priority "rest over" alert and vibration. Exact alarms aren't needed, since the service is already alive. M0 showed the alert channel's vibration supersedes a direct `Vibrator` call, so vibrate directly only when that channel's vibration is turned off.
+5. **Finish.** Set `status = COMPLETED` and `ended_at`, compute PRs and outcomes, write a Health Connect `ExerciseSessionRecord` (P1), then stop the service.
+6. **Keep screen on.** Use `FLAG_KEEP_SCREEN_ON` on the workout screen when the setting is enabled. No wake lock is needed.
+
+### 6.2 AI features (optional; PRD §7.12)
+
+**Access: an API key, not a subscription login.**
+
+- **A Claude.ai Pro or Max login can't authenticate a custom app.** Anthropic doesn't allow third-party apps to [offer claude.ai login](https://code.claude.com/docs/en/agent-sdk/overview), and developers [may not collect, store, or intermediate Claude.ai credentials or session tokens](https://code.claude.com/docs/en/legal-and-compliance). There's no exception for an app you build for yourself.
+- **The app uses a Claude API key** from the Claude Console. API usage is billed separately from the subscription, based on actual monthly usage.
+- **Max plans can fund it.** [Max includes monthly API credits](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers): $100 on Max 5x, $200 on Max 20x. They're usable for your own apps, and this app's expected spend (≈ $4–6 a month on Opus 5.5) is a small fraction of that. Without Max, the key is pay-as-you-go.
+- **Setup, done once:**
+  1. Enable the credits following that page.
+  2. In the Console, create a workspace for the app and set a spend limit on it.
+  3. Create an API key in that workspace.
+  4. Paste the key into the app's Settings.
+- **Spend control:** the workspace limit is the hard stop. The in-app monthly cap (AI-03) is a second guard.
+- **Considered and rejected:** handing off to the Claude Android app through a share intent. It needs manual copy and paste each time and returns nothing the app can parse.
+
+**Modes and fallback (AI-01 to AI-03)**
+
+```
+AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
+```
+
+- **Gate first.** Every AI entry point checks `AiGate`. When the state isn't `READY`, the UI shows the non-AI path instead: search, saved meals, quick add, the local parser, or the manual form. AI buttons are hidden when the state is `OFF`.
+- **Failures.** Timeout is 20 s with one SDK retry. A timeout, a 429, a 5xx or a network error saves the input as a `meal_draft` and drops you into the non-AI path. Logging is never blocked.
+- **Drafts** show up on that day's view with an *Estimate now* button once AI is reachable again. They're never sent automatically.
+- **Spend.** `cost_usd` = usage tokens × a price table in code (updated by hand when prices change). The monthly sum is checked against the cap before every call.
+
+**Uses and output schemas.** Every request uses structured outputs: `output_config.format` with a JSON schema written by hand (`JsonOutputFormat.Schema`). The reply is parsed with kotlinx.serialization. **Don't use the SDK's class-based `.outputConfig(SomeClass::class.java)`.** It derives the schema with `java.lang.reflect.AnnotatedType`, which Android doesn't have even at API 37, so it crashes on the phone (found in M0).
+
+| Kind | Input | Output (abridged) |
+|------|-------|-------------------|
+| `MEAL_TEXT`, `MEAL_PHOTO`, `FIT_CHECK` | Text and/or photo, plus the origin tag | `items[]` (shape below), optional `clarifying_question` |
+| `LABEL` (P1) | Label photo plus the on-device OCR text | `name`, `brand?`, `per_100g {kcal, protein_g, carbs_g, fat_g, fiber_g}`, `serving_g?` |
+| `INBODY` (P1) | Screenshot shared from the InBody app, or a photo of the paper sheet | `weight_kg`, `skeletal_muscle_kg`, `body_fat_kg`, `body_fat_pct`, `visceral_fat_level`, `bmr_kcal?`, `ecw_tbw?`, `inbody_score?`, `segmental?` |
+| `COACH` (P2) | The week's summary as JSON | `suggestions[3] {title, why, action}` |
+
+```json
+{
+  "items": [
+    { "name": "Phulka", "quantity": 2, "unit": "piece", "grams": 70,
+      "kcal": 210, "protein_g": 6.5, "carbs_g": 42, "fat_g": 1.5, "fiber_g": 4,
+      "confidence": "high", "assumptions": "medium size, no ghee" }
+  ],
+  "clarifying_question": "Was the dal tempered with ghee?"
+}
+```
+
+**Model.** `claude-opus-5-5` with adaptive thinking (the model's default), configurable in settings.
+
+| | Opus 5.5 ($4 in / $20 out per MTok) | Haiku 5.5 ($0.10 / $0.50 per MTok) |
+|---|---|---|
+| Per text request (~2k tokens in, ~1.5k out) | ≈ $0.04 | ≈ $0.001 |
+| Photo request | ≈ +$0.006 | Negligible |
+| Per month, at about 4 AI logs a day | ≈ $4–6 | ≈ $0.15 |
+
+Saved meals push the number of AI calls down over time. Opus 5.5 is the default. On Max credits cost hardly matters; on pay-as-you-go, Haiku 5.5 (≈ $0.15 a month) may be worth it. **The open question is latency.** A described meal should take under 45 s including review (PRD §10). The eval set (§8) measures both accuracy and response time. If Opus is too slow for text logging, text requests can move to Haiku 5.5 while photos stay on Opus.
+
+**Meal request details.**
+
+- **System prompt:**
+  - Role and Indian portion conventions.
+  - **Diet rule from the persona,** e.g. lacto-vegetarian: no meat, fish or egg, and assume the vegetarian version of ambiguous dishes ("biryani", "momos").
+  - **Region conventions from the persona:** Indian portions (phulka, katori) or international ones (cup, slice).
+  - **Origin handling:** *Ordered* means restaurant levels of oil, ghee and cream; *Home* means home-style cooking.
+  - Your calibrated units (e.g. "my katori = 180 ml").
+  - Your top ~30 custom foods with their macros.
+
+  The prompt is stable between calls, so cache it if it exceeds the model's minimum cacheable length.
+- **Photos** are downscaled to about 1500 px on the long edge as JPEG before sending.
+- **Client-side validation:**
+  - Recompute totals from the items.
+  - Flag any item whose kcal is more than 15% away from `4P + 4C + 9F`.
+  - Reject items with non-positive grams.
+  - Check `stop_reason` (`refusal`, `max_tokens`) before reading content, and enable the API's server-side refusal fallback (`fallbacks`).
+  - Handle errors with the SDK's typed exceptions.
+- **Learning loop.** If you edit an AI item and save it, it becomes a `food(source = AI)`. It then appears in search, in the local parser and in future prompts, so repeat dishes converge on your numbers.
+- **Privacy.** Only the meal text or photo, label or InBody photo, and your diet are sent. No name or account details. The first use shows a one-time notice.
+- **API key storage:**
+  - Entered once in Settings.
+  - Encrypted with a Keystore-backed key through Tink and stored in DataStore.
+  - Never logged, and excluded from backups.
+  - Each person enters their own key into their own install, so no key ever ships inside an APK. A build distributed with a shared key would need a proxy, because a key inside an APK can be extracted.
+
+**Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
+
+```
+"2 roti, 1 katori dal makhani and salad"
+→ split on  ,  "and"  +  newline
+→ per chunk: quantity (2, ½, "half", "one"…) + unit (food_unit labels + synonyms: bowl→katori, chapati→roti)
+             + name
+→ FTS-match name against vegetarian foods, ranked by use_count;
+  unit → grams via food_unit, else the food's default serving
+→ unmatched chunks listed as "Couldn't find: search or quick add"
+```
+
+### 6.3 Health Connect (P1)
+
+- **Step sources:** whichever app writes steps to Health Connect. On a phone without a watch, that's typically Google Fit or Samsung Health.
+  - Google has deprecated the Google Fit APIs in favour of Health Connect, so the app never calls Fit directly.
+  - Google Fit writes the phone's step count into Health Connect when its Health Connect sync is on. **M0 finding:** Fit declares `WRITE_STEPS`, but its Health Connect access was off on the reference phone. It has to be turned on in Google Fit's settings.
+- **Read:** daily step totals (`StepsRecord` aggregates).
+- **InBody import (P1, IB-07):** read body records whose data origin is the InBody app (`com.inbody2014.inbody`). Records with the same timestamp are grouped into one `body_composition` draft for you to complete.
+  - **M0 finding:** the InBody app (v2.8.40) can write only `WeightRecord`, `BodyFatRecord` and `BasalMetabolicRateRecord` (plus steps and blood pressure). It doesn't write lean mass or body water, and Health Connect has no types for skeletal muscle mass or visceral fat.
+  - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
+  - Skeletal muscle mass and visceral fat always come from the share flow (§6.7) or manual entry.
+  - The InBody app's Health Connect access was off; turn it on in the InBody app.
+- **Not read:** sleep. There's no tracker, so it's typed in at the morning check-in.
+- **Write (DA-04):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit.
+- **Fallback if Fit doesn't write steps:** read the phone's `TYPE_STEP_COUNTER` sensor directly. It needs `ACTIVITY_RECOGNITION`, which the workout service already requests. The counter resets on reboot, so sample it on app open and from a periodic worker, and store daily deltas.
+- **Sync** runs when the app opens, plus a daily WorkManager job. Reads are incremental using change tokens. Records whose data origin is this app are skipped.
+- **The app works fully without Health Connect.**
+
+### 6.4 Food data (database P0, scanning P1)
+
+- **Region databases (P0, NU-11).** Each `food` row carries `diet` tags, and search filters on the persona's diet.
+- **Indian region: INDB**, the Indian Nutrient Databank ([GitHub](https://github.com/lindsayjaacks/Indian-Nutrient-Databank-INDB-), [paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC11277795/)).
+  - **What's in it:** 1,014 recipes plus about 1,095 raw items, with per-100 g and per-serving values for energy (kcal), protein, carbs, fat, fibre and more.
+  - **Never committed to this repo.** A Gradle task (`:app:fetchIndb`) downloads `INDB.xlsx` (about 1 MB) from the authors' repository at a pinned commit and checks its SHA-256. It converts the file into the prepopulated food asset, written under `build/`, and never commits it.
+  - **Why:** the authors' repository declares no licence, so redistributing the data from a public repo isn't safe. Fetching it from the source at build time is fine for personal builds.
+  - **Diet tags** are derived from ingredients (meat, fish, egg, dairy), because INDB has no vegetarian flag.
+  - **Indian units** come from INDB's serving sizes, plus your own calibration.
+  - **Licensing (checked 2026-10-17):** the paper is CC BY 4.0, and the authors describe the files as "publicly and freely available". Cite INDB in the app's About screen. Ask the authors before ever bundling the data in a distributed APK.
+  - **IFCT 2017 (NIN):** a free PDF with no stated open licence, covering raw foods only. It's a cited reference, not a data source. The community CSV port is AGPL-3.0.
+- **International region:** no bundled dataset in the MVP. Open Food Facts lookups (barcode and search, P1), custom foods, AI-learned items and quick add. A bundled generic dataset (e.g. USDA FoodData Central, public domain) is a candidate for v1.1.
+- **Protein-dense seeds per diet**, tagged so the protein nudge (NU-23) can rank them by protein per 100 kcal.
+  - Vegetarian: paneer, tofu, soya chunks, curd and hung curd, Greek yogurt, milk, whey, chana, rajma, moong, besan, peanuts.
+  - Vegan: the same list without dairy and whey.
+  - Other diets: add eggs, fish and meat.
+- **Label scan (P1, NU-19):**
+  1. CameraX captures the label.
+  2. ML Kit text recognition runs on-device.
+  3. Tolerant regexes parse the per-100 g column of the FSSAI nutrition table: `Energy (kcal)`, `Protein (g)`, `Carbohydrate (g)`, `Total Fat (g)`.
+  4. An editable form is pre-filled.
+
+  With AI on, the photo and OCR text also go to Claude (`LABEL`) for a cleaner result.
+- **Barcode (P1, NU-21):** Open Food Facts API, with a custom User-Agent as its terms require. A result is cached as a `food` row. Coverage of Indian brands is patchy, so a miss goes straight to label scan.
+- **Search ranking:** recent and frequent foods first (`use_count`, `last_used_at`), then custom foods, then AI-learned items, then the bundled database.
+
+### 6.5 Backup and restore (DA-01, DA-02)
+
+- **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Written through the system "create document" picker, so Google Drive works as a target.
+- **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
+- **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
+- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded.
+- **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
+
+### 6.6 Notifications
+
+- **Channels:** *Workout* (ongoing), *Rest timer* (high importance), *Reminders*, *Weekly check-in*.
+- **Scheduling:** reminders use WorkManager with inexact timing; ±15 minutes is fine.
+- **Permission:** `POST_NOTIFICATIONS` is requested at the first opt-in.
+
+### 6.7 Share target (IB-03, NU-19, NU-20)
+
+The app registers as an Android share target for images (`ACTION_SEND`, `image/*`). A shared image opens a picker: *InBody result*, *Nutrition label* or *Meal photo*. Each choice leads into its own flow. That's how a screenshot from the InBody app gets in without saving files around. With AI off, *InBody result* opens the manual form with the screenshot alongside for reference.
+
+## 7. Non-functional requirements
+
+| Area | Requirement |
+|------|-------------|
+| Performance | Cold start to the Today screen < 1.5 s on a mid-range phone. Ticking a set updates the UI in < 100 ms. Food search over 10k items returns in < 150 ms. |
+| Reliability | No data loss on process death or reboot mid-workout. Every migration has a test. |
+| Offline | Everything except AI features and barcode lookup works offline. Health Connect and label OCR run on-device. |
+| Gym usability | Set controls are at least 56 dp. Primary actions sit in the bottom half of the screen. High-contrast dark theme. Layout holds up at 130% font size. |
+| Privacy | No analytics or crash SDKs. The only network calls go to Anthropic and Open Food Facts. |
+| Battery | The foreground service runs only during an active workout. |
+| Accessibility | Content descriptions on every control. TalkBack can complete the set-logging flow. |
+
+## 8. Testing strategy
+
+| Layer | What | How |
+|-------|------|-----|
+| Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
+| Data | DAOs, migrations, backup round-trip, food DB import (vegetarian-only filter holds) | In-memory Room, `MigrationTestHelper` |
+| AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit. The eval runs manually before changing the model or prompt. |
+| UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
+| Manual | A gym dogfood checklist before each release | |
+
+## 9. Build and distribution
+
+- Private Git repository. CI with GitHub Actions on push: build, unit tests, Android Lint, ktlint.
+- Release APKs are signed with a personal keystore that stays out of git. Install with `adb` or from a GitHub Release. Play Console internal testing is optional later.
+
+## 10. Milestones
+
+| Milestone | Contents | PRD coverage |
+|-----------|----------|--------------|
+| **M0: Setup and spikes** | Project skeleton, theme, navigation, Room, Hilt, CI, privacy pre-commit hook. **Spikes:** (a) the Anthropic Java SDK running on Android, including R8 keep rules; (b) foreground service type and lock-screen rest timer on a real phone; (c) whether Google Fit's steps show up in Health Connect; (d) licensing and format of the IFCT and INDB food data; (e) which records the InBody app writes to Health Connect. Goal-driven `NutritionCalculator`. | — |
+| **M1: Training core** | Exercise seed data with your PPL routine pre-loaded, onboarding equipment check, rotation, active workout (prefill, steppers, RIR, rest timer, service, resume), summary, yoga log | EX, RT, WL, YG P0, PR-04 |
+| **M2: Progression** | `ExperiencePolicy`, engine and its tests, targets in the workout UI, live feedback, PRs, stall card, exercise history | PO P0, HM-02 |
+| **M3: Personas and nutrition core** | `Persona` and `GoalPlan` models, presets and onboarding (PS-01 to PS-03), the goal flow with cards, guided suggestion, pace, finish line and guardrails (GL P0), and a goal-driven Today screen; targets from goal policies with the protein ramp; the INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. `AiGate` with AI Describe it, drafts and the spend cap. | PS, PR, NU, AI P0 |
+| **M4: Body, Today and data** | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
+| **M5+: v1.1** | Adaptive target with weekly check-in and review, Will it fit?, label scan, local parser, AI meal photos, the share target (§6.7) with InBody import from screenshots and Health Connect, recomp chart and InBody-based targets, steps through Health Connect, sleep in the check-in, barcode, charts, reminders, widget, auto-backup | P1 |
+
+**M0 results (2026-10-17, reference phone on Android 15):**
+
+| Spike | Result |
+|-------|--------|
+| (a) Anthropic SDK | ✅ Builds, and passes R8 with broad keep rules. On the phone, the minified build's request reached the API and came back as a typed `401` error. ⚠️ The SDK's class-based structured outputs can't work on Android (no `AnnotatedType`), so schemas are hand-written. A live meal estimate with your key is still to do. |
+| (b) Rest timer | ✅ The `health` foreground service runs, the ongoing notification counts down and is visible on the lock screen, and the "rest over" alert fires and vibrates on time. Checking the lock screen by eye is up to you. |
+| (c) Steps | ⚠️ Google Fit can write steps, but its Health Connect access is off. Turn it on, then re-check. |
+| (d) Food database | ✅ INDB (§6.4). |
+| (e) InBody → Health Connect | ✅ Weight, body fat % and BMR only (§6.3). The InBody app's Health Connect access is off. |
+
+## 11. Risks and mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| The Anthropic Java SDK misbehaves on Android (Jackson reflection under R8, dependency conflicts) | **M0 so far:** the debug and R8 release builds pass with broad keep rules, and the class-based structured outputs were found to be unusable, so schemas are hand-written. Still to confirm a live call on the phone. Narrow the keep rules before release (the release APK is ~30 MB). AI is optional, so the MVP ships either way. |
+| INDB's undeclared licence | The data is never committed or bundled in a published APK. Each build downloads it from the authors at a pinned commit (§6.4). Ask the authors before distributing an APK that contains it. |
+| No app writes steps to Health Connect on a given phone | Read the phone's step-counter sensor directly (§6.3). |
+| AI portion estimates are off by 20–30%, worse for ordered food | Origin-aware prompts, review screen, confidence flags, learning loop (§6.2), and adaptive TDEE absorbing consistent bias (§5.4). |
+| InBody readings swing with hydration | Test protocol, protocol flags, noise bands, trends over 3 or more scans (§5.6). |
+| Logging fatigue | Saved meals, copy day, quick add, AI logging. Targets judged on weekly averages. |
+| Data loss | Per-set writes, mandatory migration tests, auto-backup, round-trip test. |
+| The engine progresses too fast in a deficit | Conservative defaults, deficit-aware stall window, everything overridable. Retune after 4 weeks of real data. |
+| Scope creep | The P0 list is the MVP. Nothing from P1 starts until the MVP has been used daily for 2 weeks. |
+
+## 12. Open technical decisions
+
+1. **Model for text logging:** Opus 5.5 (default) or Haiku 5.5. Decide on latency with the eval set; cost matters only on pay-as-you-go. *(AI access is settled: an API key funded by those credits.)*
+2. **Exercise seed data:** curate about 80 entries from an open dataset such as free-exercise-db (check the license first), or write them by hand. The split templates' exercises are needed either way.
+3. **Indian food database:** INDB, fetched at build time (§6.4). Remaining work: the download-and-convert Gradle task and the diet tagging, in M3.
+4. **Package name and app name:** "Recomp" is a placeholder.

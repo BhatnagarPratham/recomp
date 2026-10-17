@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks secrets and personal data. See .githooks/sensitive_scan.py.
+exec python3 -I "$(git rev-parse --show-toplevel)/.githooks/sensitive_scan.py" staged
