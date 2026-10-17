@@ -153,7 +153,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, viewModel: BodyViewModel = hiltViewM
                             ChoiceChips(RANGES, range, ::rangeLabel, { viewModel.range.value = it })
                             WeightChart(t, today, range)
                             Text(
-                                "Filled dots and the line are your ${BodyText.sourceLower(t.primary)}'s first weigh-in each day. Hollow dots are other weigh-ins, kept out of the trend.",
+                                "Filled dots and the line are the first weigh-in each day from your ${BodyText.sourceLower(t.primary)}. Hollow dots are other weigh-ins, kept out of the trend.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -315,7 +315,7 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
             } else {
                 Column(Modifier.horizontalScroll(rememberScrollState())) {
                     Row {
-                        listOf("Date" to DATE_W, "Weight" to NUM_W, "Muscle" to NUM_W, "Fat" to NUM_W, "Body fat" to NUM_W, "Visceral" to NUM_W).forEach { (h, w) ->
+                        listOf("Date" to DATE_W, "Weight" to NUM_W, "Muscle" to NUM_W, "Fat" to NUM_W, "Fat %" to NUM_W, "Visceral" to NUM_W).forEach { (h, w) ->
                             Text(h, Modifier.width(w), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -323,16 +323,18 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
                         HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         Column(Modifier.clickable(role = Role.Button, onClickLabel = "Edit scan") { onOpen(s.id) }.heightIn(min = 48.dp)) {
                             Row {
-                                Text(BodyText.shortDate(s.logDate), Modifier.width(DATE_W))
+                                Text(BodyText.shortDate(s.logDate), Modifier.width(DATE_W), style = MaterialTheme.typography.bodyMedium)
                                 Cell(BodyText.oneDecimal(s.weightG / 1000.0))
                                 Cell(BodyText.oneDecimal(s.skeletalMuscleG / 1000.0))
                                 Cell(BodyText.oneDecimal(s.bodyFatG / 1000.0))
-                                Cell(BodyText.oneDecimal(s.bodyFatPct) + "%")
+                                Cell(BodyText.oneDecimal(s.bodyFatPct))
                                 Cell(BodyText.oneDecimal(s.visceralFatLevel))
                             }
                             if (!s.protocolOk) {
+                                // As wide as the table, so it wraps instead of running off the card.
                                 Text(
                                     "◌ " + BodyText.verdict(s.issues, s.minsFromSlot),
+                                    Modifier.width(TABLE_W),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.tertiary,
                                 )
@@ -340,7 +342,7 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
                         }
                     }
                 }
-                Text("Weight, muscle and fat in kg.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Weight, muscle and fat in kg. Off-protocol scans are marked ◌.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedButton(onClick = onLog, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Log scan") }
         }
@@ -348,7 +350,9 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
 }
 
 @Composable
-private fun Cell(text: String) = Text(text, Modifier.width(NUM_W))
+private fun Cell(text: String) = Text(text, Modifier.width(NUM_W), style = MaterialTheme.typography.bodyMedium)
 
-private val DATE_W: Dp = 72.dp
-private val NUM_W: Dp = 68.dp
+/** Fits a phone at the default font size; at larger sizes the table scrolls sideways. */
+private val DATE_W: Dp = 64.dp
+private val NUM_W: Dp = 52.dp
+private val TABLE_W: Dp = DATE_W + NUM_W * 5

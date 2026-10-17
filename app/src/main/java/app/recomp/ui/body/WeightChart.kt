@@ -35,7 +35,7 @@ fun WeightChart(trend: BodyTrend, today: LocalDate, days: Long?, modifier: Modif
     val measurer = rememberTextMeasurer()
     val labelStyle = MaterialTheme.typography.labelSmall.copy(color = colors.onSurfaceVariant)
     val description = buildString {
-        append("Weight chart, ${shown.size} weigh-ins")
+        append("Weight chart, ${shown.size} ${if (shown.size == 1) "weigh-in" else "weigh-ins"}")
         trend.trendKg?.let { append(", trend ${BodyText.kg(it)}") }
     }
 
