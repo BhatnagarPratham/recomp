@@ -132,6 +132,18 @@ class FoodLogRepository @Inject constructor(
         )
     }
 
+    /** Edits a quick add's own numbers (NU-14). */
+    suspend fun updateQuickAdd(id: Long, name: String?, kcal: Double, proteinG: Double, carbsG: Double?, fatG: Double?, origin: Origin, slot: String) {
+        val old = foodLogDao.get(id) ?: return
+        require(kcal >= 0 && proteinG >= 0) { "Negative macros" }
+        foodLogDao.update(
+            old.copy(
+                name = name?.trim()?.ifEmpty { null } ?: QUICK_ADD_NAME, kcal = kcal, proteinG = proteinG, carbsG = carbsG, fatG = fatG,
+                origin = origin, mealSlot = slot,
+            ),
+        )
+    }
+
     /** Deletes entries and returns them, so *Undo* can put them back with [restore]. */
     suspend fun delete(ids: List<Long>): List<FoodLogEntity> = db.withTransaction {
         val rows = foodLogDao.get(ids)

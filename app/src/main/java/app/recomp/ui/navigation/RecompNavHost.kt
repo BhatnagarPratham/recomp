@@ -30,6 +30,11 @@ import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
+import app.recomp.ui.food.AddFoodScreen
+import app.recomp.ui.food.FoodScreen
+import app.recomp.ui.food.HiddenFoodsScreen
+import app.recomp.ui.food.MealSlotsScreen
+import app.recomp.ui.food.PortionSizesScreen
 import app.recomp.ui.onboarding.OnboardingScreen
 import app.recomp.ui.routines.RoutineScreen
 import app.recomp.ui.settings.SettingsScreen
@@ -45,6 +50,8 @@ import java.time.format.FormatStyle
 import kotlinx.serialization.Serializable
 
 @Serializable data object TodayRoute
+
+@Serializable data object FoodRoute
 
 @Serializable data object TrainRoute
 
@@ -69,10 +76,20 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class ExerciseHistoryRoute(val exerciseId: Long)
 
+/** Adding food to one meal of one day (J3). [date] is an ISO log date. */
+@Serializable data class AddFoodRoute(val date: String, val slot: String)
+
+@Serializable data object MealSlotsRoute
+
+@Serializable data object PortionSizesRoute
+
+@Serializable data object HiddenFoodsRoute
+
 private data class TopLevel(val label: String, val glyph: String, val route: Any)
 
 private val topLevel = listOf(
     TopLevel("Today", "◉", TodayRoute),
+    TopLevel("Food", "◍", FoodRoute),
     TopLevel("Train", "▤", TrainRoute),
     TopLevel("Settings", "⚙", SettingsRoute),
 )
@@ -105,13 +122,7 @@ fun RecompNavHost(main: MainViewModel) {
                         val selected = backStack?.destination?.hasRoute(item.route::class) == true
                         NavigationBarItem(
                             selected = selected,
-                            onClick = {
-                                nav.navigate(item.route) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { nav.openTopLevel(item.route) },
                             icon = { Text(item.glyph) },
                             label = { Text(item.label) },
                         )
@@ -136,8 +147,16 @@ fun RecompNavHost(main: MainViewModel) {
                 TodayScreen(
                     onOpenWorkout = nav::openWorkout,
                     onOpenSummary = { nav.navigate(SummaryRoute(it)) },
+                    onOpenFood = { nav.openTopLevel(FoodRoute) },
                 )
             }
+            composable<FoodRoute> {
+                FoodScreen(onAdd = { date, slot -> nav.navigate(AddFoodRoute(date.toString(), slot)) })
+            }
+            composable<AddFoodRoute> { AddFoodScreen(onDone = { nav.popBackStack() }) }
+            composable<MealSlotsRoute> { MealSlotsScreen(onBack = { nav.popBackStack() }) }
+            composable<PortionSizesRoute> { PortionSizesScreen(onBack = { nav.popBackStack() }) }
+            composable<HiddenFoodsRoute> { HiddenFoodsScreen(onBack = { nav.popBackStack() }) }
             composable<TrainRoute> {
                 TrainScreen(
                     onOpenRoutine = { nav.navigate(RoutineRoute(it)) },
@@ -150,6 +169,9 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
                     onOpenTraining = { nav.navigate(SetupRoute) },
                     onOpenDev = { nav.navigate(DevRoute) },
+                    onOpenMeals = { nav.navigate(MealSlotsRoute) },
+                    onOpenPortions = { nav.navigate(PortionSizesRoute) },
+                    onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
                 )
             }
             composable<DevRoute> { DevScreen() }
@@ -206,6 +228,13 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
+}
+
+/** A bottom-bar destination, keeping each tab's state. */
+private fun NavHostController.openTopLevel(route: Any) = navigate(route) {
+    popUpTo(graph.findStartDestination().id) { saveState = true }
+    launchSingleTop = true
+    restoreState = true
 }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */

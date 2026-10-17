@@ -50,6 +50,8 @@ import app.recomp.ui.components.DateDialog
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.SectionTitle
+import app.recomp.ui.food.FoodDataDialog
+import app.recomp.ui.food.FoodSettingsViewModel
 import app.recomp.ui.components.formatDayStart
 import app.recomp.ui.onboarding.GoalText
 import app.recomp.ui.onboarding.SwitchRow
@@ -177,10 +179,19 @@ private sealed interface Editing {
 
 /** Settings (PS-02): every persona value, each change applying from today and never rewriting history. */
 @Composable
-fun SettingsScreen(onOpenGoal: () -> Unit, onOpenTraining: () -> Unit, onOpenDev: () -> Unit, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onOpenGoal: () -> Unit,
+    onOpenTraining: () -> Unit,
+    onOpenDev: () -> Unit,
+    onOpenMeals: () -> Unit,
+    onOpenPortions: () -> Unit,
+    onOpenHidden: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<Editing?>(null) }
+    var foodData by remember { mutableStateOf(false) }
     if (!ui.loaded) return
     val profile = ui.profile
     val plan = ui.plan
@@ -239,6 +250,10 @@ fun SettingsScreen(onOpenGoal: () -> Unit, onOpenTraining: () -> Unit, onOpenDev
             ui.stored.rampEnabled(),
             onChange = viewModel::setRamp,
         )
+        SettingRow("Meals", "Breakfast, lunch…", onClick = onOpenMeals)
+        SettingRow("Portion sizes", "Katori, glass, cup…", onClick = onOpenPortions)
+        SettingRow("Hidden foods", "Restore", onClick = onOpenHidden)
+        SettingRow("Food data", "Sources", onClick = { foodData = true })
 
         SectionTitle("Body data")
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
@@ -251,6 +266,12 @@ fun SettingsScreen(onOpenGoal: () -> Unit, onOpenTraining: () -> Unit, onOpenDev
         SettingRow("M0 spikes", "AI and Health Connect checks", onClick = onOpenDev)
 
         Text(GoalText.NOT_MEDICAL_ADVICE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+    }
+
+    if (foodData) {
+        val food: FoodSettingsViewModel = hiltViewModel()
+        val count by food.indbCount.collectAsStateWithLifecycle()
+        FoodDataDialog(count, onDismiss = { foodData = false })
     }
 
     when (val e = editing) {

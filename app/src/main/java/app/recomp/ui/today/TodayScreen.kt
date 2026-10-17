@@ -175,6 +175,7 @@ class TodayViewModel @Inject constructor(
 fun TodayScreen(
     onOpenWorkout: (Long) -> Unit,
     onOpenSummary: (Long) -> Unit,
+    onOpenFood: () -> Unit,
     viewModel: TodayViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -219,7 +220,7 @@ fun TodayScreen(
         )
         if (!ui.loaded) return@Column
 
-        food?.let { NutritionCard(it) }
+        food?.let { NutritionCard(it, onOpenFood) }
 
         val active = ui.active
         if (active != null) {
@@ -326,11 +327,11 @@ fun TodayScreen(
 
 /**
  * The goal's main number (GL-07, PRD §4.8), protein first among the rest (NU-02), and the 7-day average
- * (GL-10). Being over a target is a plain number, never failure styling.
- * TODO(M3b): food logging adds a "Log food" entry here and fills in what you've eaten.
+ * (GL-10), with *Log food* opening the Food tab (PRD §7.7). Being over a target is a plain number, never
+ * failure styling.
  */
 @Composable
-private fun NutritionCard(n: TodayNutrition) {
+private fun NutritionCard(n: TodayNutrition, onOpenFood: () -> Unit) {
     val t = n.target
     val (label, value, detail) = when (val m = n.main) {
         is MainNumber.CaloriesLeft -> Triple(
@@ -380,6 +381,7 @@ private fun NutritionCard(n: TodayNutrition) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            OutlinedButton(onClick = onOpenFood, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).heightIn(min = 48.dp)) { Text("Log food") }
         }
     }
 }

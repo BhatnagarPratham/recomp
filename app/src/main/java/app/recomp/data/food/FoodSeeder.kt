@@ -14,8 +14,10 @@ import app.recomp.domain.persona.FoodRegion
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -24,8 +26,12 @@ import kotlinx.serialization.json.Json
 data class FoodFile(val version: String, val foods: List<FoodFileEntry>) {
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
+        private val VERSION = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
 
         fun parse(text: String): FoodFile = json.decodeFromString(text)
+
+        /** The file's version without parsing it all: launches only need this when nothing changed. */
+        fun version(text: String): String = VERSION.find(text.take(512))?.groupValues?.get(1) ?: parse(text).version
     }
 }
 
@@ -79,11 +85,17 @@ class FoodSeeder @Inject constructor(
 ) {
     private val lock = Mutex()
 
-    suspend fun ensureSeeded(now: Long = System.currentTimeMillis()) = lock.withLock {
-        val seeds = FoodFile.parse(files.seeds())
-        val indb = files.indb()?.let(FoodFile::parse)
-        val version = listOfNotNull(seeds.version, indb?.version).joinToString("+")
-        if (prefs.foodDataVersion() == version) return@withLock
+    suspend fun ensureSeeded(now: Long = System.currentTimeMillis()) = withContext(Dispatchers.IO) {
+        lock.withLock { seed(now) }
+    }
+
+    private suspend fun seed(now: Long) {
+        val seedsText = files.seeds()
+        val indbText = files.indb()
+        val version = listOfNotNull(FoodFile.version(seedsText), indbText?.let(FoodFile::version)).joinToString("+")
+        if (prefs.foodDataVersion() == version) return
+        val seeds = FoodFile.parse(seedsText)
+        val indb = indbText?.let(FoodFile::parse)
         db.withTransaction {
             import(FoodSource.SEED, seeds, now)
             // Without INDB in this build, INDB rows already on the phone stay as they are.
