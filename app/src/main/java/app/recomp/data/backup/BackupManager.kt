@@ -129,7 +129,7 @@ class BackupManager @Inject constructor(
         if (manifest.schemaVersion > current) throw BackupException("This backup was made by a newer version of Recomp. Update the app, then import it.")
         if (manifest.schemaVersion < 1) throw BackupException.damaged("no database version")
         val data = decode<DatabaseData>(entries[DATABASE] ?: throw BackupException.damaged("no database"))
-        DatabaseSnapshot.validate(data)
+        DatabaseSnapshot.validate(data, manifest.rows)
         val settings = decodeSettings(entries[SETTINGS]?.let { decode<Map<String, SettingValue>>(it) } ?: emptyMap())
         prefs.problems(settings).takeIf { it.isNotEmpty() }?.let { throw BackupException.damaged("settings this version can't read (${it.joinToString()})") }
 

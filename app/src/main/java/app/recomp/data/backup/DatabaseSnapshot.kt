@@ -101,8 +101,12 @@ object DatabaseSnapshot {
         else -> throw BackupException.damaged("a list where a value should be")
     }
 
-    /** Checks the schema only creates things, under plain names, before any of it runs. */
-    fun validate(data: DatabaseData) {
+    /**
+     * Checks the schema only creates things, under plain names, before any of it runs; that every table it
+     * defines comes with its rows (a missing section would silently empty that table); and that the manifest's
+     * counts, which the confirmation shows, are the file's own.
+     */
+    fun validate(data: DatabaseData, rows: Map<String, Int>) {
         data.schema.forEach { item ->
             val prefixes = ALLOWED_SQL[item.type] ?: throw BackupException.damaged("a ${item.type} in its schema")
             if (prefixes.none { item.sql.trimStart().startsWith(it, ignoreCase = true) }) throw BackupException.damaged("an unexpected statement in its schema")
@@ -114,5 +118,8 @@ object DatabaseSnapshot {
             if (table.columns.any { !isIdentifier(it) }) throw BackupException.damaged("an unexpected column name in $name")
             if (table.rows.any { it.size != table.columns.size }) throw BackupException.damaged("a short row in $name")
         }
+        (tables - data.tables.keys).firstOrNull()?.let { throw BackupException.damaged("no rows section for $it") }
+        val counted = data.tables.mapValues { it.value.rows.size }
+        if (rows != counted) throw BackupException.damaged("a summary that doesn't match its contents")
     }
 }

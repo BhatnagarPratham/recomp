@@ -344,6 +344,24 @@ class BackupTest {
     }
 
     @Test
+    fun `a backup missing a table's rows, or whose summary disagrees with its rows, is refused`() = runBlocking {
+        fill()
+        val before = dump()
+        val good = entries(export())
+        val manifest = json.decodeFromString<BackupManifest>(good.getValue(BackupManager.MANIFEST))
+        val data = json.decodeFromString<DatabaseData>(good.getValue(BackupManager.DATABASE))
+        fun file(m: BackupManifest, d: DatabaseData) =
+            zip(BackupManager.MANIFEST to json.encodeToString(m), BackupManager.DATABASE to json.encodeToString(d), BackupManager.SETTINGS to good.getValue(BackupManager.SETTINGS))
+
+        // The schema defines body_weight, but its rows are gone: importing would empty it without a word.
+        val noWeighIns = data.copy(tables = data.tables - "body_weight")
+        assertTrue(refused(file(manifest.copy(rows = manifest.rows - "body_weight"), noWeighIns)).contains("no rows section for body_weight"))
+        // The confirmation would show counts the file doesn't hold.
+        assertTrue(refused(file(manifest.copy(rows = manifest.rows + ("workout_session" to 999)), data)).contains("doesn't match"))
+        assertEquals(before, dump())
+    }
+
+    @Test
     fun `the AI key never leaves its own store`() = runBlocking {
         fill()
         val planted = "planted-value-7310"
