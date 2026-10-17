@@ -176,6 +176,34 @@ class DescribeFlowTest {
     }
 
     @Test
+    fun `a second tap on Save, Save draft or Estimate does nothing`() = runBlocking {
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, MealEstimate(listOf(phulka), null)) }
+        val vm = viewModel()
+        vm.setText("2 phulka")
+        val hold = CompletableDeferred<Unit>()
+        app.estimator.hold = hold
+        vm.estimate()
+        vm.estimate()
+        hold.complete(Unit)
+        eventually { vm.phase.value as? DescribePhase.Review }
+        assertEquals("one request, not two", 1, app.estimator.requests.size)
+
+        vm.save(null)
+        vm.save("Usual snack")
+        val outcome = eventually { vm.outcome.value }
+        assertEquals(1, outcome.undoIds.size)
+        assertEquals(1, app.foodLog.day(date).size)
+        assertNull(app.foodLog.savedMealNamed("Usual snack"))
+
+        val other = viewModel()
+        other.setText("chai")
+        other.saveDraft()
+        other.saveDraft()
+        eventually { other.outcome.value }
+        assertEquals(1, drafts().size)
+    }
+
+    @Test
     fun `estimating a draft that fails again replaces it rather than adding another`() = runBlocking {
         val draftId = app.ai.saveDraft(date, "lunch", "2 phulka", Origin.HOME, AiStatus.NETWORK)
         app.estimator.next = { FakeEstimator.reply(AiStatus.SERVER, attempts = emptyList()) }

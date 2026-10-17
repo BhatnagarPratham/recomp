@@ -129,6 +129,13 @@ class DescribeViewModel @Inject constructor(
     private val _phase = MutableStateFlow<DescribePhase>(DescribePhase.Input)
     val phase: StateFlow<DescribePhase> = _phase
 
+    /**
+     * Set before the first suspend, so a second tap on Save or Save draft is ignored instead of logging the meal
+     * (or the draft) twice. It stays set once the screen is done; a failure releases it.
+     */
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy
+
     private val _outcome = MutableStateFlow<DescribeOutcome?>(null)
     val outcome: StateFlow<DescribeOutcome?> = _outcome
 
@@ -173,7 +180,8 @@ class DescribeViewModel @Inject constructor(
 
     fun estimate(clarification: Clarification? = null) {
         val description = text.value.trim()
-        if (description.isEmpty()) return
+        // A second tap while one runs would send (and pay for) the same meal twice.
+        if (description.isEmpty() || _phase.value == DescribePhase.Estimating || _busy.value) return
         val mine = ++attempt
         _phase.value = DescribePhase.Estimating
         viewModelScope.launch {
@@ -215,11 +223,25 @@ class DescribeViewModel @Inject constructor(
     }
 
     /** *Save draft* (AI not ready). */
-    fun saveDraft() = viewModelScope.launch {
+    fun saveDraft() {
         val description = text.value.trim()
-        if (description.isEmpty()) return@launch
-        keepDraft(description, reason = null)
-        _outcome.value = DescribeOutcome("Kept as a draft in ${slotName()}. Estimate it once AI is ready.")
+        if (description.isEmpty() || !claim()) return
+        viewModelScope.launch {
+            finishing {
+                keepDraft(description, reason = null)
+                _outcome.value = DescribeOutcome("Kept as a draft in ${slotName()}. Estimate it once AI is ready.")
+            }
+        }
+    }
+
+    private fun claim(): Boolean = _busy.compareAndSet(expect = false, update = true)
+
+    private suspend fun finishing(block: suspend () -> Unit) {
+        try {
+            block()
+        } finally {
+            if (_outcome.value == null) _busy.value = false
+        }
     }
 
     /** One draft per description: estimating a draft again replaces it rather than adding another. */
@@ -240,18 +262,22 @@ class DescribeViewModel @Inject constructor(
     suspend fun mealNamed(name: String) = log.savedMealNamed(name)
 
     /** Logs the reviewed items (and, with [mealName], saves them to My meals); a draft it came from is done. */
-    fun save(mealName: String?) = viewModelScope.launch {
-        val review = _phase.value as? DescribePhase.Review ?: return@launch
-        if (review.items.isEmpty()) return@launch
-        val ids = log.logAiMeal(date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet())
-        if (mealName != null) log.saveMealOf(mealName, ids, slot)
-        draftId?.let { ai.deleteDraft(it) }
-        val totals = MealCheck.totals(review.items.map { it.current })
-        val n = review.items.size
-        _outcome.value = DescribeOutcome(
-            "Added $n ${if (n == 1) "item" else "items"} · ${FoodText.kcalProtein(totals)}" + if (mealName != null) " · saved to My meals" else "",
-            ids,
-        )
+    fun save(mealName: String?) {
+        val review = _phase.value as? DescribePhase.Review ?: return
+        if (review.items.isEmpty() || !claim()) return
+        viewModelScope.launch {
+            finishing {
+                val ids = log.logAiMeal(date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet())
+                if (mealName != null) log.saveMealOf(mealName, ids, slot)
+                draftId?.let { ai.deleteDraft(it) }
+                val totals = MealCheck.totals(review.items.map { it.current })
+                val n = review.items.size
+                _outcome.value = DescribeOutcome(
+                    "Added $n ${if (n == 1) "item" else "items"} · ${FoodText.kcalProtein(totals)}" + if (mealName != null) " · saved to My meals" else "",
+                    ids,
+                )
+            }
+        }
     }
 
     private suspend fun slotName(): String = log.mealSlots.first().firstOrNull { it.key == slot }?.name ?: slot
@@ -279,6 +305,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     val autoStart by viewModel.autoStart.collectAsStateWithLifecycle()
     val slots by viewModel.slots.collectAsStateWithLifecycle()
     val region by viewModel.region.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var notice by remember { mutableStateOf(false) }
     var addingKey by remember { mutableStateOf(false) }
@@ -336,9 +363,10 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 onText = viewModel::setText,
                 onOrigin = viewModel::setOrigin,
                 onEstimate = ::requestEstimate,
-                onSaveDraft = { viewModel.saveDraft() },
+                onSaveDraft = viewModel::saveDraft,
                 onAddKey = { addingKey = true },
                 onCancel = viewModel::cancel,
+                busy = busy,
             )
             is DescribePhase.Review -> ReviewStep(
                 padding = padding,
@@ -348,6 +376,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 onReestimate = { answer -> p.question?.let { viewModel.estimate(Clarification(it, answer)) } },
                 onSave = { viewModel.save(null) },
                 onSaveAsMeal = { naming = text.trim().replace(Regex("\\s+"), " ").take(40).trimEnd(',', ' ') },
+                busy = busy,
             )
         }
     }
@@ -421,6 +450,7 @@ private fun InputStep(
     onSaveDraft: () -> Unit,
     onAddKey: () -> Unit,
     onCancel: () -> Unit,
+    busy: Boolean,
 ) {
     val ready = gate?.state == AiState.READY
     Column(
@@ -466,7 +496,7 @@ private fun InputStep(
         } else if (ready) {
             Button(onClick = onEstimate, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
         } else {
-            Button(onClick = onSaveDraft, enabled = text.isNotBlank() && gate != null, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save draft") }
+            Button(onClick = onSaveDraft, enabled = text.isNotBlank() && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save draft") }
         }
     }
 }
@@ -480,6 +510,7 @@ private fun ReviewStep(
     onReestimate: (String) -> Unit,
     onSave: () -> Unit,
     onSaveAsMeal: () -> Unit,
+    busy: Boolean,
 ) {
     var answer by remember(review.requestId) { mutableStateOf("") }
     val totals = MealCheck.totals(review.items.map { it.current })
@@ -521,8 +552,8 @@ private fun ReviewStep(
             if (review.items.isEmpty()) item { Text("Every item was removed. Go back to describe the meal again.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Column(Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onSave, enabled = review.items.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
-            OutlinedButton(onClick = onSaveAsMeal, enabled = review.items.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Save + My meals") }
+            Button(onClick = onSave, enabled = review.items.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
+            OutlinedButton(onClick = onSaveAsMeal, enabled = review.items.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Save + My meals") }
         }
     }
 }
