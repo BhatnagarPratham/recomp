@@ -25,6 +25,7 @@ import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.training.Loads
 import app.recomp.domain.training.Rotation
+import app.recomp.domain.training.Supersets
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -209,7 +210,7 @@ class TrainingRepository @Inject constructor(
                 val slot = slotOptions.entries.firstOrNull { row.entry.exerciseId in it.value } ?: return@map row.entry
                 val chosen = choices[slot.key]?.takeIf { it != row.entry.exerciseId } ?: return@map row.entry
                 changed = true
-                planRowFor(exerciseDao.get(chosen)!!, sets = row.entry.targetSets)
+                planRowFor(exerciseDao.get(chosen)!!, sets = row.entry.targetSets).copy(supersetGroup = row.entry.supersetGroup)
             }
             if (changed) routineDao.replaceExercises(routine.id, updated)
         }
@@ -265,7 +266,11 @@ class TrainingRepository @Inject constructor(
         routineDao.updateAll(rotation.mapIndexed { i, r -> r.copy(rotationIndex = i) })
     }
 
-    suspend fun saveRoutineExercises(routineId: Long, rows: List<RoutineExerciseEntity>) = routineDao.replaceExercises(routineId, rows)
+    /** Saves a routine's exercises in order; superset groups are normalized so they always mean consecutive exercises (RT-05). */
+    suspend fun saveRoutineExercises(routineId: Long, rows: List<RoutineExerciseEntity>) {
+        val groups = Supersets.normalize(rows.map { it.supersetGroup })
+        routineDao.replaceExercises(routineId, rows.mapIndexed { i, row -> row.copy(supersetGroup = groups[i]) })
+    }
 
     /** A stall *Swap* (PO-05) also changes the routine, keeping that slot's targets. */
     suspend fun swapInRoutine(routineId: Long, oldExerciseId: Long, newExerciseId: Long) = db.withTransaction {

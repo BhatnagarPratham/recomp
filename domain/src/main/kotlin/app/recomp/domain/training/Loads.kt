@@ -6,8 +6,11 @@ import app.recomp.domain.model.SetType
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-/** A completed set. Loads are integer grams (TRD §4); bodyweight sets have no load. */
-data class LoggedSet(val type: SetType, val loadG: Int?, val reps: Int)
+/**
+ * A completed set. Loads are integer grams (TRD §4); bodyweight sets have no load, and an assisted set's
+ * load is the assistance. [rir] is the optional reps in reserve (WL-04), 3 meaning 3 or more.
+ */
+data class LoggedSet(val type: SetType, val loadG: Int?, val reps: Int, val rir: Int? = null)
 
 /** Load maths and formatting. Storage is always grams; display is kg (lb display is an open question, PRD §11). */
 object Loads {
@@ -48,9 +51,9 @@ object Loads {
 
     /**
      * Compact history line, e.g. "45 × 12/11/10" or "40 × 12, 42.5 × 10/9". Warm-ups are left out.
-     * Bodyweight sets print as "BW × 15/12".
+     * Bodyweight sets print as "BW × 15/12", and assisted ones as "assist 25 × 8/8".
      */
-    fun describe(sets: List<LoggedSet>): String {
+    fun describe(sets: List<LoggedSet>, loadType: LoadType = LoadType.WEIGHTED): String {
         val counted = sets.filter { it.type != SetType.WARMUP }
         if (counted.isEmpty()) return ""
         val runs = mutableListOf<Pair<Int?, MutableList<Int>>>()
@@ -61,6 +64,7 @@ object Loads {
         return runs.joinToString(", ") { (load, reps) ->
             val weight = when {
                 load == null -> "BW"
+                loadType == LoadType.ASSISTED -> "assist ${formatKg(load)}"
                 else -> formatKg(load)
             }
             "$weight × ${reps.joinToString("/")}"

@@ -171,7 +171,7 @@ fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel:
             Label("Equipment")
             ChoiceChips(Equipment.entries, ex.equipment, Labels::equipment, { draft = ex.copy(equipment = it) })
             Label("Load")
-            ChoiceChips(listOf(LoadType.WEIGHTED, LoadType.BODYWEIGHT, LoadType.BODYWEIGHT_PLUS), ex.loadType, Labels::loadType, { draft = ex.copy(loadType = it) })
+            ChoiceChips(listOf(LoadType.WEIGHTED, LoadType.BODYWEIGHT, LoadType.BODYWEIGHT_PLUS, LoadType.ASSISTED), ex.loadType, Labels::loadType, { draft = ex.copy(loadType = it) })
 
             if (ex.loadType != LoadType.BODYWEIGHT) {
                 Label(if (ex.equipment == Equipment.DUMBBELL) "Smallest step (per dumbbell)" else "Smallest step")

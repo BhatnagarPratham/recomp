@@ -12,6 +12,7 @@ import app.recomp.data.repo.toLogged
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.model.LoadType
+import app.recomp.domain.model.Mechanic
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
 import app.recomp.domain.progression.Action
@@ -21,6 +22,9 @@ import app.recomp.domain.training.DraftSet
 import app.recomp.domain.training.Loads
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.Prefill
+import app.recomp.domain.training.SetValues
+import app.recomp.domain.training.Supersets
+import app.recomp.domain.training.WarmupPlanner
 import app.recomp.ui.components.NewExercise
 import app.recomp.ui.navigation.WorkoutRoute
 import app.recomp.workout.RestState
@@ -59,6 +63,7 @@ data class ExerciseUi(
     val exerciseId: Long,
     val name: String,
     val equipment: Equipment,
+    val mechanic: Mechanic,
     val loadType: LoadType,
     val incrementG: Int,
     val unilateral: Boolean,
@@ -72,6 +77,13 @@ data class ExerciseUi(
     /** Today's frozen target (PO-02); null only for sessions started before M2. */
     val target: Recommendation?,
     val sets: List<SetUi>,
+    /** The normalized superset group (RT-05), or null on its own. */
+    val supersetGroup: Int? = null,
+    /** Place in its superset and the superset's size, for the bracket; null on its own. */
+    val superset: Pair<Int, Int>? = null,
+    val canSupersetWithNext: Boolean = false,
+    /** WL-11's suggestion for the first heavy lift, lightest first; empty when there's none to show. */
+    val warmup: List<SetValues> = emptyList(),
 ) {
     /** "45 × 12/12/10 · add reps", or null for a baseline. */
     val targetText: String? get() = target?.takeIf { it.action != Action.BASELINE }?.let { "${Targets.describe(it)} · ${Targets.actionLabel(it)}" }
@@ -80,7 +92,13 @@ data class ExerciseUi(
     val showStall: Boolean get() = target?.stalled == true && canSwap
 
     val logsLoad: Boolean get() = Loads.logsLoad(loadType)
+    val assisted: Boolean get() = loadType == LoadType.ASSISTED
     val canSwap: Boolean get() = sets.none { it.done }
+
+    /** "Warm-up: 20 × 8 · 30 × 5 · 40 × 3", or null. */
+    val warmupText: String? get() = warmup.takeIf { it.isNotEmpty() }?.let(WarmupPlanner::describe)
+
+    fun ref() = Supersets.ExerciseRef(supersetGroup, sets.map { Supersets.SetRef(it.id, it.type == SetType.WARMUP, it.done) })
 }
 
 data class WorkoutUi(
@@ -151,9 +169,18 @@ class WorkoutViewModel @Inject constructor(
         requestedSelection,
         restTimer.state,
     ) { (session, title, keepScreenOn), rows, history, requested, rest ->
-        val exercises = rows.map { it.toUi(history[it.exercise.id]) }
-        val sets = exercises.flatMap { it.sets }
-        val selected = requested?.takeIf { id -> sets.any { it.id == id } } ?: sets.firstOrNull { !it.done }?.id
+        val groups = Supersets.normalize(rows.map { it.entry.supersetGroup })
+        val heavy = rows.indexOfFirst { it.isHeavyLift() }
+        val exercises = rows.mapIndexed { i, row ->
+            row.toUi(history[row.exercise.id]).copy(
+                supersetGroup = groups[i],
+                superset = Supersets.position(groups, i),
+                canSupersetWithNext = Supersets.canJoinNext(groups, i),
+            ).let { if (i == heavy) it.withWarmup() else it }
+        }
+        // Ticking walks supersets round by round, so the first set to select follows the same order.
+        val order = Supersets.order(exercises.map { it.ref() })
+        val selected = requested?.takeIf { id -> order.any { it.setId == id } } ?: order.firstOrNull { !it.done }?.setId
         WorkoutUi(
             loaded = session != null,
             active = session?.status == SessionStatus.ACTIVE,
@@ -166,6 +193,18 @@ class WorkoutViewModel @Inject constructor(
             keepScreenOn = keepScreenOn,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkoutUi())
+
+    /** WL-11: the first compound lift with a target load. Bodyweight and assisted loads aren't warmed up as a share. */
+    private fun SessionExerciseWithSets.isHeavyLift(): Boolean =
+        exercise.mechanic == Mechanic.COMPOUND && exercise.loadType == LoadType.WEIGHTED &&
+            ProgressionRepository.decode(entry.recommendationJson)?.takeIf { it.action != Action.BASELINE }?.loadG != null
+
+    /** The warm-up line shows until the exercise has warm-up sets or its first set is ticked. */
+    private fun ExerciseUi.withWarmup(): ExerciseUi {
+        if (sets.any { it.type == SetType.WARMUP || it.done }) return this
+        val load = target?.loadG ?: return this
+        return copy(warmup = WarmupPlanner.plan(load, incrementG))
+    }
 
     private fun SessionExerciseWithSets.toUi(last: List<LoggedSet>?): ExerciseUi {
         val ordered = sets.sortedBy { it.setIndex }
@@ -185,6 +224,7 @@ class WorkoutViewModel @Inject constructor(
             exerciseId = exercise.id,
             name = exercise.name,
             equipment = exercise.equipment,
+            mechanic = exercise.mechanic,
             loadType = exercise.loadType,
             incrementG = exercise.incrementG,
             unilateral = exercise.isUnilateral,
@@ -193,7 +233,7 @@ class WorkoutViewModel @Inject constructor(
             repMax = entry.repMax,
             restSec = entry.restSec,
             notes = entry.notes,
-            last = last?.let { Loads.describe(it) }?.ifEmpty { null },
+            last = last?.let { Loads.describe(it, exercise.loadType) }?.ifEmpty { null },
             target = target,
             sets = ordered.mapIndexed { i, set ->
                 val ordinal = if (set.setType == SetType.WORKING) working else -1
@@ -215,7 +255,7 @@ class WorkoutViewModel @Inject constructor(
                     rir = set.rir,
                     done = set.completedAt != null,
                     feedback = if (set.completedAt != null && ordinal >= 0) {
-                        Targets.feedback(plannedSets.getOrNull(ordinal), set.toLogged(), lastWorking.getOrNull(ordinal))
+                        Targets.feedback(plannedSets.getOrNull(ordinal), set.toLogged(), lastWorking.getOrNull(ordinal), exercise.loadType == LoadType.ASSISTED)
                     } else {
                         null
                     },
@@ -264,8 +304,10 @@ class WorkoutViewModel @Inject constructor(
     // Ticking (WL-02, WL-05, WL-06)
 
     /**
-     * Ticks a set with its shown values, starts the exercise's rest and selects the next unticked set.
-     * Ticking a done set unticks it.
+     * Ticks a set with its shown values, selects the next unticked set and starts the exercise's rest.
+     * In a superset the next exercise's set follows with no rest, and rest starts after the round
+     * ([Supersets.afterTick]). Ticking a done set unticks it. An assisted set needs its assistance typed
+     * the first time, like a weight.
      */
     fun tick(setId: Long, loadOverride: Int? = null): TickResult {
         val (ex, set) = find(setId) ?: return TickResult.Saved
@@ -275,18 +317,19 @@ class WorkoutViewModel @Inject constructor(
         }
         val load = when (ex.loadType) {
             LoadType.BODYWEIGHT -> null
-            LoadType.BODYWEIGHT_PLUS, LoadType.ASSISTED -> loadOverride ?: set.load ?: 0
-            LoadType.WEIGHTED -> loadOverride ?: set.load ?: return TickResult.NeedsWeight(setId)
+            LoadType.BODYWEIGHT_PLUS -> loadOverride ?: set.load ?: 0
+            LoadType.WEIGHTED, LoadType.ASSISTED -> loadOverride ?: set.load ?: return TickResult.NeedsWeight(setId)
         }
         val reps = set.reps ?: ex.repMax
-        val order = ui.value.exercises.flatMap { it.sets }
-        val after = order.dropWhile { it.id != setId }.drop(1) + order.takeWhile { it.id != setId }
-        val next = after.firstOrNull { !it.done }
-        requestedSelection.value = next?.id
+        val after = Supersets.afterTick(ui.value.exercises.map { it.ref() }, setId)
+        requestedSelection.value = after.nextSetId
         viewModelScope.launch {
             workouts.completeSet(setId, load, reps, set.rir)
-            // No rest after the last set of the workout.
-            if (next != null) restTimer.start(ex.restSec)
+            when {
+                after.rest -> restTimer.start(ex.restSec)
+                // Mid-round in a superset: going straight on ends any rest still running.
+                after.nextSetId != null -> restTimer.skip()
+            }
         }
         return TickResult.Saved
     }
@@ -296,6 +339,11 @@ class WorkoutViewModel @Inject constructor(
     fun setType(setId: Long, type: SetType) = viewModelScope.launch { workouts.setType(setId, type) }
     fun deleteSet(setId: Long) = viewModelScope.launch { workouts.deleteSet(setId) }
     fun addSet(sessionExerciseId: Long) = viewModelScope.launch { workouts.addSet(sessionExerciseId) }
+
+    /** WL-11's *Add*: the warm-ups go in as sets to tick, and the first is selected. */
+    fun addWarmups(exercise: ExerciseUi) = viewModelScope.launch {
+        workouts.addWarmups(exercise.id, exercise.warmup)?.let { requestedSelection.value = it }
+    }
 
     // The plan (RT-03)
 
@@ -309,6 +357,8 @@ class WorkoutViewModel @Inject constructor(
     fun swap(sessionExerciseId: Long, exercise: ExerciseEntity) = viewModelScope.launch { workouts.swapExercise(sessionExerciseId, exercise.id) }
     fun remove(sessionExerciseId: Long) = viewModelScope.launch { workouts.removeExercise(sessionExerciseId) }
     fun move(sessionExerciseId: Long, up: Boolean) = viewModelScope.launch { workouts.moveExercise(sessionId, sessionExerciseId, up) }
+    fun supersetWithNext(sessionExerciseId: Long) = viewModelScope.launch { workouts.supersetWithNext(sessionId, sessionExerciseId) }
+    fun splitSuperset(sessionExerciseId: Long) = viewModelScope.launch { workouts.splitSuperset(sessionId, sessionExerciseId) }
     fun setExerciseNotes(sessionExerciseId: Long, notes: String) = viewModelScope.launch { workouts.setExerciseNotes(sessionExerciseId, notes) }
     fun setSessionNotes(notes: String) = viewModelScope.launch { workouts.setSessionNotes(sessionId, notes) }
 

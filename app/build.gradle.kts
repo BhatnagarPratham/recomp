@@ -211,4 +211,8 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    // Compose UI tests of the workout screen run on Robolectric (TRD §10, M6).
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

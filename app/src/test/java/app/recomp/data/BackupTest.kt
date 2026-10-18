@@ -106,10 +106,11 @@ class BackupTest {
         app.foodLog.quickAdd(today.minusDays(1), "snacks", "Bar", 210.0, 20.5, null, 7.25, Origin.PACKAGED)
         app.foodLog.saveMeal("My lunch", today, "lunch")
 
-        // Training: a finished workout with a ticked set, a PR, and a yoga class.
+        // Training: a finished workout with a superset and a ticked set, a PR, and a yoga class.
         val routine = app.training.observeNextRoutine().first()!!
         val session = app.workouts.startRoutine(routine.id, now - 2 * 3_600_000L)
         val exercise = app.db.workoutDao().sessionExercises(session).first()
+        app.workouts.supersetWithNext(session, exercise.entry.id)
         val set = exercise.sets.first { it.setType == SetType.WORKING }
         app.workouts.completeSet(set.id, 40_000, 10, 2, now - 3_000_000L)
         app.workouts.finish(session, now - 2_000_000L)

@@ -67,6 +67,8 @@ import app.recomp.ui.components.Labels
 import app.recomp.ui.components.MenuItem
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.OverflowMenu
+import app.recomp.ui.components.SupersetBracket
+import app.recomp.ui.components.SupersetLabel
 import app.recomp.ui.components.TextEntryDialog
 import app.recomp.ui.components.formatRest
 import app.recomp.workout.ActiveWorkoutService
@@ -185,26 +187,31 @@ fun WorkoutScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(ui.exercises, key = { it.id }) { exercise ->
-                ExerciseCard(
-                    exercise = exercise,
-                    selectedSetId = ui.selectedSetId,
-                    isFirst = exercise == ui.exercises.first(),
-                    isLast = exercise == ui.exercises.last(),
-                    onSelect = viewModel::select,
-                    onTick = ::tick,
-                    onSetType = viewModel::setType,
-                    onDeleteSet = viewModel::deleteSet,
-                    onAddSet = { viewModel.addSet(exercise.id) },
-                    onSwap = { dialog = Dialog.Pick(exercise) },
-                    onMove = { up -> viewModel.move(exercise.id, up) },
-                    onNotes = { dialog = Dialog.ExerciseNotes(exercise) },
-                    onSettings = { onOpenExercise(exercise.exerciseId) },
-                    onHistory = { onOpenHistory(exercise.exerciseId) },
-                    onStallDeload = { viewModel.deloadToday(exercise.id) },
-                    onStallSwap = { dialog = Dialog.Pick(exercise, forStall = true) },
-                    onStallHold = { viewModel.holdStall(exercise.id) },
-                    onRemove = { if (exercise.sets.any { it.done }) dialog = Dialog.Remove(exercise) else viewModel.remove(exercise.id) },
-                )
+                SupersetBracket(exercise.superset, gap = 12.dp) {
+                    ExerciseCard(
+                        exercise = exercise,
+                        selectedSetId = ui.selectedSetId,
+                        isFirst = exercise == ui.exercises.first(),
+                        isLast = exercise == ui.exercises.last(),
+                        onSelect = viewModel::select,
+                        onTick = ::tick,
+                        onSetType = viewModel::setType,
+                        onDeleteSet = viewModel::deleteSet,
+                        onAddSet = { viewModel.addSet(exercise.id) },
+                        onSwap = { dialog = Dialog.Pick(exercise) },
+                        onMove = { up -> viewModel.move(exercise.id, up) },
+                        onNotes = { dialog = Dialog.ExerciseNotes(exercise) },
+                        onSettings = { onOpenExercise(exercise.exerciseId) },
+                        onHistory = { onOpenHistory(exercise.exerciseId) },
+                        onStallDeload = { viewModel.deloadToday(exercise.id) },
+                        onStallSwap = { dialog = Dialog.Pick(exercise, forStall = true) },
+                        onStallHold = { viewModel.holdStall(exercise.id) },
+                        onRemove = { if (exercise.sets.any { it.done }) dialog = Dialog.Remove(exercise) else viewModel.remove(exercise.id) },
+                        onSupersetWithNext = { viewModel.supersetWithNext(exercise.id) },
+                        onSplitSuperset = { viewModel.splitSuperset(exercise.id) },
+                        onAddWarmups = { viewModel.addWarmups(exercise) },
+                    )
+                }
             }
             item {
                 OutlinedButton(onClick = { dialog = Dialog.Pick(null) }, modifier = Modifier.fillMaxWidth().heightIn(min = GymTouch)) {
@@ -254,9 +261,14 @@ fun WorkoutScreen(
             viewModel.remove(d.exercise.id)
         }
         is Dialog.Weight -> {
-            val current = ui.exercises.flatMap { it.sets }.firstOrNull { it.id == d.setId }
+            val owner = ui.exercises.firstOrNull { ex -> ex.sets.any { it.id == d.setId } }
+            val current = owner?.sets?.firstOrNull { it.id == d.setId }
             NumberEntryDialog(
-                "Weight" + if (ui.selected?.first?.equipment == Equipment.DUMBBELL) " per dumbbell" else "",
+                when {
+                    owner?.assisted == true -> "Assistance"
+                    owner?.equipment == Equipment.DUMBBELL -> "Weight per dumbbell"
+                    else -> "Weight"
+                },
                 current?.load?.let(Loads::formatKg).orEmpty(),
                 decimal = true,
                 suffix = "kg",
@@ -278,6 +290,7 @@ fun WorkoutScreen(
         is Dialog.Pick -> ExercisePickerSheet(
             title = d.swapFor?.let { "Swap ${it.name}" } ?: "Add exercise",
             library = library,
+            swapping = d.swapFor?.let { swap -> library.firstOrNull { it.id == swap.exerciseId } },
             onDismiss = { dialog = null },
             onPick = { ex ->
                 dialog = null
@@ -314,7 +327,8 @@ private fun Elapsed(startedAt: Long) {
 private fun loadText(ex: ExerciseUi, load: Int?): String = when (ex.loadType) {
     LoadType.BODYWEIGHT -> "BW"
     LoadType.BODYWEIGHT_PLUS -> if (load == null || load == 0) "BW" else "BW+${Loads.formatKg(load)}"
-    else -> load?.let { Loads.formatKg(it) } ?: "—"
+    LoadType.ASSISTED -> "assist " + (load?.let { Loads.formatKg(it) } ?: "—")
+    LoadType.WEIGHTED -> load?.let { Loads.formatKg(it) } ?: "—"
 }
 
 @Composable
@@ -337,11 +351,15 @@ private fun ExerciseCard(
     onStallSwap: () -> Unit,
     onStallHold: () -> Unit,
     onRemove: () -> Unit,
+    onSupersetWithNext: () -> Unit,
+    onSplitSuperset: () -> Unit,
+    onAddWarmups: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f).padding(top = 4.dp)) {
+                    SupersetLabel(exercise.superset)
                     Text(exercise.name, style = MaterialTheme.typography.titleMedium)
                     val details = buildList {
                         add("${exercise.repMin}–${exercise.repMax} reps")
@@ -364,12 +382,15 @@ private fun ExerciseCard(
                     MenuItem("Swap exercise", enabled = exercise.canSwap) { close(); onSwap() }
                     MenuItem("Move up", enabled = !isFirst) { close(); onMove(true) }
                     MenuItem("Move down", enabled = !isLast) { close(); onMove(false) }
+                    MenuItem("Superset with next", enabled = exercise.canSupersetWithNext) { close(); onSupersetWithNext() }
+                    if (exercise.superset != null) MenuItem("Split superset") { close(); onSplitSuperset() }
                     MenuItem(if (exercise.notes == null) "Add notes" else "Edit notes") { close(); onNotes() }
                     MenuItem("History") { close(); onHistory() }
                     MenuItem("Exercise settings") { close(); onSettings() }
                     MenuItem("Remove from workout") { close(); onRemove() }
                 }
             }
+            exercise.warmupText?.let { WarmupLine(it, onAddWarmups) }
             if (exercise.showStall) StallCard(onStallDeload, onStallSwap, onStallHold)
             Spacer(Modifier.height(4.dp))
             exercise.sets.forEach { set ->
@@ -479,7 +500,8 @@ private fun SetDock(
                     ghost = set.loadIsGhost && !set.done,
                     minus = "−$step",
                     plus = "+$step",
-                    description = "weight",
+                    description = if (ex.assisted) "assistance" else "weight",
+                    prefix = if (ex.assisted) "Assist" else null,
                     onMinus = { onStepLoad(set.id, false) },
                     onPlus = { onStepLoad(set.id, true) },
                     onValue = { onTypeLoad(set.id) },
@@ -533,6 +555,7 @@ private fun DockStepper(
     onMinus: () -> Unit,
     onPlus: () -> Unit,
     onValue: () -> Unit,
+    prefix: String? = null,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilledTonalButton(
@@ -547,6 +570,7 @@ private fun DockStepper(
             modifier = Modifier.weight(1f).height(GymTouch).semantics { contentDescription = "$description $value, tap to type" },
         ) {
             Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                prefix?.let { Text("$it ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Text(
                     value,
                     style = MaterialTheme.typography.headlineSmall,
@@ -590,6 +614,15 @@ private fun RestBanner(rest: RestState, onSkip: () -> Unit, onAdd: () -> Unit) {
         }
         OutlinedButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp)) { Text("+30 s") }
         OutlinedButton(onClick = onSkip, modifier = Modifier.heightIn(min = 48.dp)) { Text("Skip") }
+    }
+}
+
+/** WL-11: today's suggested warm-ups; *Add* puts them in as warm-up sets to tick. */
+@Composable
+private fun WarmupLine(text: String, onAdd: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Add warm-up sets" }) { Text("Add") }
     }
 }
 

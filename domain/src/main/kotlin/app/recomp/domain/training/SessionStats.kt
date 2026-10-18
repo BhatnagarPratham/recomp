@@ -22,5 +22,8 @@ data class SessionStats(val durationMs: Long, val sets: Int, val reps: Int, val 
     }
 }
 
-/** A routine's plan for one exercise, used to tell whether a workout changed the template (RT-03). */
-data class PlanRow(val exerciseId: Long, val targetSets: Int, val repMin: Int, val repMax: Int, val restSec: Int)
+/**
+ * A routine's plan for one exercise, used to tell whether a workout changed the template (RT-03).
+ * [superset] is the normalized group number (RT-05, [Supersets.normalize]).
+ */
+data class PlanRow(val exerciseId: Long, val targetSets: Int, val repMin: Int, val repMax: Int, val restSec: Int, val superset: Int? = null)

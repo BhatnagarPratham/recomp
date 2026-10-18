@@ -119,15 +119,19 @@ object Labels {
         SetType.FAILURE -> "Failure"
     }
 
-    fun record(t: PrType) = when (t) {
-        PrType.MAX_LOAD -> "heaviest weight"
-        PrType.REPS_AT_LOAD -> "most reps at a weight"
+    /** For an assisted lift (WL-09) the heaviest-weight record is the least assistance. */
+    fun record(t: PrType, assisted: Boolean = false) = when (t) {
+        PrType.MAX_LOAD -> if (assisted) "least assistance" else "heaviest weight"
+        PrType.REPS_AT_LOAD -> if (assisted) "most reps at an assistance" else "most reps at a weight"
         PrType.E1RM -> "best estimated 1RM"
         PrType.SESSION_VOLUME -> "best session volume"
     }
 
     /** "2.5 kg". */
     fun kg(grams: Int) = "${Loads.formatKg(grams)} kg"
+
+    /** "assist 25 kg" (WL-09). */
+    fun assist(grams: Int) = "assist ${kg(grams)}"
 
     fun muscle(key: String) = key.replace('_', ' ').replaceFirstChar { it.uppercase() }
 }
