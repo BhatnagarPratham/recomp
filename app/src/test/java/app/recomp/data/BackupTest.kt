@@ -106,10 +106,11 @@ class BackupTest {
         app.foodLog.quickAdd(today.minusDays(1), "snacks", "Bar", 210.0, 20.5, null, 7.25, Origin.PACKAGED)
         app.foodLog.saveMeal("My lunch", today, "lunch")
 
-        // Training: a finished workout with a ticked set, a PR, and a yoga class.
+        // Training: a finished workout with a superset and a ticked set, a PR, and a yoga class.
         val routine = app.training.observeNextRoutine().first()!!
         val session = app.workouts.startRoutine(routine.id, now - 2 * 3_600_000L)
         val exercise = app.db.workoutDao().sessionExercises(session).first()
+        app.workouts.supersetWithNext(session, exercise.entry.id)
         val set = exercise.sets.first { it.setType == SetType.WORKING }
         app.workouts.completeSet(set.id, 40_000, 10, 2, now - 3_000_000L)
         app.workouts.finish(session, now - 2_000_000L)
@@ -273,6 +274,57 @@ class BackupTest {
         assertEquals(listOf("Test dal"), app.foods.search("dal").map { it.food.name }.filter { it == "Test dal" })
         // Tables added since version 5 start empty.
         assertEquals(emptyList<Any>(), app.db.bodyDao().weighIns())
+    }
+
+    /** A backup as [version]'s database left it, with a finished workout and whatever [extra] adds. */
+    private fun backupAt(version: Int, extra: (SQLiteDatabase) -> Unit = {}): ByteArray {
+        val file = File(tmp.root, "v$version-backup.db")
+        val data = Schemas.createAt(version, file).use { db ->
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, increment_g, " +
+                    "default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, stall_reset_keeps_baseline) " +
+                    "VALUES (1, 'My press', 'chest', '[]', 'MACHINE', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 5000, 8, 12, 120, 0, 1, 0, 0)",
+            )
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL(
+                "INSERT INTO session_exercise (id, session_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec, user_overrode) " +
+                    "VALUES (1, 1, 1, 0, 3, 8, 12, 120, 0)",
+            )
+            db.execSQL("INSERT INTO set_entry (session_exercise_id, set_index, set_type, load_g, reps, rir, completed_at) VALUES (1, 0, 'WORKING', 40000, 10, 3, 1)")
+            extra(db)
+            DatabaseSnapshot.read { db.rawQuery(it, null) }
+        }
+        val manifest = BackupManifest(BackupManager.FORMAT, 1, version, 1, "test", data.tables.mapValues { it.value.rows.size })
+        return zip(
+            BackupManager.MANIFEST to json.encodeToString(manifest),
+            BackupManager.DATABASE to json.encodeToString(data),
+            BackupManager.SETTINGS to "{}",
+        )
+    }
+
+    @Test
+    fun `a v7 backup and an M5 v8 backup both import into v9 with their workouts and check-ins`() = runBlocking {
+        // M4's v7, as in Downloads before M5.
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(backupAt(7))))
+        var row = app.db.workoutDao().sessionExercises(1).single()
+        assertNull(row.entry.supersetGroup)
+        assertEquals(listOf(40_000 to 3), row.sets.map { it.loadG to it.rir })
+        assertNull(app.db.checkinDao().latest())
+
+        // M5's v8, as on the phone before M6, with a decided check-in and an incomplete day.
+        val v8 = backupAt(8) { db ->
+            db.execSQL(
+                "INSERT INTO weekly_checkin (week_start, computed_at, window_days, logged_days, weigh_ins, tdee_prev, tdee_new, decision) " +
+                    "VALUES ('2026-10-12', 2, 21, 18, 20, 2611, 2461, 'KEPT')",
+            )
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete) VALUES ('2026-10-15', 1)")
+        }
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(v8)))
+        row = app.db.workoutDao().sessionExercises(1).single()
+        assertNull(row.entry.supersetGroup)
+        assertEquals(2461, app.db.checkinDao().week(LocalDate.of(2026, 10, 12))!!.tdeeNew)
+        assertEquals(listOf(LocalDate.of(2026, 10, 15)), app.db.checkinDao().incompleteDays(LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 18)))
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
     }
 
     @Test

@@ -220,4 +220,14 @@ object Migrations {
             )
         }
     }
+
+    /**
+     * M6, in the gym: supersets mid-workout (RT-05). The group is copied from the routine at start like
+     * the other targets, so grouping during a workout leaves the template alone. SQL from schemas/9.json.
+     */
+    val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `session_exercise` ADD COLUMN `superset_group` INTEGER")
+        }
+    }
 }

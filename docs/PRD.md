@@ -722,17 +722,18 @@ These rules hold for every block:
 
 - **Supersets (RT-05).** In a routine, or mid-workout from a card's menu, *Superset with next* joins two or three consecutive exercises. *Split superset* undoes it.
   - The joined cards show a bracket and "Superset".
-  - Ticking a set selects the same set of the next exercise in the group, with no rest. After the last exercise of a round, rest starts with that exercise's rest time.
+  - Ticking a set selects the same set of the next exercise in the group, with no rest. If you started the round on a later exercise (its machine was free first), the earlier one's set of that round comes next, also with no rest. After the last exercise of a round, rest starts with that exercise's rest time.
   - Each exercise keeps its own target and progression.
   - Saving the workout back to the routine keeps the groups.
 - **Warm-ups (WL-11),** for the first compound lift that has a target load:
   - Its card shows "Warm-up: 20 × 8 · 30 × 5 · 40 × 3", about 40%, 60% and 80% of today's target, rounded down to the exercise's step. Sets under two steps are left out, so light lifts get fewer or none.
+  - On a barbell, a warm-up under the empty bar (20 kg) is raised to the bar, since you can't load less. Two that land on the same load become one, and none is at today's target: a 40 kg squat warms up at 20 × 8 · 22.5 × 5 · 30 × 3.
   - It isn't shown when the exercise already has warm-up sets, e.g. the ones M1 recreates from last session.
   - ◆ **Decided:** the line has *Add*, which adds them as warm-up sets for you to tick. Rows added automatically would trigger the finish confirmation when left unticked.
 - **Assisted exercises (WL-09).** Assisted pull-ups and dips log the assistance: the stepper reads "Assist 25 kg". The library gains an assisted pull-up and an assisted dip (machine), and an exercise's settings can set it to *Assisted*.
-  - Progress means less assistance: *Increase* reads "assist 20 kg".
+  - Progress means less assistance: the target line reads "Today: assist 20 × 8 · less assistance". With no assistance left it reads "BW", and the next step is added load or a harder variation.
   - PRs and the e1RM use your trend weight minus the assistance, with every session compared at today's weight. So progress means less assistance or more reps, and a cut doesn't look like a stall. Before your first weigh-in, less assistance counts as better and the e1RM is hidden.
-- **RIR-aware jumps (PO-08).** Where the experience policy allows it (Beginner), every working set at the top of the range with 3+ reps in reserve earns a double step: "Increase: 50 kg (2 steps: every set had 3+ reps left)".
+- **RIR-aware jumps (PO-08).** Where the experience policy allows it (Beginner), every working set at the top of the range with 3+ reps in reserve earns a double step. The target line says why: "Today: 55 × 8 · weight up (2 steps: every set had 3+ reps left)".
   - Only when one step is at most 5% of the load, so dumbbells don't leap.
 - **Substitutes (EX-04).** *Swap* opens the picker with *Same movement* first: exercises with the same movement pattern and primary muscle, on other equipment. Everything else follows.
 

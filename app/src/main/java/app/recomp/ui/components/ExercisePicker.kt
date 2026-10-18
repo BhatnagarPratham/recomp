@@ -33,8 +33,24 @@ import app.recomp.domain.model.Mechanic
 data class NewExercise(val name: String, val mechanic: Mechanic, val equipment: Equipment)
 
 /**
+ * EX-04's *Same movement*: exercises with [exercise]'s movement pattern and primary muscle on other
+ * equipment, e.g. the machine row when the dumbbell rack is taken. Custom exercises start as "other",
+ * which says nothing about the movement, so they get none.
+ */
+fun sameMovement(exercise: ExerciseEntity, library: List<ExerciseEntity>): List<ExerciseEntity> {
+    if (exercise.movementPattern == UNKNOWN || exercise.primaryMuscle == UNKNOWN) return emptyList()
+    return library.filter {
+        it.id != exercise.id && it.movementPattern == exercise.movementPattern &&
+            it.primaryMuscle == exercise.primaryMuscle && it.equipment != exercise.equipment
+    }
+}
+
+private const val UNKNOWN = "other"
+
+/**
  * Pick an exercise from the library, or create a custom one from the search text. Used to add or swap
- * exercises in routines and mid-workout (RT-03, RT-04).
+ * exercises in routines and mid-workout (RT-03, RT-04). A swap passes [swapping], so *Same movement*
+ * comes first and everything else follows (EX-04).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,14 +60,17 @@ fun ExercisePickerSheet(
     onDismiss: () -> Unit,
     onPick: (ExerciseEntity) -> Unit,
     onCreate: (NewExercise) -> Unit,
+    swapping: ExerciseEntity? = null,
 ) {
     var query by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf<String?>(null) }
     val terms = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
     val matches = library.filter { ex ->
         val haystack = "${ex.name} ${ex.primaryMuscle} ${Labels.equipment(ex.equipment)}".lowercase().replace('_', ' ')
-        terms.all { it in haystack }
+        ex.id != swapping?.id && terms.all { it in haystack }
     }
+    val same = swapping?.let { sameMovement(it, matches) }.orEmpty()
+    val rest = if (same.isEmpty()) matches else matches - same.toSet()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxHeight(0.9f).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -70,19 +89,12 @@ fun ExercisePickerSheet(
                         Text(if (name.isEmpty()) "+ New exercise" else "+ New exercise \"$name\"")
                     }
                 }
-                items(matches, key = { it.id }) { ex ->
-                    Column(
-                        Modifier.fillMaxWidth().clickable { onPick(ex) }.heightIn(min = 56.dp).padding(vertical = 8.dp),
-                    ) {
-                        Text(ex.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "${Labels.muscle(ex.primaryMuscle)} · ${Labels.equipment(ex.equipment)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    HorizontalDivider()
+                if (same.isNotEmpty()) {
+                    item(key = "same") { PickerHeading("Same movement") }
+                    items(same, key = { "same-${it.id}" }) { ex -> PickerRow(ex) { onPick(ex) } }
+                    item(key = "rest") { PickerHeading("Everything else") }
                 }
+                items(rest, key = { it.id }) { ex -> PickerRow(ex) { onPick(ex) } }
             }
         }
     }
@@ -90,6 +102,25 @@ fun ExercisePickerSheet(
     creating?.let { initial ->
         NewExerciseDialog(initial, onDismiss = { creating = null }, onCreate = { creating = null; onCreate(it) })
     }
+}
+
+@Composable
+private fun PickerHeading(text: String) =
+    Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+
+@Composable
+private fun PickerRow(ex: ExerciseEntity, onClick: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(vertical = 8.dp),
+    ) {
+        Text(ex.name, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "${Labels.muscle(ex.primaryMuscle)} · ${Labels.equipment(ex.equipment)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider()
 }
 
 @Composable
