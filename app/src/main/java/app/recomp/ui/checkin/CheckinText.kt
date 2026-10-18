@@ -121,7 +121,10 @@ object CheckinText {
     }
 
     /** Today's card, one line under its title. */
-    fun cardLine(row: WeeklyCheckinEntity): String = title(row.weekStart) + " · " + when {
+    fun cardLine(row: WeeklyCheckinEntity): String = title(row.weekStart) + " · " + status(row)
+
+    /** "a new target to look at", "maintenance about 2,320 kcal" or "not enough data for an estimate yet". */
+    fun status(row: WeeklyCheckinEntity): String = when {
         row.pending && row.proposedKcal != null -> "a new target to look at"
         row.tdeeObs != null -> "maintenance about ${GoalText.kcal(round10(row.tdeeNew))}"
         else -> "not enough data for an estimate yet"

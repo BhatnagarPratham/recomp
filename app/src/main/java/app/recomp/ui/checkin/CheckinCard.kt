@@ -64,7 +64,13 @@ fun LatestCheckinRow(viewModel: LatestCheckinViewModel = hiltViewModel()) {
     val row by viewModel.latest.collectAsStateWithLifecycle()
     val open = LocalOpenCheckin.current
     val week = row ?: return
-    SettingRow("Weekly check-in", CheckinText.cardLine(week)) { open(week.weekStart) }
+    // A short value, so the row's title keeps its width; the status goes underneath.
+    SettingRow("Weekly check-in", CheckinText.title(week.weekStart)) { open(week.weekStart) }
+    Text(
+        CheckinText.status(week).replaceFirstChar { it.uppercase() },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** Today's *Weekly check-in* card (PRD §12.1). Nothing shows when there's no check-in waiting. */
