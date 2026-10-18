@@ -2,6 +2,7 @@ package app.recomp.domain.checkin
 
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
+import app.recomp.domain.nutrition.Pace
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
@@ -86,5 +87,23 @@ class CheckinProposalTest {
         assertEquals(54, t.fatG)
         assertEquals(237, t.carbsG)
         assertEquals(2500.0, t.tdeeKcal, 0.0)
+    }
+
+    @Test
+    fun `the proposal is always inside the Adjust range, so Save without a step saves it`() {
+        // The caps round inwards and the proposal to the nearest 10; without widening, about 2,000 of these fell 10 kcal outside.
+        val people = listOf(recomp, TargetInputs(Sex.FEMALE, 35, 165.0, trendWeightKg = 80.0, goalWeightKg = 65.0))
+        for (person in people) for (goal in Goal.entries) for (pace in Pace.entries) {
+            val inputs = person.copy(policy = GoalPolicy.defaultFor(goal, pace))
+            for (maintenance in 1200..3600) {
+                val proposal = CheckinProposal.targets(inputs, maintenance.toDouble(), none).kcal
+                val range = CheckinProposal.adjustRange(inputs, maintenance.toDouble())
+                assertTrue("$goal $pace at $maintenance: $proposal outside $range", proposal in range)
+            }
+        }
+        // The reviewer's case: a cut at 2,534 proposes 1,900, below the 25% cap's 1,910.
+        val cut = recomp.copy(policy = GoalPolicy.defaultFor(Goal.FAT_LOSS, Pace.STANDARD))
+        assertEquals(1900, CheckinProposal.targets(cut, 2534.0, none).kcal)
+        assertEquals(1900, CheckinProposal.adjustRange(cut, 2534.0).first)
     }
 }

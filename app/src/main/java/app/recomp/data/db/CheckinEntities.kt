@@ -94,6 +94,13 @@ interface CheckinDao {
     @Upsert
     suspend fun upsert(row: WeeklyCheckinEntity)
 
+    /**
+     * Weeks from [monday] on haven't ended, so a row for one means the clock ran ahead. The unanswered ones go (pending,
+     * or lapsed by the app); an answer you gave stays.
+     */
+    @Query("DELETE FROM weekly_checkin WHERE week_start >= :monday AND decision IN ('PENDING', 'LAPSED')")
+    suspend fun dropUnansweredFrom(monday: LocalDate)
+
     /** Days in [from]..[to] marked incomplete. */
     @Query("SELECT log_date FROM daily_activity WHERE food_incomplete = 1 AND log_date BETWEEN :from AND :to")
     suspend fun incompleteDays(from: LocalDate, to: LocalDate): List<LocalDate>
@@ -106,4 +113,11 @@ interface CheckinDao {
 
     @Upsert
     suspend fun upsert(activity: DailyActivityEntity)
+
+    /** With [setFoodIncomplete], in one transaction: the flag changes without rewriting the day's other columns. */
+    @Query("INSERT OR IGNORE INTO daily_activity (log_date, food_incomplete) VALUES (:date, 0)")
+    suspend fun ensureActivity(date: LocalDate)
+
+    @Query("UPDATE daily_activity SET food_incomplete = :incomplete WHERE log_date = :date")
+    suspend fun setFoodIncomplete(date: LocalDate, incomplete: Boolean)
 }

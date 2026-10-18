@@ -5,19 +5,23 @@ import app.recomp.data.db.CheckinDecision.ADJUSTED
 import app.recomp.data.db.CheckinDecision.KEPT
 import app.recomp.data.db.CheckinDecision.LAPSED
 import app.recomp.data.db.CheckinDecision.PENDING
+import app.recomp.data.db.DailyActivityEntity
 import app.recomp.data.db.TargetReason
 import app.recomp.data.db.WeeklyCheckinEntity
+import app.recomp.data.repo.CheckinSettingsException
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
 import app.recomp.domain.checkin.EstimateGap
 import app.recomp.domain.food.Origin
+import app.recomp.domain.nutrition.EnergyBalance
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.Pace
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.nutrition.TargetOverrides
 import app.recomp.domain.persona.GoalPlan
+import app.recomp.domain.persona.GuardrailNote
 import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.WeightSource
@@ -28,6 +32,9 @@ import java.time.LocalTime
 import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -334,5 +341,138 @@ class CheckinFlowTest {
         // Every day incomplete reads as nothing logged.
         checkins.setFoodIncomplete(today.minusDays(2), true)
         assertNull(app.nutrition.observeToday().first()!!.week)
+    }
+
+    // Review fixes (PR #10)
+
+    /** A woman of 175 cm on a cut, onboarded at [startKg], losing [perDay] kg a day on [kcal]. Invented. */
+    private suspend fun cutting(startKg: Double, perDay: Double, kcal: Double) {
+        val profile = Profile(Sex.FEMALE, LocalDate.of(1996, 1, 1), heightCm = 175.0, weightKg = startKg)
+        val plan = GoalPlan.of(Goal.FAT_LOSS, Pace.STANDARD, null, null, day0)
+        app.personas.completeOnboarding(OnboardingResult(Presets.REFERENCE.draft.copy(goal = plan), Presets.REFERENCE.key, emptyList(), profile, LocalTime.of(4, 0)), now = at(0))
+        (0..41).forEach { weigh(it, startKg - perDay * it); eat(it, kcal) }
+        catchUp(42)
+    }
+
+    @Test
+    fun `a cut whose trend falls below BMI 18_5 gets no deficit from the check-in, as in Settings`() = runBlocking {
+        // The review's probe: the trend reaches 56.6 kg, BMI 18.48, while losing slowly.
+        cutting(startKg = 56.9, perDay = 0.01, kcal = 2200.0)
+        val latest = dao.latest()!!
+        val view = checkins.open(latest.weekStart, at(42))!!
+        assertEquals(Goal.MAINTAIN, view.plan.goal)
+        assertEquals(listOf(GuardrailNote.LOW_BMI_MAINTAIN), view.notes)
+        assertEquals(Goal.MAINTAIN, app.personas.preview().plan.goal)
+        // Judged as Maintain, a 0.5% drift isn't a flag, so nothing is proposed, let alone a deficit.
+        assertNull(view.row.flag)
+        assertNull(view.row.proposedKcal)
+        assertFalse(checkins.accept(latest.weekStart, now = at(42)))
+        assertTrue(app.db.nutritionDao().all().none { it.reason == TargetReason.CHECKIN })
+    }
+
+    @Test
+    fun `accepting under the guardrails writes the guarded goal and stores it, as a Settings save does`() = runBlocking {
+        // Losing fast enough that Maintain's 1% drift fires once the trend is under BMI 18.5.
+        cutting(startKg = 58.0, perDay = 0.05, kcal = 1800.0)
+        val latest = dao.latest()!!
+        assertEquals(CheckinFlag.DRIFT, latest.flag)
+        val view = checkins.open(latest.weekStart, at(42))!!
+        assertEquals(listOf(GuardrailNote.LOW_BMI_MAINTAIN), view.notes)
+        assertTrue(checkins.accept(latest.weekStart, now = at(42)))
+        val target = app.db.nutritionDao().targetOn(date(42))!!
+        assertEquals(Goal.MAINTAIN, target.goal)
+        assertEquals(latest.proposedKcal, target.kcal)
+        assertFalse(EnergyBalance.inDeficit(target.kcal, target.tdeeEstimate))
+        assertEquals(Goal.MAINTAIN, app.prefs.currentPersona().goal!!.goal)
+    }
+
+    @Test
+    fun `two answers at once write once, and the second is refused`() = runBlocking {
+        val latest = drifting()
+        val answers = coroutineScope {
+            listOf(async { checkins.accept(latest.weekStart, now = at(42)) }, async { checkins.keep(latest.weekStart, at(42)) }).awaitAll()
+        }
+        assertEquals(1, answers.count { it })
+        assertEquals(if (answers[0]) ACCEPTED else KEPT, dao.week(latest.weekStart)!!.decision)
+        assertTrue(app.db.nutritionDao().all().count { it.reason == TargetReason.CHECKIN } <= 1)
+    }
+
+    @Test
+    fun `settings that fail after the target is saved say so, and the answer stands`() = runBlocking {
+        val latest = drifting()
+        app.store.failWrites = true
+        val thrown = runCatching { checkins.accept(latest.weekStart, now = at(42)) }.exceptionOrNull()
+        app.store.failWrites = false
+        assertTrue("$thrown", thrown is CheckinSettingsException)
+        assertEquals(ACCEPTED, dao.week(latest.weekStart)!!.decision)
+        assertEquals(TargetReason.CHECKIN, app.db.nutritionDao().targetOn(date(42))!!.reason)
+    }
+
+    @Test
+    fun `opening an old week catches up first, so a week that should have lapsed can't be answered`() = runBlocking {
+        val latest = drifting()
+        // A week later, opened straight from Settings with no catch-up from Today's card.
+        val view = checkins.open(latest.weekStart, at(50))!!
+        assertEquals(LAPSED, view.row.decision)
+        assertNull(view.proposal)
+        assertEquals(PENDING, dao.week(date(42))!!.decision)
+        assertFalse(checkins.accept(latest.weekStart, now = at(50)))
+    }
+
+    @Test
+    fun `the decision date is the log date, under the day boundary`() = runBlocking {
+        val latest = drifting()
+        // 01:00 on Tuesday is still Monday's log day with the 4 AM start.
+        checkins.accept(latest.weekStart, now = at(43, 1))
+        val view = checkins.open(latest.weekStart, at(43, 2))!!
+        assertEquals(date(42), view.written!!.effectiveFrom)
+        assertEquals(date(42), view.decidedOn)
+    }
+
+    @Test
+    fun `marking a day incomplete keeps its steps and sleep`() = runBlocking {
+        onboard()
+        dao.upsert(DailyActivityEntity(date(3), steps = 8_000, stepsSyncedAt = 5, sleepHours = 7.5))
+        checkins.setFoodIncomplete(date(3), true)
+        assertEquals(DailyActivityEntity(date(3), foodIncomplete = true, steps = 8_000, stepsSyncedAt = 5, sleepHours = 7.5), dao.activity(date(3)))
+        checkins.setFoodIncomplete(date(3), false)
+        assertEquals(DailyActivityEntity(date(3), foodIncomplete = false, steps = 8_000, stepsSyncedAt = 5, sleepHours = 7.5), dao.activity(date(3)))
+        // A day with no row yet gets one with only the flag.
+        checkins.setFoodIncomplete(date(4), true)
+        assertEquals(DailyActivityEntity(date(4), foodIncomplete = true), dao.activity(date(4)))
+    }
+
+    @Test
+    fun `weeks closed in the same catch-up keep no proposal, but one you could have seen does`() = runBlocking {
+        drifting()
+        val rows = dao.all()
+        // Week 4 fired too, but nobody saw it: it lapsed in the catch-up that computed it.
+        assertEquals(CheckinFlag.DRIFT, rows[4].flag)
+        assertNull(rows[4].proposedKcal)
+        rows.dropLast(1).forEach { assertNull(it.proposedKcal) }
+        assertNotNull(rows.last().proposedKcal)
+        // The last one was pending, so it could have been seen; it keeps its proposal when it lapses.
+        catchUp(49)
+        assertNotNull(dao.week(rows.last().weekStart)!!.proposedKcal)
+        assertEquals(LAPSED, dao.week(rows.last().weekStart)!!.decision)
+    }
+
+    @Test
+    fun `a clock that ran ahead leaves no unanswered future weeks behind`() = runBlocking {
+        onboard()
+        gaining(0..41)
+        catchUp(70)
+        assertEquals(date(63), dao.latest()!!.weekStart)
+        checkins.keep(date(63), at(70))
+        // Back to the real date: the future weeks nobody answered go, the answer stays, and last week is open again.
+        catchUp(42)
+        assertNull(dao.week(date(42)))
+        assertNull(dao.week(date(56)))
+        assertEquals(KEPT, dao.week(date(63))!!.decision)
+        assertEquals(PENDING, dao.week(date(35))!!.decision)
+        // A week later, the week that has now ended is computed and last week lapses.
+        catchUp(49)
+        assertEquals(PENDING, dao.week(date(42))!!.decision)
+        assertEquals(LAPSED, dao.week(date(35))!!.decision)
     }
 }

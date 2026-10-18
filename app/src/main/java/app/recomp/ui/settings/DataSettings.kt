@@ -24,6 +24,7 @@ import app.recomp.data.backup.BackupException
 import app.recomp.data.backup.BackupManager
 import app.recomp.data.backup.BackupManifest
 import app.recomp.data.backup.PreparedBackup
+import app.recomp.data.repo.CheckinRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.IOException
@@ -53,6 +54,7 @@ sealed interface DataState {
 class DataViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val backups: BackupManager,
+    private val checkins: CheckinRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow<DataState>(DataState.Idle)
     val state: StateFlow<DataState> = _state
@@ -121,6 +123,9 @@ class DataViewModel @Inject constructor(
                 // A failure after the safety copy was written still leaves a new copy to restore.
                 _safetyCopy.value = backups.safetyCopyDate()
             }
+            // The imported check-ins may stop weeks ago, so the weeks since are computed now, not at the next day boundary.
+            // The import has already succeeded; if this fails, the next launch or check-in catches up instead.
+            runCatching { checkins.catchUp() }
             _state.value = DataState.Done("Imported", "Your data is now the backup's: ${summary(confirm.backup.manifest)}.")
         }
     }

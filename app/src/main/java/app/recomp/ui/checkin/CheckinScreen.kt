@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import app.recomp.data.repo.CheckinRepository
+import app.recomp.data.repo.CheckinSettingsException
 import app.recomp.data.repo.CheckinView
 import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
@@ -66,25 +67,42 @@ class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
+    /** An answer is saving: the proposal's buttons wait for it. */
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy
+
     init {
         reload()
     }
 
     /** Opening recomputes a pending week, so food logged since the Monday counts. */
-    private fun reload() = viewModelScope.launch {
-        _ui.value = checkins.open(weekStart)?.let { CheckinUi.Shown(it) } ?: CheckinUi.Missing
-    }
+    private fun reload() = viewModelScope.launch { load() }
 
-    /** A failed save leaves the target as it was and says so. */
-    private fun answer(block: suspend () -> Boolean) = viewModelScope.launch {
-        try {
-            if (!block()) _error.value = "This check-in can't be answered any more. Your target is unchanged."
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _error.value = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Your target is unchanged."
+    private suspend fun load(): CheckinView? = checkins.open(weekStart).also { _ui.value = it?.let { v -> CheckinUi.Shown(v) } ?: CheckinUi.Missing }
+
+    /**
+     * One answer at a time. A refusal says so only if the week is still open (a second tap finds it answered); a
+     * failure before the commit leaves the target as it was; one after it says the target was saved.
+     */
+    private fun answer(block: suspend () -> Boolean) {
+        if (_busy.value) return
+        _busy.value = true
+        viewModelScope.launch {
+            var answered = true
+            try {
+                answered = block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CheckinSettingsException) {
+                _error.value = CheckinText.settingsNotSaved(e.cause?.message ?: e.cause?.javaClass?.simpleName ?: "unknown")
+            } catch (e: Exception) {
+                _error.value = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Your target is unchanged."
+            } finally {
+                val view = load()
+                if (!answered) _error.value = CheckinText.refused(view?.row)
+                _busy.value = false
+            }
         }
-        reload()
     }
 
     fun accept(useNewTarget: Boolean = false) = answer { checkins.accept(weekStart, useNewTarget) }
@@ -108,6 +126,7 @@ class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private
 fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewModel()) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -123,7 +142,7 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
             when (val state = ui) {
                 CheckinUi.Loading -> Unit
                 CheckinUi.Missing -> Text("This check-in isn't there any more, perhaps after an import.")
-                is CheckinUi.Shown -> CheckinContent(state.view, viewModel)
+                is CheckinUi.Shown -> CheckinContent(state.view, busy, viewModel)
             }
             error?.let { message ->
                 Text(message, color = MaterialTheme.colorScheme.error)
@@ -134,7 +153,7 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
 }
 
 @Composable
-private fun CheckinContent(v: CheckinView, viewModel: CheckinViewModel) {
+private fun CheckinContent(v: CheckinView, busy: Boolean, viewModel: CheckinViewModel) {
     // 1. The goal's headline and one verdict.
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CheckinText.headline(v), style = MaterialTheme.typography.headlineSmall)
@@ -159,20 +178,21 @@ private fun CheckinContent(v: CheckinView, viewModel: CheckinViewModel) {
     Text(CheckinText.estimate(v), style = MaterialTheme.typography.bodyLarge)
     Text(CheckinText.estimateDetail(v), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-    // 5. The proposal, or what became of it.
+    // 5. The proposal, or what became of it. The guardrails apply here as in Settings (PRD §4.9), and say so.
+    v.notes.forEach { Text(GoalText.guardrail(it), color = MaterialTheme.colorScheme.secondary) }
     val proposal = v.proposal
     val range = v.adjustRange
     if (proposal != null && range != null) {
-        ProposalCard(v, proposal.kcal, range, viewModel)
+        ProposalCard(v, proposal.kcal, range, busy, viewModel)
     } else {
-        CheckinText.decision(v.row, v.written?.kcal)?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+        CheckinText.decision(v.row, v.written?.kcal, v.decidedOn)?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
         if (v.row.pending && v.row.flag != null && v.row.proposedKcal == null) Text(CheckinText.WITHIN_50, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 /** *Accept*, *Adjust* (−/+ 50 kcal, held to the floor and caps) and *Keep*; *Use the new target* with your own calories. */
 @Composable
-private fun ProposalCard(v: CheckinView, proposedKcal: Int, range: IntRange, viewModel: CheckinViewModel) {
+private fun ProposalCard(v: CheckinView, proposedKcal: Int, range: IntRange, busy: Boolean, viewModel: CheckinViewModel) {
     var adjusting by remember { mutableStateOf<Int?>(null) }
     var typing by remember { mutableStateOf(false) }
     // The default card, so the outlined buttons keep a visible border in both themes.
@@ -184,13 +204,15 @@ private fun ProposalCard(v: CheckinView, proposedKcal: Int, range: IntRange, vie
 
             val kcal = adjusting
             if (kcal == null) {
-                Button(onClick = { viewModel.accept() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Accept") }
+                Button(onClick = { viewModel.accept() }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Accept") }
                 if (v.kcalOverride != null) {
-                    OutlinedButton(onClick = { viewModel.accept(useNewTarget = true) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Use the new target") }
+                    OutlinedButton(onClick = { viewModel.accept(useNewTarget = true) }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Text("Use the new target")
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { adjusting = proposedKcal }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Adjust") }
-                    OutlinedButton(onClick = viewModel::keep, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Keep") }
+                    OutlinedButton(onClick = { adjusting = proposedKcal }, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Adjust") }
+                    OutlinedButton(onClick = viewModel::keep, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Keep") }
                 }
             } else {
                 Stepper(
@@ -206,7 +228,7 @@ private fun ProposalCard(v: CheckinView, proposedKcal: Int, range: IntRange, vie
                 if (v.kcalOverride != null) Text("Saving replaces your own target of ${GoalText.kcal(v.kcalOverride)}.", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { adjusting = null }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
-                    Button(onClick = { viewModel.adjust(kcal) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Save ${GoalText.kcal(kcal)}") }
+                    Button(onClick = { viewModel.adjust(kcal) }, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Save ${GoalText.kcal(kcal)}") }
                 }
             }
         }

@@ -7,6 +7,7 @@ import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * The check-in's proposal (PRD §12.1, TRD §5.4): the §5.3 targets recomputed with the new maintenance
@@ -38,13 +39,14 @@ object CheckinProposal {
 
     /**
      * What *Adjust* can reach (PRD §4.9): never below the floor or a 25% deficit, never above a 15% surplus,
-     * on the 10 kcal grid.
+     * on the 10 kcal grid. The caps round inwards but the proposal rounds to the nearest 10, so the range always
+     * widens to take in the proposal itself: *Save* without a step saves exactly what was proposed.
      */
     fun adjustRange(inputs: TargetInputs, maintenanceKcal: Double): IntRange {
-        val bmr = targets(inputs, maintenanceKcal, TargetOverrides()).bmrKcal
-        val low = max(KcalRounding.up(NutritionCalculator.floor(inputs.sex, bmr)), KcalRounding.up(maintenanceKcal * (1 - MAX_DEFICIT_FRACTION)))
+        val proposal = targets(inputs, maintenanceKcal, TargetOverrides())
+        val low = max(KcalRounding.up(NutritionCalculator.floor(inputs.sex, proposal.bmrKcal)), KcalRounding.up(maintenanceKcal * (1 - MAX_DEFICIT_FRACTION)))
         val high = KcalRounding.down(maintenanceKcal * (1 + MAX_SURPLUS_FRACTION))
-        return low..max(low, high)
+        return min(low, proposal.kcal)..max(max(low, high), proposal.kcal)
     }
 
     /** One step of *Adjust* from [kcal], held to [range]. */

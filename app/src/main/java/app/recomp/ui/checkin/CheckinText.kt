@@ -12,9 +12,7 @@ import app.recomp.domain.nutrition.WeekAverage
 import app.recomp.domain.trend.WeightPace
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.onboarding.GoalText
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import kotlin.math.abs
 
 /** The check-in's sentences (PRD §12.1). A flag is information about the trend, never a failure. */
@@ -40,9 +38,12 @@ object CheckinText {
         } ?: "No weigh-ins yet"
     }
 
-    /** One verdict under the headline: on track, the flag that fired, or what's missing. */
+    /**
+     * One verdict under the headline: on track, the flag that fired, or what's missing. A frozen week's flag can belong
+     * to a goal you've since changed; then it's named without a comparison against the new goal's pace.
+     */
     fun verdict(v: CheckinView): String {
-        val e = v.evaluation
+        val e = v.evaluation.takeIf { v.row.flag == null || v.row.flag.goal == v.plan.goal } ?: v.evaluation.copy(ratePct = null, fourWeekPct = null, waistChangeCm = null)
         val pace = WeightPace.of(v.plan.policy)
         return when (v.status) {
             CheckinStatus.ON_TRACK -> "On track"
@@ -108,9 +109,9 @@ object CheckinText {
     /** A flag fired but the target barely moves. */
     const val WITHIN_50 = "The new estimate keeps your target within 50 kcal, so there's nothing to change."
 
-    /** What became of a decided week. */
-    fun decision(row: WeeklyCheckinEntity, writtenKcal: Int?): String? {
-        val on = row.decidedAt?.let { " on ${BodyText.shortDate(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate())}" } ?: ""
+    /** What became of a decided week. [decidedOn] is the log date it was decided on (PR-03's day boundary). */
+    fun decision(row: WeeklyCheckinEntity, writtenKcal: Int?, decidedOn: LocalDate?): String? {
+        val on = decidedOn?.let { " on ${BodyText.shortDate(it)}" } ?: ""
         return when (row.decision) {
             CheckinDecision.PENDING -> null
             CheckinDecision.ACCEPTED -> "You accepted the new target$on" + (writtenKcal?.let { ": ${GoalText.kcal(it)}." } ?: ".")
@@ -119,6 +120,17 @@ object CheckinText {
             CheckinDecision.LAPSED -> if (row.proposedKcal != null) "Not answered before the next check-in, so your target stayed." else null
         }
     }
+
+    /**
+     * An answer the repository refused. Nothing to say when the week was decided meanwhile, e.g. by a second tap; the
+     * screen already shows the answer.
+     */
+    fun refused(row: WeeklyCheckinEntity?): String? =
+        if (row == null || row.pending) "This check-in can't be answered any more. Your target is unchanged." else null
+
+    /** The answer was saved, but the settings that follow it weren't. */
+    fun settingsNotSaved(reason: String): String =
+        "Your new target is saved, but your settings couldn't be updated ($reason). Open Settings → Targets to check them."
 
     /** Today's card, one line under its title. */
     fun cardLine(row: WeeklyCheckinEntity): String = title(row.weekStart) + " · " + status(row)

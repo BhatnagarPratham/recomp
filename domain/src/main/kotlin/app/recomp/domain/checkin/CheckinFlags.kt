@@ -7,22 +7,22 @@ import app.recomp.domain.trend.TrendPoint
 import java.time.LocalDate
 import kotlin.math.abs
 
-/** The goal's check-in flag (GL-08, PRD §12.1), stored on the week's row. */
-enum class CheckinFlag {
+/** The goal's check-in flag (GL-08, PRD §12.1), stored on the week's row. [goal] is the goal it belongs to. */
+enum class CheckinFlag(val goal: Goal) {
     /** Fat loss: losing under half the pace two weeks running. */
-    LOSS_SLOW,
+    LOSS_SLOW(Goal.FAT_LOSS),
 
     /** Recomp: trend and waist both flat over 4 weeks. */
-    FLAT,
+    FLAT(Goal.RECOMP),
 
     /** Maintain: the trend moved more than 1% over 4 weeks. */
-    DRIFT,
+    DRIFT(Goal.MAINTAIN),
 
     /** Lean bulk: gaining under 0.1% a week two weeks running. */
-    GAIN_SLOW,
+    GAIN_SLOW(Goal.LEAN_BULK),
 
     /** Lean bulk: gaining over 0.5% a week two weeks running. */
-    GAIN_FAST,
+    GAIN_FAST(Goal.LEAN_BULK),
 }
 
 /** The verdict under the headline: on track, the flag that fired, or what's missing. */
