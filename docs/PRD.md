@@ -790,7 +790,6 @@ These rules hold for every block:
   - PRs, stall cards and next time's targets are recomputed from the edited history, and the screen says so. Targets frozen on past sessions stay as they were shown.
   - Deleting your last strength workout moves the rotation back.
   - An active workout is still edited in the workout screen.
-- **Scheduled deloads (§4.3).** For intermediate and advanced lifters, a Train card suggests a deload week every 6–8 or 4–6 weeks, as the experience policy says. It's offered, never applied on its own. Beginners deload only on a stall.
 - **In a deficit,** the summary and the stall card add "Holding strength in a deficit is a win" (§4.8).
 - **Charts (PO-09).** Exercise history gets a chart: the best e1RM per session as a line and the top set as dots, over 12 weeks or everything. Bodyweight exercises chart reps, and assisted ones the assistance (lower is better).
 - **Weekly sets per muscle (PO-10).** A Train tab card for this week: each muscle's working sets (1 for its primary muscle, ½ for each secondary) against a band.
@@ -820,6 +819,7 @@ These rules hold for every block:
   - a deload is marked on the exercise (or every exercise, for the whole week), and the next workout starts it the way the stall card's *Deload* does.
 
   A suggestion outside the guardrails (§4.9), or naming an exercise that isn't in the library, is shown as advice only.
+- **Scheduled deloads (§4.3),** with or without AI: for intermediate and advanced lifters, a Train card suggests a deload week every 6–8 or 4–6 weeks, as the experience policy says. Accepting marks the next workouts to deload, as above. It's offered, never applied on its own. Beginners deload only on a stall.
 - **The progression engine stays plain rules.** AI never sets a set's weight or reps, and nothing changes without your tap.
 - **History:** each past review keeps what was sent, what came back and what you applied.
 - With AI off, the weekly review shows the numbers only.
@@ -831,7 +831,7 @@ These rules hold for every block:
   | Reminder | Default time | Skipped when |
   |----------|--------------|--------------|
   | Morning weigh-in | 07:30 | you've weighed in today |
-  | Lunch not logged | 14:30 | the midday meal has an entry (the slot whose usual time covers 14:30, §12.5) |
+  | Lunch not logged | 14:30 | the meal it watches has an entry (Lunch by default; you can pick another slot) |
   | Evening nudge (below) | 20:30 | there's nothing to nudge about |
   | Workout day, on weekdays you pick | 08:00 | a strength workout is done today |
   | Weekly check-in | Monday 09:00 | you've opened it |

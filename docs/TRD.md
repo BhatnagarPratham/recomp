@@ -63,7 +63,7 @@ app/src/main/java/…/recomp/
   data/{db,repo,seed,ai,food,health,backup,prefs}
   workout/ActiveWorkoutService.kt, RestTimer.kt
   assets/seed/{exercises,split_templates}.json
-  work/{BackupWorker,ReminderWorker,HealthSyncWorker}.kt
+  work/{BackupWorker,HealthSyncWorker}.kt   reminders/ (AlarmManager, M12)
 domain/src/main/kotlin/…/recomp/domain/
   persona/  model/  training/  progression/  nutrition/  trend/  usecase/
 ```
@@ -358,7 +358,7 @@ end         = the check-in week's Sunday (log dates, so "day starts at" applies)
 window      = 21 days to end when the primary source has ≥ 10 counted weigh-ins in it (§5.2),
               else 28 days to end, which needs ≥ 4
 logged      = days in the window with food logged and not marked incomplete; needs ≥ 80% (17 of 21, 23 of 28)
-anchor      = the window's last primary weigh-in; from = anchor − window days
+anchor      = the window's last primary weigh-in; from = anchor − window days, or the trend's first point if later
 Δtrend      = trend(anchor) − trend_at(from)                      // trend_at interpolates, as in §5.2
 tdee_obs    = mean(kcal over logged days) − Δtrend × 7700 / (anchor − from, in calendar days)
 tdee_new    = tdee_prev + clamp(0.5 × (tdee_obs − tdee_prev), −150, +150)   // at most 150 kcal a week
@@ -384,7 +384,7 @@ two weeks    = rate(end) and rate(end − 7); unknown if either is, which breaks
 four weeks   = trend(last weigh-in in the week) − trend_at(that − 28 days), as % of the trend
 waist change = the reading nearest end (within the week to end) − the one nearest end − 28 (within 7 days either side)
 
-FAT_LOSS   LOSS_SLOW  both weeks' rates > −pace × 0.5            (losing less than half the pace, or gaining)
+FAT_LOSS   LOSS_SLOW  both weeks' rates > −lossRatePctPerWeek × 0.5   (losing less than half the pace, or gaining)
 RECOMP     FLAT       |four weeks| < 0.5%  and  |waist change| < 1 cm; no waist pair → "log your waist"
 MAINTAIN   DRIFT      |four weeks| > 1%
 LEAN_BULK  GAIN_SLOW  both weeks < 0.1%;   GAIN_FAST  both weeks > 0.5%
@@ -560,7 +560,7 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
 | `MEAL_TEXT`, `MEAL_PHOTO`, `FIT_CHECK` | Text and/or photo, plus the origin tag | `items[]` (shape below), optional `clarifying_question` |
 | `LABEL` (P1) | Label photo plus the on-device OCR text | `name`, `brand?`, `per_100g {kcal, protein_g, carbs_g, fat_g, fiber_g}`, `serving_g?` |
 | ~~`INBODY`~~ | Not used: body data stays on the phone (decided 2026-10-18), so InBody images are never sent (M15) | — |
-| `COACH` (P1, M11) | The weekly programme report, with only the sections you ticked | `summary`, `suggestions[≤5] {kind, routine, exercise_key, replacement_key, value, reason}` |
+| `COACH` (P1, M11) | The weekly programme report, with only the sections you ticked | `summary`, `suggestions[] {kind, routine_ref, exercise_ref, replacement_ref, value, reason}`; at most 5, checked in code (M11) |
 
 ```json
 {
@@ -779,7 +779,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M9: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
 | **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
-| **M12: Nudges, reminders, widget** | WorkManager, opt-in reminders (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
+| **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
 | **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
 | **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
 | **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
@@ -1079,15 +1079,13 @@ Parallel milestones share only the registration files, with small additive edits
   - `PrRebuilder`, which recomputes an exercise's PRs from the edited session onwards, keeping stall reset points valid.
   - The exercise chart, using M8's component.
   - `MuscleVolume` in `:domain` (§5.5), with its Train card and the band setting.
-  - Scheduled deloads from the experience policy (`ExperiencePolicy.deloadEveryWeeks`, PRD §4.3): a card suggests a deload week every 6–8 weeks for intermediate lifters and 4–6 for advanced. It's offered, never applied on its own, and never shown to beginners, whose policy deloads only on a stall.
   - §4.8's progression message in a deficit: the summary and stall card say "holding strength in a deficit is a win" when the target is in a deficit.
 - **Data:** none. Each save is one transaction on the existing tables. Deleting a session cascades to its exercises, sets and PRs.
 - **Tests:**
   - PRs after editing, adding and deleting sets in an older session, so a later PR disappears or appears; the incremental rebuild matches one from scratch;
   - deleting the last strength session moves the rotation back;
   - frozen recommendations unchanged;
-  - volume counting: secondary muscles, working sets only, the week boundary;
-  - the scheduled-deload card's timing for each experience level, and none for beginners.
+  - volume counting: secondary muscles, working sets only, the week boundary.
 - **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M16's Health Connect writes must follow these edits later.
 - **Parallel:** with M9.
 
@@ -1098,9 +1096,10 @@ Parallel milestones share only the registration files, with small additive edits
   - `ProgrammeReport` in `:domain` builds the ticked sections as text from M8's weekly aggregates, the routines and the targets. It never includes the fields PRD §12.7 lists as never sent.
   - The checklist, the full-text preview and *Send*, as `AiKind.COACH` through M7's providers, at a higher effort than meals (e.g. `medium`) with a 60 s timeout, a progress line and its own upper-bound cost.
   - The hand-written schema: `summary`, and `suggestions[] {kind, routine_ref, exercise_ref, replacement_ref, value, reason}`. `kind` is an enum (`CALORIES`, `PROTEIN`, `SWAP`, `ADD`, `REMOVE`, `SETS`, `REP_RANGE`, `STRENGTH_DAYS`, `DELOAD_EXERCISE`, `DELOAD_ALL`, `ADVICE`); `value` is `{min, max}` with min = max for a single number; unused fields are `""` or 0, like §6.2's convention. Exercises are report-local refs (`e1…eN`) for the routines' exercises and the library the report lists, mapped back on apply, so custom exercises work too. Array lengths and number ranges aren't in the schema (structured outputs don't take all such constraints); `SuggestionCheck` enforces at most 5 and every range.
-  - Targets go in relative terms by default: the deficit or surplus as a % of maintenance, and protein in g/kg. Absolute calories and grams go only when *Body trends* is ticked, since they reveal your weight.
+  - Targets go in relative terms by default: the deficit or surplus as a % of maintenance, and protein in g/kg. Absolute calories and grams go only when *Body trends* is ticked, since they reveal your weight. A `CALORIES` or `PROTEIN` suggestion's `value` is in the same terms the report used (% of maintenance and g/kg, or kcal and g), and `SuggestionCheck` converts it with the local numbers before the preview.
   - `SuggestionCheck` validates each suggestion against the library, the routines and the guardrails. Anything else is advice only.
   - *Apply* uses the existing paths: `PersonaRepository`'s target preview and save (`reason = REVIEW`), `TrainingRepository`'s routine edits with *Undo*, and Training setup for strength days. A deload is marked on the exercise (`deload_pending`), and the next workout start turns it into the stall card's deload (90% and a reset point), then clears it. *Deload the whole week* marks every exercise in the active routines.
+  - Scheduled deloads from the experience policy (`ExperiencePolicy.deloadEveryWeeks`, PRD §4.3), on a Train card: a deload week every 6–8 weeks for intermediate lifters and 4–6 for advanced. Accepting marks every exercise `deload_pending`, like the review's. It's offered, never applied on its own, and never shown to beginners, whose policy deloads only on a stall.
   - The prompt on M5's check-in card, which lives in `ui/checkin`, so M11 stays out of `TodayScreen.kt`.
 - **Data (v11):**
   ```text
@@ -1113,6 +1112,7 @@ Parallel milestones share only the registration files, with small additive edits
   - the schema and parsing;
   - every suggestion kind validated and applied, and *Undo* for routine changes;
   - a pending deload turning into the next workout's targets, once;
+  - the scheduled-deload card's timing for each experience level, and none for beginners;
   - targets sent in relative terms unless body trends are ticked;
   - unknown exercises and values outside the guardrails downgraded to advice;
   - the request against a mock server;
@@ -1216,7 +1216,7 @@ Parallel milestones share only the registration files, with small additive edits
   - First, check on the reference phone whether Google Drive appears in the folder picker (`ACTION_OPEN_DOCUMENT_TREE`): community reports say it doesn't. If it doesn't, Drive gets one rolling file instead (`recomp-backup-latest.zip`, chosen once with the save dialog and overwritten each week through its saved permission), and *the last 8* applies to folders on the phone. PRD §12.12 says so.
   - CSV export.
   - Health Connect writes: `ExerciseSessionRecord`, one `NutritionRecord` per meal and `WeightRecord`, each with a `clientRecordId` (§6.3). Sessions read from other apps (M13) are never written back.
-  - Sync reads the tables (a diff of the last 30 days, at launch and daily, plus a diff soon after any change, found by watching the tables through Room's invalidation tracker), so it never edits the repositories' save paths, which M15 changes in the same wave. Each record's `clientRecordVersion` comes from a per-record counter in device state, so an update always wins and an unchanged record isn't rewritten. Deletes go by `clientRecordId`.
+  - Sync reads the tables (a diff of the last 30 days, at launch and daily, plus a diff soon after any change, found by watching the tables through Room's invalidation tracker), so it never edits the repositories' save paths, which M15 changes in the same wave. Each record's `clientRecordVersion` is its write time in epoch ms, so an update always wins, even after a reinstall or restore; device state keeps only a hash per record, to skip unchanged ones. An edit or delete more than 30 days old isn't followed automatically: Settings → Health Connect has *Resync everything*. Deletes go by `clientRecordId`.
   - A meal's `NutritionRecord` spans its log date's meal time (the slot's usual time, M9), so a 1 AM snack sits on the log date it belongs to, and `mealType` maps the default slots (custom ones are `MEAL_TYPE_UNKNOWN`).
 - **Data:** none. The `clientRecordId` stands in for a local mapping table; `workout_session.hc_record_id` marks only sessions read from other apps (M13).
 - **Tests:**
