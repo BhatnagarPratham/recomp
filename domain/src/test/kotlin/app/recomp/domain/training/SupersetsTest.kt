@@ -153,6 +153,9 @@ class SupersetsTest {
         assertEquals(AfterTick(a.set(0), rest = false), Supersets.afterTick(workout, b.set(0)))
         // Then A's set ends the round: rest, and on to round 2.
         assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(listOf(a, b.done(0)), a.set(0)))
+        // A skipped all along (its machine is taken): from the second round on, ticks on B rest as usual.
+        assertEquals(AfterTick(a.set(2), rest = true), Supersets.afterTick(listOf(a, b.done(0)), b.set(1)))
+        assertEquals(AfterTick(a.set(0), rest = true), Supersets.afterTick(listOf(a, b.done(0, 1)), b.set(2)))
         // In a three-exercise round the later exercise comes before the earlier one.
         val x = exercise(1, 1)
         val y = exercise(1, 1)

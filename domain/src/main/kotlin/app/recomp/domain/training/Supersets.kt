@@ -125,9 +125,10 @@ object Supersets {
     /**
      * Ticking a set selects the next unticked one. In a superset the round comes first: the same round's
      * set of the next exercise follows with no rest, or of an earlier one when you started the round on
-     * a later exercise (its machine was free first). Once the round is done, rest starts and the next
-     * unticked set in [order] is selected, wrapping round to any left earlier. There's no rest after the
-     * last set of the workout.
+     * a later exercise (its machine was free first). An earlier exercise with a set left in an earlier
+     * round is being skipped (its machine is taken), so it isn't waited for. Once the round is done, rest
+     * starts and the next unticked set in [order] is selected, wrapping round to any left earlier.
+     * There's no rest after the last set of the workout.
      */
     fun afterTick(exercises: List<ExerciseRef>, setId: Long): AfterTick {
         val order = order(exercises)
@@ -135,7 +136,9 @@ object Supersets {
         if (i < 0) return AfterTick(null, rest = false)
         val ticked = order[i]
         val round = order.indices.filter { it != i && !order[it].done && order[it].block == ticked.block && order[it].round == ticked.round }
-        (round.firstOrNull { it > i } ?: round.firstOrNull())?.let { return AfterTick(order[it].setId, rest = false) }
+        fun skipped(exercise: Int) = order.any { it.exercise == exercise && !it.done && it.round < ticked.round }
+        val inRound = round.firstOrNull { it > i } ?: round.firstOrNull { it < i && !skipped(order[it].exercise) }
+        inRound?.let { return AfterTick(order[it].setId, rest = false) }
         val next = (order.drop(i + 1) + order.take(i)).firstOrNull { !it.done } ?: return AfterTick(null, rest = false)
         return AfterTick(next.setId, rest = true)
     }

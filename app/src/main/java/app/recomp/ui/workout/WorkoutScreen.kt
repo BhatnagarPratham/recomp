@@ -494,14 +494,20 @@ private fun SetDock(
             )
             if (ex.logsLoad) {
                 val step = Loads.formatKg(ex.incrementG)
+                // No assistance left reads "BW", like the card.
+                val unassisted = ex.assisted && set.load == 0
                 DockStepper(
-                    label = if (ex.loadType == LoadType.BODYWEIGHT_PLUS) "+ kg" else "kg",
-                    value = set.load?.let(Loads::formatKg) ?: if (ex.loadType == LoadType.BODYWEIGHT_PLUS) "0" else "—",
+                    label = when {
+                        unassisted -> ""
+                        ex.loadType == LoadType.BODYWEIGHT_PLUS -> "+ kg"
+                        else -> "kg"
+                    },
+                    value = if (unassisted) "BW" else set.load?.let(Loads::formatKg) ?: if (ex.loadType == LoadType.BODYWEIGHT_PLUS) "0" else "—",
                     ghost = set.loadIsGhost && !set.done,
                     minus = "−$step",
                     plus = "+$step",
                     description = if (ex.assisted) "assistance" else "weight",
-                    prefix = if (ex.assisted) "Assist" else null,
+                    prefix = if (ex.assisted && !unassisted) "Assist" else null,
                     onMinus = { onStepLoad(set.id, false) },
                     onPlus = { onStepLoad(set.id, true) },
                     onValue = { onTypeLoad(set.id) },
@@ -577,7 +583,7 @@ private fun DockStepper(
                     fontWeight = FontWeight.SemiBold,
                     color = if (ghost) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
                 )
-                Text(" $label", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (label.isNotEmpty()) Text(" $label", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         FilledTonalButton(
