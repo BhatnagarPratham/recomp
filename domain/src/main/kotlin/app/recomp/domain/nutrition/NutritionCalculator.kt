@@ -71,6 +71,8 @@ data class NutritionTargets(
     val overrides: TargetOverrides = TargetOverrides(),
     /** TDEE came from the check-in's maintenance estimate rather than BMR × activity (TRD §5.4). */
     val adaptiveTdee: Boolean = false,
+    /** BMR × activity, whatever TDEE came from: "the formula says 2,610". */
+    val formulaTdeeKcal: Double = tdeeKcal,
 )
 
 object NutritionCalculator {
@@ -116,6 +118,7 @@ object NutritionCalculator {
             fatFromBodyWeight = overrides.fatG == null && fatFloor > fatShare,
             overrides = overrides,
             adaptiveTdee = input.maintenanceKcal != null,
+            formulaTdeeKcal = bmr * input.activityFactor,
         )
     }
 

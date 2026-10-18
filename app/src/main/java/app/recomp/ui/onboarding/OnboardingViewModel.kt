@@ -8,6 +8,7 @@ import app.recomp.data.prefs.FinishKind
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.OnboardingResult
+import app.recomp.data.repo.MaintenanceEstimate
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WalkthroughItem
@@ -124,6 +125,8 @@ data class OnboardingUi(
     val continueAfterAck: Boolean = false,
     /** Settings → Goal: the targets in force before this change. */
     val before: NutritionTargetEntity? = null,
+    /** Settings → Goal: the check-in's maintenance estimate, which the new targets use as TDEE (TRD §5.4). */
+    val maintenance: MaintenanceEstimate? = null,
     val busy: Boolean = false,
     /** Saving failed: the form stays as it is so you can try again. */
     val error: String? = null,
@@ -218,6 +221,7 @@ class OnboardingViewModel @Inject constructor(
                     currentSplit = stored.split,
                     step = if (mode == FlowMode.GOAL) Step.GOAL else Step.PRESET,
                     before = if (mode == FlowMode.GOAL) nutrition.targetOn(today) else null,
+                    maintenance = if (mode == FlowMode.GOAL) personas.maintenance() else null,
                 )
             }
         }
@@ -370,7 +374,7 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private fun projectionFor(ui: OnboardingUi, profile: Profile, plan: GoalPlan): String {
-        val targets = personas.targetsFor(profile, plan, TargetOverrides(), ui.today)
+        val targets = personas.targetsFor(profile, plan, TargetOverrides(), ui.today, ui.maintenance)
         val perWeek = Projection.kgPerWeek(targets.energyAdjustmentKcal)
         val goalKg = plan.goalWeightKg ?: suggestedGoalWeight(ui)
         val weeks = goalKg?.let { Projection.weeksTo(profile.weightKg, it, perWeek) }
@@ -469,7 +473,7 @@ class OnboardingViewModel @Inject constructor(
         val ui = _ui.value
         val profile = ui.profile ?: return null
         val plan = ui.plan ?: return null
-        return personas.targetsFor(profile, plan, ui.overrides, ui.today)
+        return personas.targetsFor(profile, plan, ui.overrides, ui.today, ui.maintenance)
     }
 
     fun setOverrides(overrides: TargetOverrides) = _ui.update { it.copy(overrides = overrides) }

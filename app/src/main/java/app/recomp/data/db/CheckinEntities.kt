@@ -84,6 +84,13 @@ interface CheckinDao {
     @Query("SELECT * FROM weekly_checkin ORDER BY week_start")
     suspend fun all(): List<WeeklyCheckinEntity>
 
+    /** The latest week with a maintenance estimate of its own, whatever its decision: what Settings' targets use. */
+    @Query("SELECT * FROM weekly_checkin WHERE tdee_obs IS NOT NULL ORDER BY week_start DESC LIMIT 1")
+    fun observeLatestEstimate(): Flow<WeeklyCheckinEntity?>
+
+    @Query("SELECT * FROM weekly_checkin WHERE tdee_obs IS NOT NULL ORDER BY week_start DESC LIMIT 1")
+    suspend fun latestEstimate(): WeeklyCheckinEntity?
+
     @Upsert
     suspend fun upsert(row: WeeklyCheckinEntity)
 

@@ -204,7 +204,7 @@ class TestApp(private val dir: File) {
         progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs, db.nutritionDao(), days)
         workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression, days)
         body = BodyRepository(db, db.bodyDao(), db.workoutDao(), prefs, days)
-        personas = PersonaRepository(prefs, db.nutritionDao(), training, days, body)
+        personas = PersonaRepository(prefs, db.nutritionDao(), training, days, body, db.checkinDao())
         nutrition = NutritionRepository(db.nutritionDao(), db.foodLogDao(), db.checkinDao(), prefs, days)
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)

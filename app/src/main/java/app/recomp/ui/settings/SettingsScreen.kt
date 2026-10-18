@@ -31,6 +31,7 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.prefs.StoredPersona
 import app.recomp.data.prefs.TrainingSettings
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.MaintenanceEstimate
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TargetPreview
 import app.recomp.data.repo.TrainingRepository
@@ -90,6 +91,8 @@ data class SettingsUi(
     /** The trend weight once the primary source has a weigh-in (TRD §5.0). */
     val trendKg: Double? = null,
     val scanSlot: ScanSlot? = null,
+    /** The check-in's maintenance estimate, which sets TDEE once there is one (TRD §5.4). */
+    val maintenance: MaintenanceEstimate? = null,
 )
 
 /** A change that moves the targets, waiting for you to confirm the before and after (PRD §7.1). */
@@ -107,27 +110,29 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { today.value = personas.today() }
     }
 
-    private val about = combine(personas.stored, personas.profile, personas.overrides, today) { stored, profile, overrides, day ->
+    private val about = combine(personas.stored, personas.profile, personas.overrides, today, personas.maintenance) { stored, profile, overrides, day, maintenance ->
         val plan = stored.goal?.toPlan()
-        Triple(stored, profile, Triple(plan, overrides, day))
+        Triple(stored, profile, Triple(plan, overrides, day to maintenance))
     }
 
     private val bodyData = combine(body.observeTrend(), body.scanSlot) { trend, slot -> trend.trendKg to slot }
 
     val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot) ->
-        val (plan, overrides, day) = rest
+        val (plan, overrides, dayAndEstimate) = rest
+        val (day, maintenance) = dayAndEstimate
         SettingsUi(
             loaded = true,
             today = day,
             stored = stored,
             plan = plan,
             profile = profile,
-            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day) else null,
+            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day, maintenance) else null,
             dayStart = dayStart,
             training = settings,
             extraNames = extras.map { it.name },
             trendKg = trendKg,
             scanSlot = slot,
+            maintenance = maintenance,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUi())
 
@@ -233,7 +238,7 @@ fun SettingsScreen(
         val targets = ui.targets
         if (targets != null && plan != null) {
             SectionTitle("Targets")
-            TargetList(targets, plan.policy, before = null, onOverride = viewModel::changeOverrides)
+            TargetList(targets, plan.policy, before = null, onOverride = viewModel::changeOverrides, estimateWeek = ui.maintenance?.weekStart)
             LatestCheckinRow()
         }
 

@@ -1,6 +1,8 @@
 package app.recomp.data.repo
 
+import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.NutritionDao
+import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.TargetReason
 import app.recomp.data.db.toVersion
@@ -47,6 +49,13 @@ data class OnboardingResult(
     val increments: Map<Long, Int> = emptyMap(),
 )
 
+/** The check-in's maintenance estimate (TRD §5.4): `tdee_new` of the latest week that had enough data. */
+data class MaintenanceEstimate(val kcal: Int, val weekStart: LocalDate) {
+    companion object {
+        fun of(row: WeeklyCheckinEntity?) = row?.let { MaintenanceEstimate(it.tdeeNew, it.weekStart) }
+    }
+}
+
 /** What a Settings change would do to the targets (PRD §7.1: shown before it saves). */
 data class TargetPreview(
     val before: NutritionTargetEntity?,
@@ -55,6 +64,8 @@ data class TargetPreview(
     val notes: List<GuardrailNote>,
     /** The body data the new targets use, with the trend weight once there is one (TRD §5.0). */
     val profile: Profile,
+    /** The check-in estimate the new targets use in place of the formula's TDEE, if any. */
+    val maintenance: MaintenanceEstimate? = null,
 ) {
     val changes: Boolean
         get() = before == null || before.kcal != after.kcal || before.proteinG != after.proteinG ||
@@ -72,6 +83,7 @@ class PersonaRepository @Inject constructor(
     private val training: TrainingRepository,
     private val days: DayBoundary,
     private val body: BodyRepository,
+    private val checkinDao: CheckinDao,
 ) {
     val stored: Flow<StoredPersona> = prefs.persona
     val profile: Flow<Profile?> = prefs.profile
@@ -89,8 +101,18 @@ class PersonaRepository @Inject constructor(
         p.toDraft(p.extras.mapNotNull { s -> byId[s.routineId]?.let { ExtraSession(it.name, it.kind, s.days.map(DayOfWeek::of).toSet()) } }).complete()
     }
 
-    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate): NutritionTargets =
-        NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today), overrides)
+    /**
+     * Once a check-in has a maintenance estimate, it sets TDEE for every target you change (TRD §5.4, PRD §12.11):
+     * whatever was decided that week, since *Keep* declines a proposal, not the estimate. BMR, and so the floor, stay
+     * the formula's. Null [maintenance] is the formula, BMR × activity.
+     */
+    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate, maintenance: MaintenanceEstimate? = null): NutritionTargets =
+        NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today).copy(maintenanceKcal = maintenance?.kcal?.toDouble()), overrides)
+
+    /** The latest check-in's estimate, once a week had enough data; null before (TRD §5.4). */
+    val maintenance: Flow<MaintenanceEstimate?> = checkinDao.observeLatestEstimate().map { MaintenanceEstimate.of(it) }
+
+    suspend fun maintenance(): MaintenanceEstimate? = MaintenanceEstimate.of(checkinDao.latestEstimate())
 
     suspend fun today(): LocalDate = days.today()
 
@@ -150,12 +172,14 @@ class PersonaRepository @Inject constructor(
         val newProfile = withTrend(profile ?: requireNotNull(prefs.profile.first()) { "No profile before onboarding" })
         val guarded = Guardrails.apply(newProfile, plan ?: requireNotNull(stored.goal).toPlan(), today)
         val newOverrides = overrides ?: prefs.overrides.first()
+        val maintenance = maintenance()
         return TargetPreview(
             before = nutritionDao.targetOn(today),
-            after = targetsFor(newProfile, guarded.plan, newOverrides, today),
+            after = targetsFor(newProfile, guarded.plan, newOverrides, today, maintenance),
             plan = guarded.plan,
             notes = guarded.notes,
             profile = newProfile,
+            maintenance = maintenance,
         )
     }
 
