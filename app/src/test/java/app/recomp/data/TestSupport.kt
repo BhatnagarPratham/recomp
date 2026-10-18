@@ -19,6 +19,7 @@ import app.recomp.data.prefs.LegacyTrainingMigration
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.NutritionRepository
@@ -187,6 +188,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var backup: BackupManager
         private set
+    lateinit var checkins: CheckinRepository
+        private set
 
     init {
         open()
@@ -202,12 +205,13 @@ class TestApp(private val dir: File) {
         workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression, days)
         body = BodyRepository(db, db.bodyDao(), db.workoutDao(), prefs, days)
         personas = PersonaRepository(prefs, db.nutritionDao(), training, days, body)
-        nutrition = NutritionRepository(db.nutritionDao(), db.foodLogDao(), prefs, days)
+        nutrition = NutritionRepository(db.nutritionDao(), db.foodLogDao(), db.checkinDao(), prefs, days)
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
         backup = BackupManager(context, db, prefs)
+        checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas, nutrition)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

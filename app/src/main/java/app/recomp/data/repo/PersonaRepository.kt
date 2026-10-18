@@ -3,6 +3,7 @@ package app.recomp.data.repo
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.TargetReason
+import app.recomp.data.db.toVersion
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.prefs.StoredGoal
@@ -28,7 +29,6 @@ import java.time.LocalDate
 import java.time.LocalTime
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -192,20 +192,7 @@ class PersonaRepository @Inject constructor(
     }
 
     private suspend fun writeTarget(t: NutritionTargets, plan: GoalPlan, today: LocalDate, reason: TargetReason, now: Long) {
-        nutritionDao.upsert(
-            NutritionTargetEntity(
-                effectiveFrom = today,
-                goal = plan.goal,
-                kcal = t.kcal,
-                proteinG = t.proteinG,
-                fatG = t.fatG,
-                carbsG = t.carbsG,
-                tdeeEstimate = t.tdeeKcal.roundToInt(),
-                bmrKcal = t.bmrKcal.roundToInt(),
-                reason = reason,
-                createdAt = now,
-            ),
-        )
+        nutritionDao.upsert(t.toVersion(plan.goal, today, reason, now))
     }
 }
 

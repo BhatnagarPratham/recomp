@@ -13,7 +13,9 @@ import app.recomp.data.backup.PendingRestore
 import app.recomp.data.backup.SchemaItem
 import app.recomp.data.backup.SettingValue
 import app.recomp.data.db.AiRequestLogEntity
+import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
+import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
@@ -22,6 +24,7 @@ import app.recomp.data.repo.SegmentalLean
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiStatus
+import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.domain.food.Origin
 import app.recomp.domain.food.PortionUnit
 import app.recomp.domain.model.SessionKind
@@ -37,6 +40,7 @@ import app.recomp.domain.persona.WeightSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.zip.ZipEntry
@@ -139,6 +143,18 @@ class BackupTest {
                 segmental = SegmentalLean(3_500, 3_400, 26_000, 9_000, 8_900), notes = "Test scan",
             ),
         )
+
+        // Check-in (M5): an answered week, the target it wrote, a day marked incomplete, and the seen marker.
+        val target = app.db.nutritionDao().targetOn(today)!!
+        app.db.checkinDao().upsert(
+            WeeklyCheckinEntity(
+                weekStart = today.minusWeeks(1).with(DayOfWeek.MONDAY), computedAt = now, windowDays = 21, loggedDays = 18, weighIns = 19,
+                kcalMean = 2050.25, trendStartG = 80_900, trendEndG = 80_300, tdeeObs = 2_420, tdeePrev = 2_611, tdeeNew = 2_516,
+                flag = CheckinFlag.FLAT, proposedKcal = 1_990, decision = CheckinDecision.ACCEPTED, decidedAt = now, targetId = target.id,
+            ),
+        )
+        app.checkins.setFoodIncomplete(today.minusDays(1), true)
+        app.prefs.setCheckinSeen(today.minusWeeks(1).with(DayOfWeek.MONDAY))
     }
 
     /** Everything a backup should bring back: every table's rows and every exported setting. */
@@ -332,6 +348,7 @@ class BackupTest {
         val settings = json.decodeFromString<Map<String, SettingValue>>(good.getValue(BackupManager.SETTINGS))
         listOf(
             "day_start_minutes" to SettingValue("int", JsonPrimitive(99_999)),
+            "checkin_seen" to SettingValue("string", JsonPrimitive("next Monday")),
             "scan_slot" to SettingValue("string", JsonPrimitive("{\"day\":9,\"minutes\":600}")),
             "keep_screen_on" to SettingValue("string", JsonPrimitive("yes")),
             // Decodes, but can't become a plan: a weekday 9, and a goal that loses at a negative rate.

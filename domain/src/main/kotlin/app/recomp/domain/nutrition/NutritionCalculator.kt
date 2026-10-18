@@ -21,6 +21,8 @@ data class TargetInputs(
     val policy: GoalPolicy = GoalPolicy.defaultFor(Goal.RECOMP),
     /** Lean mass from a body-composition scan no older than 60 days. When present, BMR uses Katch-McArdle. */
     val leanMassKg: Double? = null,
+    /** The check-in's maintenance estimate (NU-05, TRD §5.4). When set, it replaces BMR × activity as TDEE. */
+    val maintenanceKcal: Double? = null,
 ) {
     companion object {
         /** The persona's view of the inputs on [today]. Lean mass waits for M4's scans (IB-05). */
@@ -67,6 +69,8 @@ data class NutritionTargets(
     /** Fat came from its 0.6 g/kg floor rather than 25% of calories. */
     val fatFromBodyWeight: Boolean = false,
     val overrides: TargetOverrides = TargetOverrides(),
+    /** TDEE came from the check-in's maintenance estimate rather than BMR × activity (TRD §5.4). */
+    val adaptiveTdee: Boolean = false,
 )
 
 object NutritionCalculator {
@@ -79,7 +83,7 @@ object NutritionCalculator {
     fun startingTargets(input: TargetInputs, overrides: TargetOverrides = TargetOverrides()): NutritionTargets {
         val formula = if (input.leanMassKg != null) BmrFormula.KATCH_MCARDLE else BmrFormula.MIFFLIN_ST_JEOR
         val bmr = input.leanMassKg?.let(::katchMcArdle) ?: mifflinStJeor(input)
-        val tdee = bmr * input.activityFactor
+        val tdee = input.maintenanceKcal ?: (bmr * input.activityFactor)
         val adjustment = energyAdjustment(input.policy, tdee, input.trendWeightKg)
         val floor = floor(input.sex, bmr)
         val computedKcal = KcalRounding.nearest(max(tdee + adjustment, floor))
@@ -111,6 +115,7 @@ object NutritionCalculator {
             proteinGPerKg = input.policy.proteinGPerKg,
             fatFromBodyWeight = overrides.fatG == null && fatFloor > fatShare,
             overrides = overrides,
+            adaptiveTdee = input.maintenanceKcal != null,
         )
     }
 

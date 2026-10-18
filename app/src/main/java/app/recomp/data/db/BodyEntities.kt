@@ -123,6 +123,9 @@ interface BodyDao {
     @Query("SELECT * FROM measurement WHERE type = :type ORDER BY measured_at")
     fun observeMeasurements(type: MeasurementType): Flow<List<MeasurementEntity>>
 
+    @Query("SELECT * FROM measurement WHERE type = :type ORDER BY measured_at")
+    suspend fun measurements(type: MeasurementType): List<MeasurementEntity>
+
     @Query("SELECT * FROM measurement WHERE type = :type ORDER BY measured_at DESC LIMIT 1")
     suspend fun lastMeasurement(type: MeasurementType): MeasurementEntity?
 

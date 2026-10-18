@@ -7,6 +7,10 @@ import app.recomp.data.db.AiRequestLogEntity
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyCompositionEntity
 import app.recomp.data.db.BodyWeightEntity
+import app.recomp.data.db.CheckinDecision
+import app.recomp.data.db.DailyActivityEntity
+import app.recomp.data.db.WeeklyCheckinEntity
+import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.data.db.MeasurementEntity
 import app.recomp.data.db.MeasurementType
 import app.recomp.data.db.FoodEntity
@@ -294,7 +298,55 @@ class MigrationTest {
             assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
             assertEquals(emptyList<MealDraftEntity>(), room.aiDao().observeDrafts(LocalDate.of(2026, 10, 18)).first())
         }
-        assertEquals(7, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `7 to 8 keeps weigh-ins and targets and adds check-ins and daily activity`() {
+        val file = File(tmp.root, "v7.db")
+        createAt(7, file).use { db ->
+            db.execSQL(
+                "INSERT INTO nutrition_target (effective_from, goal, kcal, protein_g, fat_g, carbs_g, tdee_estimate, bmr_kcal, reason, created_at) " +
+                    "VALUES ('2026-10-17', 'RECOMP', 2090, 125, 58, 267, 2611, 1899, 'INITIAL', 1)",
+            )
+            db.execSQL("INSERT INTO body_weight (log_date, measured_at, weight_g, source) VALUES ('2026-10-18', 1, 80000, 'HOME_SCALE')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(2611, room.nutritionDao().targetOn(LocalDate.of(2026, 10, 18))!!.tdeeEstimate)
+            assertEquals(80_000, room.bodyDao().weighIns().single().weightG)
+
+            val checkins = room.checkinDao()
+            val week = LocalDate.of(2026, 10, 12)
+            val row = WeeklyCheckinEntity(
+                weekStart = week, computedAt = 2, windowDays = 21, loggedDays = 18, weighIns = 20, kcalMean = 2050.5, trendStartG = 81_000,
+                trendEndG = 80_000, tdeeObs = 2417, tdeePrev = 2611, tdeeNew = 2461, flag = CheckinFlag.FLAT, proposedKcal = 1940,
+            )
+            checkins.upsert(row)
+            assertEquals(row, checkins.latest())
+            checkins.upsert(row.copy(decision = CheckinDecision.KEPT, decidedAt = 3))
+            assertEquals(CheckinDecision.KEPT, checkins.week(week)!!.decision)
+
+            checkins.upsert(DailyActivityEntity(LocalDate.of(2026, 10, 18), foodIncomplete = true))
+            assertEquals(listOf(LocalDate.of(2026, 10, 18)), checkins.incompleteDays(week, LocalDate.of(2026, 10, 18)))
+        }
+        room.close()
+    }
+
+    @Test
+    fun `6 to 7 to 8 in one open ends with every table`() {
+        val file = File(tmp.root, "v6-chain.db")
+        createAt(6, file).use { db ->
+            db.execSQL("INSERT INTO meal_draft (created_at, log_date, meal_slot, text, origin) VALUES (1, '2026-10-18', 'dinner', 'paneer wrap', 'ORDERED')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals("paneer wrap", room.aiDao().observeDrafts(LocalDate.of(2026, 10, 18)).first().single().text)
+            assertNull(room.checkinDao().latest())
+            assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+        }
+        assertEquals(8, room.openHelper.readableDatabase.version)
         room.close()
     }
 

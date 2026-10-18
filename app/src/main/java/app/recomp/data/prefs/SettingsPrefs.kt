@@ -255,6 +255,9 @@ internal object SettingsKeys {
     /** IB-02: the usual scan weekday and time. */
     val SCAN_SLOT = stringPreferencesKey("scan_slot")
 
+    /** The Monday of the latest weekly check-in you opened (PRD §12.1), so Today's card goes once it's seen. */
+    val CHECKIN_SEEN = stringPreferencesKey("checkin_seen")
+
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
 
@@ -392,6 +395,12 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     val scanSlot: Flow<ScanSlot?> =
         store.data.map { prefs -> prefs.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.let { runCatching { it.toSlot() }.getOrNull() } }.distinctUntilChanged()
 
+    /** The week of the latest check-in you opened; null before the first. */
+    val checkinSeen: Flow<LocalDate?> =
+        store.data.map { prefs -> prefs[SettingsKeys.CHECKIN_SEEN]?.let { runCatching { LocalDate.parse(it) }.getOrNull() } }.distinctUntilChanged()
+
+    suspend fun setCheckinSeen(weekStart: LocalDate) = store.edit { it[SettingsKeys.CHECKIN_SEEN] = weekStart.toString() }
+
     suspend fun setScanSlot(slot: ScanSlot) = store.edit { prefs ->
         prefs.keepUnreadable()
         prefs[SettingsKeys.SCAN_SLOT] = settingsJson.encodeToString(StoredScanSlot.of(slot))
@@ -410,7 +419,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         val strings = listOf(
             SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
             SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
-            SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL,
+            SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL, SettingsKeys.CHECKIN_SEEN,
         )
         return buildList {
             strings.filter { wrongType(it, String::class) }.forEach { add(it.name) }
@@ -430,6 +439,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (!decodes(SettingsKeys.MEAL_SLOTS, { settingsJson.decodeFromString<List<StoredMealSlot>>(it) })) add(SettingsKeys.MEAL_SLOTS.name)
             if (!decodes(SettingsKeys.PORTION_SIZES, { settingsJson.decodeFromString<Map<String, Double>>(it) })) add(SettingsKeys.PORTION_SIZES.name)
             if (!decodes(SettingsKeys.SCAN_SLOT, { settingsJson.decodeFromString<StoredScanSlot>(it).toSlot() })) add(SettingsKeys.SCAN_SLOT.name)
+            if (!decodes(SettingsKeys.CHECKIN_SEEN, LocalDate::parse)) add(SettingsKeys.CHECKIN_SEEN.name)
         }.distinct()
     }
 
