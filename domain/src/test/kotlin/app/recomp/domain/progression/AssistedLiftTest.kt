@@ -7,6 +7,7 @@ import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.training.Loads
 import app.recomp.domain.training.LoggedSet
+import app.recomp.domain.training.SessionStats
 import app.recomp.domain.training.SetValues
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -179,5 +180,16 @@ class AssistedLiftTest {
         assertEquals("5 kg less assist", Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 20_000, 8), LoggedSet(WORKING, 25_000, 12), assisted = true))
         assertNull(Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 25_000, 8), null, assisted = true))
         assertEquals("assist 25 × 12/11", Loads.describe(listOf(LoggedSet(WORKING, 25_000, 12), LoggedSet(WORKING, 25_000, 11)), LoadType.ASSISTED))
+    }
+
+    @Test
+    fun `volume counts what an assisted set lifted, and nothing before the first weigh-in`() {
+        val sets = listOf(LoggedSet(WORKING, 20_000, 8), LoggedSet(WORKING, 20_000, 8))
+        val lifted = Loads.lifted(sets, LoadType.ASSISTED, bodyWeightG = 80_000)
+        assertEquals(listOf(60_000, 60_000), lifted.map { it.loadG })
+        assertEquals(60_000L * 16, SessionStats.of(0, 1, lifted).volumeG)
+        assertEquals(0L, SessionStats.of(0, 1, Loads.lifted(sets, LoadType.ASSISTED, null)).volumeG)
+        // Other load types are untouched.
+        assertEquals(sets, Loads.lifted(sets, LoadType.WEIGHTED, 80_000))
     }
 }

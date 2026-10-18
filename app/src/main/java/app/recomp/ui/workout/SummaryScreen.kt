@@ -76,9 +76,12 @@ class SummaryViewModel @Inject constructor(
     private val routineName = MutableStateFlow<String?>(null)
     private val differs = MutableStateFlow(false)
     private val nextTime = MutableStateFlow<List<String>>(emptyList())
+    /** For assisted lifts' volume (WL-09); loaded once. */
+    private val trendWeightG = MutableStateFlow<Int?>(null)
 
     init {
         viewModelScope.launch {
+            trendWeightG.value = progression.trendWeightG()
             val session = workouts.observeSession(sessionId).first()
             routineName.value = session?.routineId?.let { workouts.routine(it)?.name }
             differs.value = workouts.differsFromTemplate(sessionId)
@@ -109,12 +112,15 @@ class SummaryViewModel @Inject constructor(
     val ui: StateFlow<SummaryUi> = combine(
         workouts.observeSession(sessionId),
         workouts.observeSessionExercises(sessionId),
-        combine(routineName, differs, ::Pair),
+        combine(routineName, differs, trendWeightG, ::Triple),
         progression.observeSessionRecords(sessionId),
         nextTime,
-    ) { session, exercises, (routine, differs), records, nextTime ->
+    ) { session, exercises, (routine, differs, trendWeight), records, nextTime ->
         if (session == null) return@combine SummaryUi()
-        val sets = exercises.flatMap { ex -> ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() } }
+        // Volume counts what each set lifted, so an assisted set adds body weight minus the assistance.
+        val sets = exercises.flatMap { ex ->
+            Loads.lifted(ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() }, ex.exercise.loadType, trendWeight)
+        }
         SummaryUi(
             title = routine ?: "Workout",
             date = session.logDate.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),

@@ -2,6 +2,7 @@ package app.recomp.domain.progression
 
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
+import app.recomp.domain.training.Loads
 import app.recomp.domain.training.LoggedSet
 
 enum class PrType { MAX_LOAD, REPS_AT_LOAD, E1RM, SESSION_VOLUME }
@@ -43,9 +44,10 @@ object PersonalRecords {
      */
     private fun assisted(session: List<SessionSet>, previous: List<Exposure>, bodyWeightG: Int?): List<PersonalRecord> {
         if (bodyWeightG != null) {
-            fun LoggedSet.effective() = copy(loadG = (bodyWeightG - (loadG ?: 0)).coerceAtLeast(0))
+            fun List<LoggedSet>.lifted() = Loads.lifted(this, LoadType.ASSISTED, bodyWeightG)
             val assistance = session.associate { it.id to it.set.loadG }
-            return detect(session.map { SessionSet(it.id, it.set.effective()) }, previous.map { e -> Exposure(e.startedAt, e.sets.map { it.effective() }) })
+            val lifted = session.map { it.id }.zip(session.map { it.set }.lifted(), ::SessionSet)
+            return detect(lifted, previous.map { e -> Exposure(e.startedAt, e.sets.lifted()) })
                 .map { pr -> pr.setId?.let { id -> pr.copy(loadG = assistance[id]) } ?: pr }
         }
         val now = session.filter { it.set.type != SetType.WARMUP }

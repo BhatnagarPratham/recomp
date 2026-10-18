@@ -46,6 +46,16 @@ object Loads {
     fun step(loadG: Int, incrementG: Int, up: Boolean): Int =
         if (up) loadG + incrementG else (loadG - incrementG).coerceAtLeast(0)
 
+    /**
+     * What each set actually lifted (WL-09): an assisted set lifts your body weight minus the
+     * assistance, and before the first weigh-in that's unknown, so it has no load. Other load types are
+     * unchanged. Volume and records are computed from this.
+     */
+    fun lifted(sets: List<LoggedSet>, loadType: LoadType, bodyWeightG: Int?): List<LoggedSet> {
+        if (loadType != LoadType.ASSISTED) return sets
+        return sets.map { it.copy(loadG = bodyWeightG?.let { bw -> (bw - (it.loadG ?: 0)).coerceAtLeast(0) }) }
+    }
+
     /** Whether sets of this load type log a weight at all (WL-09). */
     fun logsLoad(loadType: LoadType): Boolean = loadType != LoadType.BODYWEIGHT
 

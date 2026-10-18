@@ -85,7 +85,10 @@ class ProgressionRepository @Inject constructor(
      * lifts read it, and only today's trend, so every session is compared at the same body weight.
      */
     private suspend fun bodyWeightFor(exercise: ExerciseEntity): Int? =
-        if (exercise.loadType == LoadType.ASSISTED) body.trendKg()?.let { (it * 1000).roundToInt() } else null
+        if (exercise.loadType == LoadType.ASSISTED) trendWeightG() else null
+
+    /** The trend weight in grams (TRD §5.2), or null before the primary source's first weigh-in. */
+    suspend fun trendWeightG(): Int? = body.trendKg()?.let { (it * 1000).roundToInt() }
 
     /** TRD §5.1: the target in force at [now] against the TDEE estimate stored with it. False until there's a target. */
     suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
@@ -163,11 +166,7 @@ class ProgressionRepository @Inject constructor(
         val records = workoutDao.exerciseRecords(exerciseId).groupBy({ it.sessionId }, { it.type })
         return workoutDao.exposureSets(exerciseId, limit = FULL_HISTORY_LIMIT).groupExposures().map { (first, rows) ->
             val sets = rows.map { it.set.toLogged() }
-            val lifted = when {
-                loadType != LoadType.ASSISTED -> sets
-                bodyWeight == null -> emptyList()
-                else -> sets.map { it.copy(loadG = bodyWeight - (it.loadG ?: 0)) }
-            }
+            val lifted = Loads.lifted(sets, loadType, bodyWeight)
             HistoryEntry(
                 sessionId = first.sessionId,
                 date = first.logDate,
