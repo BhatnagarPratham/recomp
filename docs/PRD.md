@@ -262,7 +262,7 @@ Examples use the reference persona.
 - **First run** opens onboarding instead of Today. So does the first launch after upgrading from a version without a persona; the training settings you already had are carried over and pre-filled, and an unfinished workout can still be resumed.
 - **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1.
 
-**Settings (PS-02).** A bottom tab after Today, Food and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
+**Settings (PS-02).** A bottom tab after Today, Food and Train. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), AI (on or off, API key, model, this month's spend and the cap; §7.12), Body data (weight source, units), Day starts at, and Developer (the M0 spike screen). Every row shows its current value.
 - **Targets can be overridden** (PR-02): calories, protein and fat. Carbs always fill the remaining calories. An overridden number is labelled *set by you* and stays until you reset it. Calories can't be set below the safety floor (§4.9).
 - **A change that moves your targets** (goal, pace, goal weight, body data, activity, an override) shows the old and new targets before it saves. Saving starts a new target version from today. Several saves on the same day replace that day's version; earlier days are never rewritten.
 
@@ -432,7 +432,7 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 - **Food tab.** The bottom bar is Today · Food · Train · Settings. Food is the daily view (NU-16), and Today's nutrition card has *Log food*, which opens it. ‹ and › move between days. You can log on past days, not future ones.
 - **Daily view (NU-16).** Calories and protein remaining against that day's targets, protein first. Protein follows the ramp (NU-03) and has no target during the baseline week. A macro split shows grams eaten against the protein, carbs and fat targets; fibre is shown without a target. Being over is a plain number, never failure styling. Each meal shows its calories and protein.
 - **Meals (NU-10).** Breakfast, Lunch, Snacks and Dinner. Settings → Food → Meals renames, adds, removes and reorders them. A removed meal keeps its past entries.
-- **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. *Describe it* joins this screen in M3c.
+- **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. With AI on, *Describe it* sits beside them (M3c, below).
 - **Portion.** Tapping a food opens a portion sheet prefilled with what you logged for it last time (amount, unit and origin), otherwise one of the food's own servings, otherwise 100 g. Amounts step by ½ (10 for grams) and can be typed. *Save* logs it, so a repeat food is search, tap, Save.
 - **Units (NU-12).** Every food offers grams, its own units (INDB's serving, e.g. "bowl ≈ 258 g", or a custom food's) and the region's household measures: katori 150 g, glass 250 ml and tbsp 15 g for Indian; cup 240 ml and tbsp 15 g for International. Settings → Food → Portion sizes calibrates the household measures to your utensils, and the portion sheet can recalibrate any unit for one food. Roti, piece, slice and plate belong to particular foods, not to every food. Liquids count 1 ml as 1 g.
 - **Custom foods (NU-12).** Name, optional brand, values per 100 g or per serving (a unit and its weight; the weight is prefilled for household measures), calories, protein, carbs, fat, optional fibre, and a diet tag that defaults to your diet. Editing one changes future logs only.
@@ -444,6 +444,18 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 - **Diet filter (NU-11).** Search shows only the foods your diet allows: vegan foods for vegans, plus dairy for lacto-vegetarians, plus egg for eggetarians, plus fish but not meat for pescatarians, and everything for non-vegetarians. A food tagged wrongly can be hidden from its menu; Settings → Food → Hidden foods restores it.
 - **Region.** The Indian database (INDB) shows for the Indian region only. The protein-rich basics and your own foods show for both.
 - **Fried INDB recipes.** INDB counts all the oil used for deep frying as eaten, so about 120 fried recipes read two to three times too high. They stay searchable with a warning that quick add or a custom food may be closer, and rank below other matches.
+
+**Describe it in the app (M3c, NU-17).** Text only; meal photos (NU-20) stay P1.
+- **Where.** *Describe it* is a button on the add-food screen, beside *Quick add* and *New food*. With AI off it isn't there (AI-01). It opens its own screen for that meal and day.
+- **Describe.** A text box ("2 phulka, 1 katori rajma, cucumber salad, 1 glass chaas") and the origin chips (Home, Ordered, Packaged; Home by default). *Estimate* sends it. While it runs the screen says so, and *Cancel* goes back to the text, unchanged.
+- **Not ready (AI-02).** With AI on but no key yet, offline, or this month's cap reached, the button still opens the screen. A line says why ("You're offline", "AI is paused until 1 November: this month's $5.00 cap is reached", or "Add your Claude API key", with *Add key*), and the main action is *Save draft*. Search, *My meals* and *Quick add* stay one tap away.
+- **Review.** The estimate lists each item with its amount and grams, calories, protein, carbs and fat, a confidence (high, medium or low) and Claude's assumptions ("medium size, no ghee"). The meal's total sits on top, recomputed from the items. An item whose calories don't match its macros (more than 15% from 4 × protein + 4 × carbs + 9 × fat) is flagged. Items Claude gave no usable weight or amount are left out, with a note naming them.
+  - Tap an item to edit its name, amount in grams (its macros scale with it) or its numbers, or to remove it.
+  - **A clarifying question** ("Was the dal tempered with ghee?") shows above the items with a one-line answer box. *Re-estimate* sends the meal again with your answer; it's a new request, counted in the spend. If it fails or you cancel it, the earlier estimate comes back, with the reason. Ignoring the question is fine.
+- **Save.** *Save* logs every item into the meal, with *Undo*. *Save + My meals* also saves them as a meal under a name you confirm (prefilled from the description), so next time it's one tap (NU-13).
+- **Learning loop.** An item you edited before saving also becomes one of your foods (marked *AI-learned*), at your numbers per 100 g and with the unit you used. It shows in search and in later estimates, so a repeat dish converges on your numbers. It's tagged by what it contains (Claude tags each item vegan, vegetarian, egg, fish or meat), so a dish your diet excludes never shows in your search. One of your own foods with the same name (custom or AI-learned) is updated rather than duplicated. A database food is never changed, so your version shows beside it.
+- **Failures (AI-02).** If the estimate fails (no connection, a timeout, the service busy or down, a rejected key, no credit left, a declined request, or a reply that can't be read), your description is kept as a draft in that meal and you're back on the add-food screen with the reason, ready to search or quick add.
+- **Drafts.** A draft shows in its meal on the Food tab with its text, *Estimate now* (only once AI is ready again) and *Delete*. *Estimate now* opens Describe it with the text and origin and starts the estimate; saving the result removes the draft. Drafts are never sent on their own.
 
 ### 7.8 Body metrics
 
@@ -509,6 +521,15 @@ For personas with access to InBody or another bioimpedance (BIA) machine.
 | **Workouts and progression** | **Never** | **Plain rules, always offline.** |
 
 AI uses a Claude API key that each person brings. A claude.ai subscription login can't be used by apps, but Max plans include monthly API credits that can fund the key. See TRD §6.2.
+
+**AI in the app (M3c).** Settings → AI:
+- **AI:** Off or On (AI-01). Off by default.
+- **API key:** pasted once, with the Console setup steps beside it. It's stored encrypted on the phone and never shown again, logged, exported or backed up: the row just says *Saved*, with *Replace* and *Remove*.
+- **Model:** Claude Opus 5.5 (the default), Claude Sonnet 5.5 or Claude Haiku 5.5, each with its rough cost per estimate.
+- **This month (AI-03):** what this month's requests cost, and how many there were.
+- **Monthly cap (AI-03):** none by default. Once this month's spend reaches it, AI pauses until the 1st of next month; Describe it then saves drafts. The Console workspace limit stays the hard stop.
+- **Privacy notice:** the first estimate shows, once, what is sent to Anthropic (the description and origin, your diet and food region, your portion sizes and your most-used own foods) and what never is (your name, body data, targets or log). *Continue* sends it.
+
 
 ### 7.13 Reminders
 

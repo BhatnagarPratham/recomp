@@ -50,12 +50,16 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.LoggedDayRow
+import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.repo.AiGateView
+import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.DayLog
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.MealGroup
 import app.recomp.data.repo.NutritionRepository
+import app.recomp.domain.ai.AiState
 import app.recomp.domain.food.Macros
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
@@ -89,6 +93,7 @@ class FoodViewModel @Inject constructor(
     private val log: FoodLogRepository,
     private val foods: FoodRepository,
     private val nutrition: NutritionRepository,
+    private val ai: AiRepository,
     days: DayBoundary,
 ) : ViewModel() {
     /** Today's log date (PR-03), rolling over while the screen is open. */
@@ -103,6 +108,13 @@ class FoodViewModel @Inject constructor(
     val day: StateFlow<DayLog?> = date.flatMapLatest { log.observeDay(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val slots: StateFlow<List<MealSlot>> = log.mealSlots.stateIn(viewModelScope, SharingStarted.Eagerly, MealSlots.DEFAULT)
+
+    /** Drafts offer *Estimate now* only once the gate is READY (AI-02). */
+    val gate: StateFlow<AiGateView?> = ai.gate.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    suspend fun deleteDraft(id: Long): MealDraftEntity? = ai.deleteDraft(id)
+
+    suspend fun restoreDraft(draft: MealDraftEntity) = ai.restoreDraft(draft)
 
     init {
         // Logged food may complete the protein ramp's baseline week (TRD §5.3).
@@ -165,8 +177,15 @@ private sealed interface Editing {
 /** The Food tab: the daily view (NU-16), with each meal's + (J3), editing, saved meals and copy (NU-13). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FoodScreen(onAdd: (LocalDate, String) -> Unit, viewModel: FoodViewModel = hiltViewModel()) {
+fun FoodScreen(
+    onAdd: (LocalDate, String) -> Unit,
+    onEstimateDraft: (MealDraftEntity) -> Unit,
+    describeOutcome: DescribeOutcome?,
+    onDescribeOutcomeShown: () -> Unit,
+    viewModel: FoodViewModel = hiltViewModel(),
+) {
     val day by viewModel.day.collectAsStateWithLifecycle()
+    val gate by viewModel.gate.collectAsStateWithLifecycle()
     val date by viewModel.date.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val slots by viewModel.slots.collectAsStateWithLifecycle()
@@ -179,6 +198,15 @@ fun FoodScreen(onAdd: (LocalDate, String) -> Unit, viewModel: FoodViewModel = hi
 
     fun undoable(message: String, undo: suspend () -> Unit) = scope.launch {
         if (snackbar.showSnackbar(message, actionLabel = "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) undo()
+    }
+
+    // What *Estimate now* said when it came back here.
+    LaunchedEffect(describeOutcome) {
+        val outcome = describeOutcome ?: return@LaunchedEffect
+        onDescribeOutcomeShown()
+        // In the screen's scope: clearing the outcome restarts this effect, which mustn't cancel the snackbar.
+        if (outcome.undoIds.isEmpty()) scope.launch { snackbar.showSnackbar(outcome.message, duration = SnackbarDuration.Long) }
+        else undoable(outcome.message) { viewModel.undoInsert(outcome.undoIds) }
     }
 
     fun edit(entry: FoodLogEntity) = scope.launch {
@@ -225,10 +253,18 @@ fun FoodScreen(onAdd: (LocalDate, String) -> Unit, viewModel: FoodViewModel = hi
             items(d.meals, key = { it.slot.key }) { meal ->
                 MealCard(
                     meal,
+                    canEstimate = gate?.state == AiState.READY,
                     onAdd = { onAdd(date, meal.slot.key) },
                     onEdit = ::edit,
                     onSave = { naming = meal.slot },
                     onCopy = { copying = CopyTarget(meal.slot) },
+                    onEstimateDraft = onEstimateDraft,
+                    onDeleteDraft = { draft ->
+                        scope.launch {
+                            val gone = viewModel.deleteDraft(draft.id) ?: return@launch
+                            undoable("Deleted the draft") { viewModel.restoreDraft(gone) }
+                        }
+                    },
                 )
             }
         }
@@ -392,7 +428,16 @@ private fun MacroBar(label: String, eaten: Double, target: Int) {
 }
 
 @Composable
-private fun MealCard(meal: MealGroup, onAdd: () -> Unit, onEdit: (FoodLogEntity) -> Unit, onSave: () -> Unit, onCopy: () -> Unit) {
+private fun MealCard(
+    meal: MealGroup,
+    canEstimate: Boolean,
+    onAdd: () -> Unit,
+    onEdit: (FoodLogEntity) -> Unit,
+    onSave: () -> Unit,
+    onCopy: () -> Unit,
+    onEstimateDraft: (MealDraftEntity) -> Unit,
+    onDeleteDraft: (MealDraftEntity) -> Unit,
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -426,6 +471,22 @@ private fun MealCard(meal: MealGroup, onAdd: () -> Unit, onEdit: (FoodLogEntity)
                     Column(horizontalAlignment = Alignment.End) {
                         Text(GoalText.kcal(e.kcal), style = MaterialTheme.typography.bodyMedium)
                         Text("${FoodText.g(e.proteinG)} protein", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            // AI-02: descriptions kept to estimate later. Until AI is ready again (or with it off) only Delete is offered.
+            meal.drafts.forEach { d ->
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+                    Text("Draft · not logged yet", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+                    Text(d.text, style = MaterialTheme.typography.bodyLarge, maxLines = 3)
+                    val note = listOfNotNull(d.reason?.let(AiText::reason), if (d.origin != Origin.HOME) FoodText.origin(d.origin) else null)
+                    if (note.isNotEmpty()) Text(note.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (canEstimate) {
+                            FilledTonalButton(onClick = { onEstimateDraft(d) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Estimate now") }
+                        }
+                        TextButton(onClick = { onDeleteDraft(d) }, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Delete draft" }) { Text("Delete") }
                     }
                 }
             }

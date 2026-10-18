@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -31,6 +32,8 @@ import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
 import app.recomp.ui.food.AddFoodScreen
+import app.recomp.ui.food.DescribeOutcome
+import app.recomp.ui.food.DescribeScreen
 import app.recomp.ui.food.FoodScreen
 import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
@@ -78,6 +81,9 @@ import kotlinx.serialization.Serializable
 
 /** Adding food to one meal of one day (J3). [date] is an ISO log date. */
 @Serializable data class AddFoodRoute(val date: String, val slot: String)
+
+/** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
+@Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
 
 @Serializable data object MealSlotsRoute
 
@@ -150,10 +156,27 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenFood = { nav.openTopLevel(FoodRoute) },
                 )
             }
-            composable<FoodRoute> {
-                FoodScreen(onAdd = { date, slot -> nav.navigate(AddFoodRoute(date.toString(), slot)) })
+            composable<FoodRoute> { entry ->
+                val (outcome, shown) = entry.describeOutcome()
+                FoodScreen(
+                    onAdd = { date, slot -> nav.navigate(AddFoodRoute(date.toString(), slot)) },
+                    onEstimateDraft = { draft -> nav.navigate(DescribeRoute(draft.logDate.toString(), draft.mealSlot, draft.id)) },
+                    describeOutcome = outcome,
+                    onDescribeOutcomeShown = shown,
+                )
             }
-            composable<AddFoodRoute> { AddFoodScreen(onDone = { nav.popBackStack() }) }
+            composable<AddFoodRoute> { entry ->
+                val (outcome, shown) = entry.describeOutcome()
+                AddFoodScreen(
+                    onDone = { nav.popBackStack() },
+                    onDescribe = { date, slot -> nav.navigate(DescribeRoute(date.toString(), slot)) },
+                    describeOutcome = outcome,
+                    onDescribeOutcomeShown = shown,
+                )
+            }
+            composable<DescribeRoute> {
+                DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
+            }
             composable<MealSlotsRoute> { MealSlotsScreen(onBack = { nav.popBackStack() }) }
             composable<PortionSizesRoute> { PortionSizesScreen(onBack = { nav.popBackStack() }) }
             composable<HiddenFoodsRoute> { HiddenFoodsScreen(onBack = { nav.popBackStack() }) }
@@ -228,6 +251,36 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
+}
+
+/** Describe it ends back where it started (add food, or the Food tab's draft), which shows its message. */
+private fun NavHostController.finishDescribe(outcome: DescribeOutcome) {
+    previousBackStackEntry?.savedStateHandle?.apply {
+        set(DescribeOutcomeKeys.UNDO, outcome.undoIds.toLongArray())
+        set(DescribeOutcomeKeys.MESSAGE, outcome.message)
+    }
+    popBackStack()
+}
+
+/** Where Describe it leaves its outcome in the previous screen's saved state. */
+private object DescribeOutcomeKeys {
+    const val MESSAGE = "describe_message"
+    const val UNDO = "describe_undo"
+}
+
+/**
+ * Describe it's outcome waiting in this entry's saved state, and how to clear it once shown. Read here, from the
+ * entry's own handle: a screen's view model gets a different SavedStateHandle that never sees it.
+ */
+@Composable
+private fun NavBackStackEntry.describeOutcome(): Pair<DescribeOutcome?, () -> Unit> {
+    val handle = savedStateHandle
+    val message by handle.getStateFlow<String?>(DescribeOutcomeKeys.MESSAGE, null).collectAsStateWithLifecycle()
+    val outcome = message?.let { DescribeOutcome(it, handle.get<LongArray>(DescribeOutcomeKeys.UNDO)?.toList().orEmpty()) }
+    return outcome to {
+        handle.remove<String>(DescribeOutcomeKeys.MESSAGE)
+        handle.remove<LongArray>(DescribeOutcomeKeys.UNDO)
+    }
 }
 
 /** A bottom-bar destination, keeping each tab's state. */

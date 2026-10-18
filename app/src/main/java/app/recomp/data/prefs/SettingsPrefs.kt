@@ -5,10 +5,12 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SettingsStore
+import app.recomp.domain.ai.AiModel
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
 import app.recomp.domain.nutrition.Goal
@@ -185,6 +187,17 @@ data class StoredMealSlot(val key: String, val name: String, val removed: Boolea
     }
 }
 
+/**
+ * AI settings (AI-01, AI-03, TRD §4). [monthlyCapUsd] null is no cap. The API key isn't here: it's encrypted
+ * in its own `secrets` store (`AiKeyStore`).
+ */
+data class AiSettings(
+    val enabled: Boolean = false,
+    val model: AiModel = AiModel.DEFAULT,
+    val monthlyCapUsd: Double? = null,
+    val noticeSeen: Boolean = false,
+)
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -212,6 +225,16 @@ internal object SettingsKeys {
 
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
+
+    /** AI-01: `ON` or `OFF`; absent is off. */
+    val AI_MODE = stringPreferencesKey("ai_mode")
+    val AI_MODEL = stringPreferencesKey("ai_model")
+
+    /** AI-03's monthly cap in dollars; absent is no cap. */
+    val AI_MONTHLY_CAP_USD = doublePreferencesKey("ai_monthly_cap_usd")
+
+    /** The one-time privacy notice before the first estimate (TRD §6.2). */
+    val AI_NOTICE_SEEN = booleanPreferencesKey("ai_notice_seen")
 
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
@@ -262,6 +285,10 @@ object LegacyTrainingMigration : DataMigration<Preferences> {
  */
 @Singleton
 class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataStore<Preferences>) {
+    private companion object {
+        const val AI_ON = "ON"
+        const val AI_OFF = "OFF"
+    }
 
     private inline fun <reified T> Preferences.decode(key: Preferences.Key<String>): T? =
         this[key]?.let { runCatching { settingsJson.decodeFromString<T>(it) }.getOrNull() }
@@ -341,6 +368,25 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     }
 
     suspend fun setKeepScreenOn(on: Boolean) = store.edit { it[SettingsKeys.KEEP_SCREEN_ON] = on }
+
+    val ai: Flow<AiSettings> = store.data.map { prefs ->
+        AiSettings(
+            enabled = prefs[SettingsKeys.AI_MODE] == AI_ON,
+            model = AiModel.of(prefs[SettingsKeys.AI_MODEL]),
+            monthlyCapUsd = prefs[SettingsKeys.AI_MONTHLY_CAP_USD]?.takeIf { it >= 0 },
+            noticeSeen = prefs[SettingsKeys.AI_NOTICE_SEEN] ?: false,
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setAiEnabled(on: Boolean) = store.edit { it[SettingsKeys.AI_MODE] = if (on) AI_ON else AI_OFF }
+
+    suspend fun setAiModel(model: AiModel) = store.edit { it[SettingsKeys.AI_MODEL] = model.id }
+
+    suspend fun setAiMonthlyCap(usd: Double?) = store.edit { prefs ->
+        if (usd == null) prefs.remove(SettingsKeys.AI_MONTHLY_CAP_USD) else prefs[SettingsKeys.AI_MONTHLY_CAP_USD] = usd
+    }
+
+    suspend fun setAiNoticeSeen() = store.edit { it[SettingsKeys.AI_NOTICE_SEEN] = true }
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

@@ -255,6 +255,8 @@ fun SettingsScreen(
         SettingRow("Hidden foods", "Restore", onClick = onOpenHidden)
         SettingRow("Food data", "Sources", onClick = { foodData = true })
 
+        AiSettingsSection()
+
         SectionTitle("Body data")
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
         SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
@@ -263,7 +265,7 @@ fun SettingsScreen(
         SettingRow("Day starts at", formatDayStart(ui.dayStart)) { editing = Editing.DayStart }
 
         SectionTitle("Developer")
-        SettingRow("M0 spikes", "AI and Health Connect checks", onClick = onOpenDev)
+        SettingRow("M0 spikes", "Health Connect check", onClick = onOpenDev)
 
         Text(GoalText.NOT_MEDICAL_ADVICE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
     }
@@ -342,7 +344,7 @@ private fun finishLineText(plan: GoalPlan): String = when (val f = plan.finishLi
 }
 
 @Composable
-private fun SettingRow(title: String, value: String, onClick: (() -> Unit)?) {
+internal fun SettingRow(title: String, value: String, onClick: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = "Change $title", onClick = onClick) else Modifier)
@@ -355,7 +357,7 @@ private fun SettingRow(title: String, value: String, onClick: (() -> Unit)?) {
 }
 
 @Composable
-private fun <T> ChoiceDialog(
+internal fun <T> ChoiceDialog(
     title: String,
     options: List<T>,
     selected: T?,

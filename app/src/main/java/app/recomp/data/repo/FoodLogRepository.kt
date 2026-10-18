@@ -1,24 +1,31 @@
 package app.recomp.data.repo
 
 import androidx.room.withTransaction
+import app.recomp.data.db.AiDao
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.FoodLogEntity
+import app.recomp.data.db.FoodUnitEntity
 import app.recomp.data.db.LoggedDayRow
+import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.SavedMealDao
 import app.recomp.data.db.SavedMealEntity
 import app.recomp.data.db.SavedMealItemEntity
 import app.recomp.data.db.SavedMealWithItems
 import app.recomp.data.prefs.SettingsPrefs
+import app.recomp.domain.ai.EstimatedItem
 import app.recomp.domain.food.DayTotals
+import app.recomp.domain.food.FoodDiet
+import app.recomp.domain.food.FoodSource
 import app.recomp.domain.food.LogSource
 import app.recomp.domain.food.Macros
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
 import app.recomp.domain.food.Origin
 import app.recomp.domain.food.PortionUnit
+import app.recomp.domain.food.Portions
 import app.recomp.domain.food.Remaining
 import java.time.LocalDate
 import javax.inject.Inject
@@ -27,8 +34,16 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 
-/** A meal on the day view, with its totals (NU-16). */
-data class MealGroup(val slot: MealSlot, val entries: List<FoodLogEntity>, val totals: DayTotals)
+/** A meal on the day view, with its totals (NU-16) and any descriptions waiting to be estimated (AI-02). */
+data class MealGroup(
+    val slot: MealSlot,
+    val entries: List<FoodLogEntity>,
+    val totals: DayTotals,
+    val drafts: List<MealDraftEntity> = emptyList(),
+)
+
+/** A reviewed Describe it item to log (NU-17). [edited] says you changed it, which makes it an AI-learned food. */
+data class AiItemToLog(val item: EstimatedItem, val edited: Boolean)
 
 /** The day view (NU-16). [targets] is null before onboarding has written any. */
 data class DayLog(
@@ -48,17 +63,19 @@ class FoodLogRepository @Inject constructor(
     private val foodDao: FoodDao,
     private val foodLogDao: FoodLogDao,
     private val savedMealDao: SavedMealDao,
+    private val aiDao: AiDao,
     private val prefs: SettingsPrefs,
     private val nutrition: NutritionRepository,
 ) {
     val mealSlots: Flow<List<MealSlot>> = prefs.mealSlots
 
     fun observeDay(date: LocalDate): Flow<DayLog> =
-        combine(foodLogDao.observeDay(date), prefs.mealSlots, nutrition.observeTargets(date)) { entries, slots, targets ->
+        combine(foodLogDao.observeDay(date), prefs.mealSlots, nutrition.observeTargets(date), aiDao.observeDrafts(date)) { entries, slots, targets, drafts ->
             val bySlot = entries.groupBy { it.mealSlot }
-            val meals = MealSlots.forDay(slots, bySlot.keys).map { slot ->
+            val draftsBySlot = drafts.groupBy { it.mealSlot }
+            val meals = MealSlots.forDay(slots, bySlot.keys + draftsBySlot.keys).map { slot ->
                 val rows = bySlot[slot.key].orEmpty()
-                MealGroup(slot, rows, DayTotals.of(rows.map { it.macros }))
+                MealGroup(slot, rows, DayTotals.of(rows.map { it.macros }), draftsBySlot[slot.key].orEmpty())
             }
             DayLog(date, meals, DayTotals.of(entries.map { it.macros }), targets)
         }
@@ -171,6 +188,92 @@ class FoodLogRepository @Inject constructor(
         savedMealDao.unmarkUsed(mealId)
     }
 
+    /**
+     * Logs a reviewed Describe it meal (NU-17, TRD §6.2): one row per item, `source = AI_TEXT`, tied to its request.
+     * An item you edited becomes an AI-learned food first (the learning loop), so the row links to it and the
+     * dish shows in search and later prompts at your numbers. Unedited items keep their snapshot only.
+     */
+    suspend fun logAiMeal(
+        date: LocalDate,
+        slot: String,
+        items: List<AiItemToLog>,
+        origin: Origin,
+        requestId: Long?,
+        dietTag: FoodDiet,
+        now: Long = System.currentTimeMillis(),
+    ): List<Long> = db.withTransaction {
+        require(items.isNotEmpty()) { "Nothing to log" }
+        val rows = items.mapIndexed { i, (item, edited) ->
+            require(item.grams > 0) { "An item without a weight" }
+            val gramsUnit = item.unit.trim().lowercase() in Portions.GRAM_LABELS && item.unit.trim().lowercase() != "ml"
+            FoodLogEntity(
+                logDate = date, mealSlot = slot, foodId = if (edited) learn(item, dietTag, now) else null, name = item.name.trim(),
+                quantity = if (gramsUnit) item.grams else item.quantity, unitLabel = if (gramsUnit) Portions.GRAMS else item.unit.trim(),
+                grams = item.grams, kcal = item.kcal, proteinG = item.proteinG, carbsG = item.carbsG, fatG = item.fatG, fiberG = item.fiberG,
+                origin = origin, source = LogSource.AI_TEXT, aiRequestId = requestId, loggedAt = now + i,
+            )
+        }
+        val ids = foodLogDao.insertAll(rows)
+        markUsed(rows.mapNotNull { it.foodId }, now)
+        ids
+    }
+
+    /**
+     * Saves a reviewed estimate in one transaction: its rows (with the learning loop), the saved meal when
+     * [mealName] is set (*Save + My meals*), and the draft it came from, which is done. All of it or none.
+     */
+    suspend fun saveAiMeal(
+        date: LocalDate,
+        slot: String,
+        items: List<AiItemToLog>,
+        origin: Origin,
+        requestId: Long?,
+        dietTag: FoodDiet,
+        mealName: String?,
+        draftId: Long?,
+        now: Long = System.currentTimeMillis(),
+    ): List<Long> = db.withTransaction {
+        val ids = logAiMeal(date, slot, items, origin, requestId, dietTag, now)
+        if (mealName != null) saveMealOf(mealName, ids, slot, now)
+        if (draftId != null) aiDao.deleteDraft(draftId)
+        ids
+    }
+
+    /**
+     * The learning loop (TRD §6.2): your edited item's values per 100 g, with its unit at the item's weight. One of
+     * your own foods of the same name is updated rather than duplicated: an AI-learned one takes the item's diet tag
+     * too, a custom one keeps the tag you gave it. Bundled foods are never changed, so an edited dish named like one
+     * becomes your AI-learned version beside it. The tag is what the item contains (the model's per-item diet, by
+     * its strictest ingredient), or [fallbackTag], your own-food tag, when the model gave none.
+     */
+    private suspend fun learn(item: EstimatedItem, fallbackTag: FoodDiet, now: Long): Long {
+        val per = item.per100g
+        val name = item.name.trim()
+        val existing = foodDao.ownFoodNamed(name)
+        val id = if (existing != null) {
+            foodDao.update(
+                existing.copy(
+                    name = if (existing.source == FoodSource.AI) name else existing.name,
+                    diet = if (existing.source == FoodSource.AI) item.diet ?: existing.diet else existing.diet,
+                    kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG,
+                ),
+            )
+            existing.id
+        } else {
+            foodDao.insert(
+                FoodEntity(
+                    name = name, source = FoodSource.AI, diet = item.diet ?: fallbackTag, kcal100g = per.kcal, protein100g = per.proteinG,
+                    carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG, createdAt = now,
+                ),
+            )
+        }
+        val label = item.unit.trim().lowercase()
+        if (label.isNotEmpty() && label !in Portions.GRAM_LABELS && item.quantity > 0) {
+            foodDao.upsertUnits(listOf(FoodUnitEntity(foodId = id, label = label, grams = item.grams / item.quantity, calibrated = true)))
+        }
+        return id
+    }
+
     /** Counts each food once per entry, so a meal with two portions of it counts twice. */
     private suspend fun markUsed(foodIds: List<Long>, now: Long) =
         foodIds.groupingBy { it }.eachCount().forEach { (foodId, times) -> foodDao.markUsed(foodId, times, now) }
@@ -183,8 +286,17 @@ class FoodLogRepository @Inject constructor(
 
     /** Saves a day's meal under [name]. A meal of the same name is saved over: its items are replaced. */
     suspend fun saveMeal(name: String, date: LocalDate, slot: String, now: Long = System.currentTimeMillis()): Long = db.withTransaction {
-        val rows = foodLogDao.day(date).filter { it.mealSlot == slot }
+        saveRows(name, foodLogDao.day(date).filter { it.mealSlot == slot }, slot, now)
+    }
+
+    /** Saves just these entries as a meal, e.g. a Describe it estimate (*Save + My meals*, NU-17). */
+    suspend fun saveMealOf(name: String, entryIds: List<Long>, slot: String, now: Long = System.currentTimeMillis()): Long = db.withTransaction {
+        saveRows(name, foodLogDao.get(entryIds), slot, now)
+    }
+
+    private suspend fun saveRows(name: String, rows: List<FoodLogEntity>, slot: String, now: Long): Long {
         require(rows.isNotEmpty()) { "That meal is empty" }
+        require(name.isNotBlank()) { "A meal needs a name" }
         val existing = savedMealDao.byName(name.trim())
         val mealId = if (existing != null) {
             savedMealDao.deleteItems(existing.id)
@@ -201,7 +313,7 @@ class FoodLogRepository @Inject constructor(
                 )
             },
         )
-        mealId
+        return mealId
     }
 
     /**
