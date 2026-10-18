@@ -1005,7 +1005,7 @@ Parallel milestones share only the registration files, with small additive edits
 - **A pending week is recomputed** one last time before it lapses, so food logged late still counts in the estimate the next week starts from.
 - **Catch-up runs** at launch (after any unfinished import), after an import, whenever Today's log date changes, and before a check-in opens. So a Monday that starts while the app is open computes the week too, and an older pending week lapses rather than being answered from a stale estimate.
 - **The guardrails apply as in Settings** (PRD §4.9): every week is judged and proposed with the stored goal after `Guardrails.apply` at the trend weight. *Accept* writes the guarded goal and stores it, as a Settings save does, and the screen shows the note.
-- **A clock that ran ahead:** catch-up drops unanswered rows for weeks that haven't ended (pending, or lapsed by the app), keeps your answers, and reopens the week those rows had lapsed.
+- **A clock that ran ahead:** catch-up drops unanswered rows (pending, or lapsed by the app) for weeks that haven't ended *and* that were computed later than now. It keeps your answers, and reopens the week those rows had lapsed. A log date that only moves back, e.g. "day starts at" changed on a Monday morning, leaves every row as it was.
 - **One answer at a time:** the buttons wait while an answer saves. A second tap is refused quietly, because the screen already shows the first answer. A failure after the target is saved says so rather than "unchanged".
 - **Settings → Calories** shows what a change would save. When that differs from today's target, as it does while a proposal waits or after *Keep* or *Adjust*, it says "Today's target is 2,000 kcal until you answer the check-in or change something here".
 
@@ -1020,7 +1020,7 @@ Tests cover:
   - catch-up in order, the day boundary, and catch-up on open;
   - the estimate's chain, frozen rows, recompute on open, and lapse;
   - proposals only on weeks that could be seen;
-  - a clock that ran ahead and came back;
+  - a clock that ran ahead and came back, and a log date that moved back across Monday midnight;
   - Today's card;
   - *Accept*, *Use the new target*, *Adjust* (clamped) and *Keep*;
   - two answers at once, and settings that fail after the save;

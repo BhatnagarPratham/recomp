@@ -95,11 +95,12 @@ interface CheckinDao {
     suspend fun upsert(row: WeeklyCheckinEntity)
 
     /**
-     * Weeks from [monday] on haven't ended, so a row for one means the clock ran ahead. The unanswered ones go (pending,
-     * or lapsed by the app); an answer you gave stays.
+     * Rows for weeks from [monday] on that were computed after [now]: the clock ran ahead. The unanswered ones go (pending,
+     * or lapsed by the app); an answer you gave stays. A log date that only moved back (a later "day starts at", a
+     * time zone further west) leaves rows computed before now, so they stay. Returns how many went.
      */
-    @Query("DELETE FROM weekly_checkin WHERE week_start >= :monday AND decision IN ('PENDING', 'LAPSED')")
-    suspend fun dropUnansweredFrom(monday: LocalDate)
+    @Query("DELETE FROM weekly_checkin WHERE week_start >= :monday AND computed_at > :now AND decision IN ('PENDING', 'LAPSED')")
+    suspend fun dropClockAhead(monday: LocalDate, now: Long): Int
 
     /** Days in [from]..[to] marked incomplete. */
     @Query("SELECT log_date FROM daily_activity WHERE food_incomplete = 1 AND log_date BETWEEN :from AND :to")

@@ -128,10 +128,11 @@ class CheckinRepository @Inject constructor(
     private suspend fun catchUpLocked(day: LocalDate, now: Long) {
         val first = nutritionDao.first() ?: return
         val thisWeek = mondayOf(day)
-        checkinDao.dropUnansweredFrom(thisWeek)
         // A week lapses when the next one is ready. If that next one was a clock-ahead week just dropped, it's open again.
-        checkinDao.before(thisWeek)?.takeIf { it.decision == CheckinDecision.LAPSED && checkinDao.week(it.weekStart.plusWeeks(1)) == null }?.let {
-            checkinDao.upsert(it.copy(decision = CheckinDecision.PENDING, decidedAt = null))
+        if (checkinDao.dropClockAhead(thisWeek, now) > 0) {
+            checkinDao.before(thisWeek)?.takeIf { it.decision == CheckinDecision.LAPSED && checkinDao.week(it.weekStart.plusWeeks(1)) == null }?.let {
+                checkinDao.upsert(it.copy(decision = CheckinDecision.PENDING, decidedAt = null))
+            }
         }
         val weeks = generateSequence(checkinDao.before(thisWeek)?.weekStart?.plusWeeks(1) ?: mondayOf(first.effectiveFrom)) { it.plusWeeks(1) }
             .takeWhile { it.isBefore(thisWeek) }

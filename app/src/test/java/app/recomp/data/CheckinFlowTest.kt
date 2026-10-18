@@ -475,4 +475,22 @@ class CheckinFlowTest {
         assertEquals(PENDING, dao.week(date(42))!!.decision)
         assertEquals(LAPSED, dao.week(date(35))!!.decision)
     }
+
+    @Test
+    fun `a log date that moves back across Monday midnight changes nothing`() = runBlocking {
+        onboard()
+        gaining(0..41)
+        // Monday 03:00, then "day starts at" moves past it, so the log date is Sunday again an hour later.
+        catchUp(42, hour = 3)
+        val monday = dao.all()
+        checkins.catchUp(date(41), at(42, 4))
+        assertEquals(monday, dao.all())
+        assertEquals(PENDING, dao.week(date(35))!!.decision)
+        assertEquals(LAPSED, dao.week(date(28))!!.decision)
+        // The next Monday carries on as usual.
+        catchUp(49)
+        assertEquals(PENDING, dao.week(date(42))!!.decision)
+        assertEquals(LAPSED, dao.week(date(35))!!.decision)
+        assertEquals(monday.dropLast(1), dao.all().take(monday.size - 1))
+    }
 }
