@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v1.1, 2026-10-18: the MVP as built, plus the proposed v1.1 plan (§10). Implements [PRD.md](PRD.md) v1.1. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v1.1, 2026-10-18: the MVP as built, plus the v1.1 plan (§10). Implements [PRD.md](PRD.md) v1.1. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -25,10 +25,10 @@
 | Background work | WorkManager; a foreground service for the active workout | |
 | Charts | Compose `Canvas` | M4's weight chart is a small hand-drawn chart (dots and a line), so it needs no library. The v1.1 charts reuse it as a shared component (M8). Vico is the candidate only if a chart needs pan and zoom. |
 | Health data | Health Connect (`androidx.health.connect:connect-client`) | P1. Steps come from whichever app writes them; §6.3. |
-| On-device OCR | ML Kit Text Recognition v2, or an open-source recogniser | P1 (M15). Nutrition labels, without AI. ML Kit sends usage metrics to Google, which §7 doesn't allow; PRD §12.11 decides. |
-| Widget | Jetpack Glance | P1 (M9). |
-| AI | Anthropic Java SDK (`com.anthropic:anthropic-java`) | Kotlin uses the Java SDK. Builds and passes R8 (M0). Its class-based structured outputs don't work on Android (§6.2). |
-| Barcode | CameraX with ML Kit barcode scanning or ZXing (both on-device) | P1 (M15). The same §7 question as OCR. |
+| On-device OCR | An open-source on-device recogniser (e.g. Tesseract), picked after a trial on real labels | P1 (M18). Nutrition labels, without AI. Not ML Kit: it sends usage metrics to Google, which §7 doesn't allow (decided 2026-10-18). |
+| Widget | Jetpack Glance | P1 (M12). |
+| AI | Anthropic Java SDK (`com.anthropic:anthropic-java`); from M7, OpenAI, Gemini and OpenAI-compatible endpoints over OkHttp | Kotlin uses the Java SDK. Builds and passes R8 (M0). Its class-based structured outputs don't work on Android (§6.2). The other providers need no SDK: kotlinx.serialization and hand-written schemas, behind one `AiProvider` interface (M7, AI-05). |
+| Barcode | CameraX with ZXing (on-device) | P1 (M18). ML Kit is ruled out for the same reason as OCR. |
 | Serialization | kotlinx.serialization | Seed data and export files. |
 | Secrets | Android Keystore with Tink | Encrypts the API key. Jetpack Security Crypto is deprecated, so not used. |
 | Images | Coil | |
@@ -357,7 +357,7 @@ tdee_new    = tdee_prev + clamp(0.5 × (tdee_obs − tdee_prev), −150, +150)  
 new target  = §5.3 applied with TDEE = tdee_new
 ```
 
-Example: you average 2000 kcal over 21 days and the trend falls 1.0 kg, so `tdee_obs ≈ 2367`. The Sunday check-in shows the observed number, the proposed target and the reason. Accepting it writes a new `nutrition_target` row.
+Example: you average 2000 kcal over 21 days and the trend falls 1.0 kg, so `tdee_obs ≈ 2367`. The Monday check-in, for the week just ended, shows the observed number, the proposed target and the reason (PRD §12.1). Accepting it writes a new `nutrition_target` row.
 
 If logging consistently under- or over-counts by some percentage, that error moves `tdee_obs` by the same amount, so the targets still steer you correctly.
 
@@ -476,6 +476,8 @@ Otherwise it shows the next routine. On a rest day the next routine still shows,
 
 ### 6.2 AI features (optional; PRD §7.12)
 
+*From M7 (AI-05) the provider is a setting: Anthropic, OpenAI, Google Gemini or an OpenAI-compatible endpoint. This section describes Anthropic, the default, as built in M3c; M7 adds the others behind the same gate, statuses, pricing rules and validation.*
+
 **Access: an API key, not a subscription login.**
 
 - **A Claude.ai Pro or Max login can't authenticate a custom app.** Anthropic doesn't allow third-party apps to [offer claude.ai login](https://code.claude.com/docs/en/agent-sdk/overview), and developers [may not collect, store, or intermediate Claude.ai credentials or session tokens](https://code.claude.com/docs/en/legal-and-compliance). There's no exception for an app you build for yourself.
@@ -534,8 +536,8 @@ AiGate.state = OFF | NO_KEY | OVER_CAP | OFFLINE | READY
 |------|-------|-------------------|
 | `MEAL_TEXT`, `MEAL_PHOTO`, `FIT_CHECK` | Text and/or photo, plus the origin tag | `items[]` (shape below), optional `clarifying_question` |
 | `LABEL` (P1) | Label photo plus the on-device OCR text | `name`, `brand?`, `per_100g {kcal, protein_g, carbs_g, fat_g, fiber_g}`, `serving_g?` |
-| `INBODY` (P1) | Screenshot shared from the InBody app, or a photo of the paper sheet | `weight_kg`, `skeletal_muscle_kg`, `body_fat_kg`, `body_fat_pct`, `visceral_fat_level`, `bmr_kcal?`, `ecw_tbw?`, `inbody_score?`, `segmental?` |
-| `COACH` (P2) | The week's summary as JSON | `suggestions[3] {title, why, action}` |
+| ~~`INBODY`~~ | Not used: body data stays on the phone (decided 2026-10-18), so InBody images are never sent (M15) | — |
+| `COACH` (P1, M11) | The weekly programme report, with only the sections you ticked | `summary`, `suggestions[≤5] {kind, routine, exercise_key, replacement_key, value, reason}` |
 
 ```json
 {
@@ -623,8 +625,8 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
   - Skeletal muscle mass and visceral fat always come from the share flow (§6.7) or manual entry.
   - The InBody app's Health Connect access was off; turn it on in the InBody app.
-- **Sleep (AR-02):** typed in at the morning weigh-in, since the reference phone has no tracker. When a tracker writes `SleepSessionRecord`, it prefills the typed value (M11).
-- **Write (DA-04):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow (M13).
+- **Sleep (AR-02):** typed in at the morning weigh-in, since the reference phone has no tracker. When a tracker writes `SleepSessionRecord`, it prefills the typed value (M13).
+- **Write (DA-04):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow (M16).
 - **Fallback if Fit doesn't write steps:** read the phone's `TYPE_STEP_COUNTER` sensor directly. It needs `ACTIVITY_RECOGNITION`, which the workout service already requests. The counter resets on reboot, so sample it on app open and from a periodic worker, and store daily deltas.
 - **Sync** runs when the app opens, plus a daily WorkManager job. Reads are incremental using change tokens. Records whose data origin is this app are skipped.
 - **The app works fully without Health Connect.**
@@ -707,7 +709,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 ### 6.7 Share target (IB-03, NU-19, NU-20)
 
-The app registers as an Android share target for images (`ACTION_SEND`, `image/*`). A shared image opens a picker: *InBody result*, *Nutrition label* or *Meal photo*. Each choice leads into its own flow. That's how a screenshot from the InBody app gets in without saving files around. With AI off, *InBody result* opens the manual form with the screenshot alongside for reference.
+The app registers as an Android share target for images (`ACTION_SEND`, `image/*`). A shared image opens a picker: *InBody result*, *Nutrition label* or *Meal photo*. Each choice leads into its own flow. That's how a screenshot from the InBody app gets in without saving files around. *InBody result* always opens the scan form with the image alongside; AI never reads it (M15, PRD §12.11).
 
 ## 7. Non-functional requirements
 
@@ -717,7 +719,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | Reliability | No data loss on process death or reboot mid-workout. Every migration has a test. |
 | Offline | Everything except AI features and barcode lookup works offline. Health Connect and label OCR run on-device. |
 | Gym usability | Set controls are at least 56 dp. Primary actions sit in the bottom half of the screen. High-contrast dark theme. Layout holds up at 130% font size. |
-| Privacy | No analytics or crash SDKs. The only network calls go to Anthropic and Open Food Facts. |
+| Privacy | No analytics or crash SDKs. The only network calls go to the AI provider you chose (AI-05) and Open Food Facts. |
 | Battery | The foreground service runs only during an active workout. |
 | Accessibility | Content descriptions on every control. TalkBack can complete the set-logging flow. |
 
@@ -749,20 +751,22 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M4: Body, Today and data** ✅ | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
 | **M5: Weekly check-in** | Adaptive maintenance estimate, the weekly check-in with per-goal flags and a proposed target, incomplete days (Room v8) | NU-05, GL-08 (flags) |
 | **M6: In the gym** | Supersets, warm-up suggestions, assisted exercises, RIR-aware jumps, substitutes (Room v9) | RT-05, WL-11, WL-09 (assisted), PO-08, EX-04 |
-| **M7: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
+| **M7: AI providers** | Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint, each with its own key (Room v10) | AI-05 |
 | **M8: Weekly review** | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
-| **M9: Nudges, reminders, widget** | WorkManager, opt-in reminders (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
+| **M9: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
-| **M11: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, InBody records as scan drafts (Room v10) | AR-01, AR-02, IB-07 |
-| **M12: InBody share, scan targets** | The share target (§6.7) with *InBody result*, Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
-| **M13: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
-| **M14: Body extras** | Tape measurements, progress photos, focus areas, mobility markers (Room v11) | BM-03, BM-04, YG-03, YG-04 |
-| **M15: Camera food** | Barcode with Open Food Facts, label scan, AI meal photos | NU-21, NU-19, NU-20 |
-| **M16: Recipes** | Recipe builder; a recipe is a food (Room v12) | NU-22 |
-| **M17: Goals** | Goal switch, Goal reached card, maintenance breaks, AI goal interpretation, pregnancy toggle, presets as data files | PS-04, PS-05, GL-03, GL-06, GL-09 (pregnancy) |
-| **M18: lb and in** | Imperial display and entry everywhere | PR-05 |
+| **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
+| **M12: Nudges, reminders, widget** | WorkManager, opt-in reminders (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
+| **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
+| **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
+| **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
+| **M16: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
+| **M17: Body extras** | Tape measurements, progress photos, focus areas, mobility markers (Room v14) | BM-03, BM-04, YG-03, YG-04 |
+| **M18: Camera food** | Barcode with Open Food Facts, label scan, AI meal photos | NU-21, NU-19, NU-20 |
+| **M19: Goals** | Goal switch, Goal reached card, maintenance breaks, AI goal interpretation, pregnancy toggle, presets as data files | PS-04, PS-05, GL-03, GL-06, GL-09 (pregnancy) |
+| **M20: lb and in** | Imperial display and entry everywhere | PR-05 |
 
-The v1.1 rows are the plan proposed on 2026-10-18; the details, waves and rules are under *The v1.1 plan* below, and the UX for each is in PRD §12.
+The v1.1 rows are the plan settled on 2026-10-18; the details, waves and rules are under *The v1.1 plan* below, and the UX for each is in PRD §12.
 
 **M0 results (2026-10-17, reference phone on Android 15):**
 
@@ -869,29 +873,31 @@ An independent review before the phone run found that a backup with a broken for
 | Trend weight in Settings (dev install) | ✅ About you showed "82.3 kg · trend" with a note that the targets still used the typed weight. Tapping it previewed 2,100 → 1,980 kcal with protein unchanged (it follows the goal weight). After saving, the note went away. <!-- pii-ok: invented dev-install values --> |
 | Not run on the phone | Saving a scan (the dev run backed out of the form) and the waist sheet; the tests cover both. A backup from an older version and the refusals (the tests cover them). Android's own Auto Backup restore. The test weigh-in was removed by the import; the backup file stays in Downloads, and the app's safety copy holds the state from just before the import. |
 
-### The v1.1 plan (proposed 2026-10-18)
+### The v1.1 plan (settled 2026-10-18)
 
-It covers every P1 requirement in the PRD, in the 14 milestones of the table above. The UX for each milestone is proposed in PRD §12 and settled with you before its code starts.
+It covers every P1 requirement in the PRD, in the 16 milestones of the table above. The UX for each is in PRD §12, settled with you on 2026-10-18.
 
-**When code starts.** §11 says nothing from P1 starts until the MVP has been used daily for 2 weeks. Dogfooding began on 18 October, so that's 1 November.
-- ◆ **Decide:** (A) keep the rule: M5 starts on 1 November, after any fixes the dogfooding turns up, and what you learn can still reorder this list. (B) Start M5 as soon as this plan is approved.
+**When code starts:** now. On 2026-10-18 you waived §11's rule of two weeks of daily use first, so v1.1 is built while the MVP is dogfooded. Fixes the dogfooding turns up go first.
 
-**Order.** By value for someone using the app every day, within the dependencies:
-1. **M5 first.** The formula's maintenance guess is off by 10–15% for most people (PRD §8, #5), and every day's logging is judged against the target it corrects. It needs 3 weeks of data, which dogfooding provides by about 8 November.
-2. **M6 and M7** change every gym session and every meal.
-3. **M8** completes the v1.1 exit criterion (PRD §9).
-4. **M9** brings the nudges that get protein hit (PRD §8, #1) and lunch logged.
-5. Then training history, Health Connect, scans, data, body extras, camera food, recipes and goals. Imperial units come last.
+**Order.** By value for someone using the app every day, within the dependencies, in pairs:
+1. **M5 and M6.** The formula's maintenance guess is off by 10–15% for most people (PRD §8, #5), and every day's logging is judged against the target M5 corrects. M5 needs 3 weeks of data, which dogfooding provides by about 8 November. M6 changes every gym session.
+2. **M7 and M8.** The provider choice comes before more AI features are built on it, and the review completes the v1.1 exit criterion (PRD §9).
+3. **M9 and M10:** faster food logging, on any provider, and training history.
+4. **M11 and M12:** the weekly programme review, and the nudges that get protein hit (PRD §8, #1).
+5. Then Health Connect and recipes, InBody and data, body extras and camera food, goals, and imperial units last.
 
 **Dependencies:**
 - M8 extends M5's check-in screen. M5's flags ship with the adaptive target, because they decide when it proposes a change.
-- M11 (Health Connect import) comes before M12 (scan-informed targets).
-- M10 (editing past workouts) comes before M13, whose Health Connect writes must follow those edits.
-- M12 brings the share target (§6.7); M15 adds its other two choices.
-- M13 (automatic backup) comes before M14, which adds photos to it.
-- M17 needs M5: Goal reached and the maintenance break appear in the check-in. It must land before your current deficit reaches 12 weeks.
-- Steps and sleep appear in M8's review and M9's nudge once M11 lands.
-- M18 changes every screen with a weight or a length, so it runs alone and last.
+- M9 and M11 build on M7's providers, and M11 on M8's review. M10 uses M8's chart.
+- M12 adds WorkManager, which M13's sync and M16's backups use.
+- M13 (Health Connect import) comes before M15 (scan-informed targets).
+- M10 (editing past workouts) and M13 come before M16, whose Health Connect writes follow those edits.
+- M15 brings the share target (§6.7); M18 adds its other two choices.
+- M16 (automatic backup) comes before M17, which adds photos to it.
+- M19 needs M5: Goal reached and the maintenance break appear in the check-in. It must land before your current deficit reaches 12 weeks.
+- Steps, sleep and other apps' workouts appear in M8's review and M12's nudge once M13 lands.
+- M20 changes every screen with a weight or a length, so it runs alone and last.
+- M5 keeps its Today card in `ui/checkin`, so M8 and M11 can change the card without touching `TodayScreen.kt`.
 
 **Every milestone:**
 - Its own worktree and branch from `origin/main`, e.g. `git -C ~/Desktop/projects/recomp worktree add ~/Desktop/projects/recomp-m5 -b m5-checkin origin/main`, with a gitignored `local.properties`.
@@ -901,8 +907,8 @@ It covers every P1 requirement in the PRD, in the 14 milestones of the table abo
 - `./gradlew :domain:test :app:testDebugUnitTest :app:assembleRelease :app:lintDebug` passing, with 0 lint errors.
 - An on-phone check of the release build over the existing data, then a results note in this section.
 - `python3 .githooks/sensitive_scan.py all` before every commit. Test data is invented, including the parser's corpus of meal phrasings. Nothing personal is committed.
-- Any Claude API work loads the `claude-api` skill first, uses hand-written JSON schemas decoded with kotlinx.serialization (§6.2), and keeps the key in the `secrets` store.
-- New screens format weights and lengths through the shared formatters (`Labels`, `BodyText`), so M18 can change units in one place.
+- Any AI work uses hand-written JSON schemas decoded with kotlinx.serialization (§6.2) and keeps keys in the `secrets` store. Anthropic code loads the `claude-api` skill first; other providers' code follows their current API docs.
+- New screens format weights and lengths through the shared formatters (`Labels`, `BodyText`), so M20 can change units in one place.
 
 **The phone now holds real data.** From M5 on, every install on the reference phone upgrades the app you use every day.
 - Before installing a build with a schema change, export a backup on the phone (Settings → Data).
@@ -910,20 +916,20 @@ It covers every P1 requirement in the PRD, in the 14 milestones of the table abo
 - Each session records its installs (milestone, Room version, date) in `phone-ledger.md` in the shared notes folder, so parallel sessions don't install over each other.
 - Screens that need weeks of data are checked in a separate debug install with invented data (`applicationIdSuffix`, never committed), as in M4.
 
-**Room versions,** in the planned merge order: M5 takes 8, M6 9, M11 10, M14 11 and M16 12. The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
+**Room versions,** in the planned merge order: M5 takes 8, M6 9, M7 10, M11 11, M13 12, M14 13 and M17 14. The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
 
-**Parallel waves.** Two sessions at a time, and only if you agree:
+**Parallel waves.** Two sessions at a time (agreed on 2026-10-18):
 
 | Wave | Milestones | Why they don't collide |
 |------|------------|------------------------|
 | 1 | M5 ∥ M6 | Nutrition and the check-in, against the workout screen and the engine |
-| 2 | M7 ∥ M8 | Food screens (M7 stays out of Today), against the review, Body's chart and Today's weekly-plan card |
-| 3 | M9 ∥ M10 | Notifications, widget and Today's evening card, against the Train tab and history |
-| 4 | M11 ∥ M10, if M10 is still running | Health Connect and Body, against training |
-| 5 | M12 ∥ M13 | Scans and the share target, against backups and Health Connect writes |
-| 6 | M14 ∥ M15 | Body, against food |
-| 7 | M16 ∥ M17 | Recipes, against the goal flow |
-| 8 | M18 alone | Every screen |
+| 2 | M7 ∥ M8 | The AI layer and Settings → AI, against the review, Body's chart and Today's weekly-plan card |
+| 3 | M9 ∥ M10 | Food screens and the parser (M9 stays out of Today), against the Train tab and history |
+| 4 | M11 ∥ M12 | The programme review (the review screen, AI and routine edits), against notifications, the widget and Today's evening card |
+| 5 | M13 ∥ M14 | Health Connect and Body, against the recipe editor |
+| 6 | M15 ∥ M16 | Scans and the share target, against backups and Health Connect writes |
+| 7 | M17 ∥ M18 | Body, against food |
+| 8 | M19, then M20 | Goals touch the goal flow and Today; units touch every screen |
 
 Parallel milestones share only the registration files, with small additive edits that are resolved on rebase: `RecompNavHost.kt` (routes), `SettingsScreen.kt` (rows), `SettingsPrefs.kt` (keys and `problems()`), `AppDatabase.kt`, `Migrations.kt`, `BackupCheckDao.kt` and the migration and backup tests (schema milestones only), `AndroidManifest.xml`, `app/build.gradle.kts`, `libs.versions.toml`, the README's status and these docs. Each rebases onto `main` before its PR and again before its phone check.
 
@@ -934,7 +940,7 @@ Parallel milestones share only the registration files, with small additive edits
   - `AdaptiveTdee` and `CheckinFlags` in `:domain` (§5.4).
   - `CheckinRepository` computes a week's row on the first launch after the week ends, and catches up missed weeks in order.
   - The check-in screen (`ui/checkin`) and its Today card. *Accept* and *Adjust* write a `nutrition_target` row with `reason = CHECKIN` and `tdee_estimate = tdee_new`.
-  - Incomplete days, from the Food tab's day menu, are left out of the window and, under ◆ (A), out of the 7-day average.
+  - Incomplete days, from the Food tab's day menu, are left out of the window and out of the 7-day average.
 - **Data (v8):**
   ```text
   weekly_checkin  week_start (PK, the Monday), computed_at, window_days, logged_days, weigh_ins,
@@ -942,7 +948,7 @@ Parallel milestones share only the registration files, with small additive edits
                   flag?(LOSS_SLOW|FLAT|DRIFT|GAIN_SLOW|GAIN_FAST), proposed_kcal?,
                   decision(PENDING|ACCEPTED|ADJUSTED|KEPT|LAPSED), decided_at?, target_id?
   daily_activity  log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
-                                        -- §4's planned table plus the flag, so M11 needs no migration
+                                        -- §4's planned table plus the flag, so M13 needs no migration
   ```
   - `tdee_prev` is the previous row's `tdee_new`, or for the first check-in the `tdee_estimate` of the target in force.
   - A decided row is frozen. A pending one is recomputed when opened, so late logging counts.
@@ -978,24 +984,31 @@ Parallel milestones share only the registration files, with small additive edits
 - **Risks:**
   - The workout screen is the most-used screen, so supersets must not slow a plain workout. Compose UI tests cover tick → next set both ways.
   - Assisted e1RM needs the trend weight, which may be missing.
-- **Parallel:** with M5; with M7 or M8.
+- **Parallel:** with M5.
 
-#### M7: Faster food logging
+#### M7: AI providers
 
-*AI-04, NU-18, NU-06; PRD §12.3; no Room change.*
+*AI-05; PRD §12.3; Room v10.*
 - **Scope:**
-  - `DescribeParser` in `:domain` (§6.2's local parser), over a food index the repository supplies.
-  - Describe it with AI off, and the ◆ parser-first or Claude-first choice with AI on.
-  - Will it fit? in the Food tab, as `AiKind.FIT_CHECK` with the meal schema.
-  - The snack allowance: a `snack_allowance` setting, the day view and the chosen meal.
-- **Data:** none. Items log with `source = LOCAL_PARSE` or `AI_TEXT`, and a fit check you log keeps its `ai_request_id`.
+  - An `AiProvider` interface in `data/ai`, behind `MealEstimator` and every later AI use. One call takes a system prompt, a user message, optional images and a hand-written JSON schema, and returns the parsed reply, its usage and an `AiStatus` (§6.2).
+  - Adapters: Anthropic (today's Java SDK code, moved behind the interface); OpenAI and Gemini over OkHttp with kotlinx.serialization, with no new SDKs; and OpenAI-compatible, with a base URL.
+  - Each provider's structured outputs: Anthropic's `output_config.format`, OpenAI's `response_format` with a strict `json_schema`, and Gemini's response schema. An OpenAI-compatible server that rejects the schema falls back to plain JSON mode; the reply is validated the same way either way (`MealCheck`).
+  - `AiKeyStore` keeps one encrypted key per provider. `AiPricing` gains the new providers' models; the compatible provider's prices are typed in.
+  - Settings → AI's provider picker, and a notice that names the provider.
+- **Data (v10):** `ai_request_log.provider TEXT NOT NULL DEFAULT 'ANTHROPIC'`, so spend and debugging know which service answered. Settings gain `ai_provider`, a model per provider, `ai_base_url` and the compatible provider's prices. Keys stay in the `secrets` store, out of exports.
 - **Tests:**
-  - the parser against an invented corpus: fractions, numbers in words, "and", units and synonyms, unknown chunks, the diet filter;
-  - merging parser and Claude items without counting anything twice;
-  - Will it fit's before and after for each goal's main number;
-  - the allowance inside the target.
-- **Risks:** the parser can pick the wrong dish ("dal" for "dal makhani"). It prefers your own foods and exact names, and shows its pick for review.
-- **Parallel:** with M6 or M8.
+  - each adapter's request shape against a mock server: schema, images, and the key never in anything logged;
+  - each provider's errors mapped onto the existing `AiStatus` table: rejected key, quota, overload, timeouts, refusals and safety blocks, cut-off replies;
+  - the schema fallback for compatible servers;
+  - a price for every listed model;
+  - switching provider keeps both keys;
+  - the migration to v10.
+- **Risks:**
+  - Structured outputs and error formats differ by provider. The shared validation and status table keep the app's behaviour the same.
+  - Model names and prices change. The lists live in `AiPricing`, updated by hand, and an unknown model is priced at the highest rates (§6.2).
+  - Some providers' free tiers may keep prompts for training. The milestone checks each one, and the notice says so where it applies.
+  - Anthropic code loads the `claude-api` skill first. The other adapters are written against each provider's current API docs, cited in the results note.
+- **Parallel:** with M8.
 
 #### M8: Weekly review
 
@@ -1008,24 +1021,23 @@ Parallel milestones share only the registration files, with small additive edits
 - **Data:** none. Everything is computed on read.
 - **Tests:** each aggregate on fixed data; weeks that span a goal change or a gap; noise labels at the 1 kg and 1% edges; off-protocol scans left out; the slope.
 - **Risks:** the review runs many queries. Each covers one week and uses the `log_date` indexes, so it should open well inside a second; the phone check measures it.
-- **Parallel:** with M6 or M7.
+- **Parallel:** with M7.
 
-#### M9: Nudges, reminders and the widget
+#### M9: Faster food logging
 
-*RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05; PRD §12.5; no Room change.*
+*AI-04, NU-18, NU-06; PRD §12.5; no Room change.*
 - **Scope:**
-  - WorkManager with Hilt's worker factory, the first milestone to use it.
-  - A `ReminderScheduler`, the *Reminders* and *Weekly check-in* channels (§6.6), and the 2-a-day ledger.
-  - `Nudges` in `:domain`: the goal policy's nudge list, the 25% threshold, and the food ranking and portion sizing.
-  - Today's evening card, and a Glance widget fed by the same `TodaySnapshot` as the notifications.
-- **Data:** settings only: `reminders` (each one's on or off, time and weekdays). The daily ledger is device state, kept out of exports (`NOT_EXPORTED`).
-- **New dependencies:** `androidx.work:work-runtime-ktx`, `androidx.hilt:hilt-work` and `androidx.glance:glance-appwidget`.
+  - `DescribeParser` in `:domain` (§6.2's local parser), over a food index the repository supplies.
+  - Describe it with AI off. With AI on, the parser goes first and the AI estimates what it couldn't match; an *Ordered* meal goes straight to the AI.
+  - Will it fit? in the Food tab, as `AiKind.FIT_CHECK` with the meal schema.
+  - The snack allowance: a `snack_allowance` setting, the day view and the chosen meal.
+- **Data:** none. Items log with `source = LOCAL_PARSE` or `AI_TEXT`, and a fit check you log keeps its `ai_request_id`.
 - **Tests:**
-  - the skip rules and the cap (◆) over a simulated day;
-  - nudge content for each goal, and food ranking and portions;
-  - reminder times across the day boundary and a time-zone change;
-  - the widget's state.
-- **Risks:** WorkManager's timing is inexact (±15 minutes is fine, §6.6), and battery saver can delay it further; the cap still holds. Widget updates are limited to food-log changes and the day boundary.
+  - the parser against an invented corpus: fractions, numbers in words, "and", units and synonyms, unknown chunks, the diet filter;
+  - merging parser and AI items without counting anything twice;
+  - Will it fit's before and after for each goal's main number;
+  - the allowance inside the target.
+- **Risks:** the parser can pick the wrong dish ("dal" for "dal makhani"). It prefers your own foods and exact names, and shows its pick for review.
 - **Parallel:** with M10.
 
 #### M10: Training history
@@ -1042,18 +1054,64 @@ Parallel milestones share only the registration files, with small additive edits
   - deleting the last strength session moves the rotation back;
   - frozen recommendations unchanged;
   - volume counting: secondary muscles, working sets only, the week boundary.
-- **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M13's Health Connect writes must follow these edits later.
-- **Parallel:** with M9; with M11.
+- **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M16's Health Connect writes must follow these edits later.
+- **Parallel:** with M9.
 
-#### M11: Health Connect in
+#### M11: Weekly programme review with AI
 
-*AR-01, AR-02, IB-07; PRD §12.7; Room v10.*
+*HM-06; PRD §12.7; Room v11.*
+- **Scope:**
+  - `ProgrammeReport` in `:domain` builds the ticked sections as text from M8's weekly aggregates, the routines and the targets. It never includes the fields PRD §12.7 lists as never sent.
+  - The checklist, the full-text preview and *Send*, as `AiKind.COACH` through M7's providers. The hand-written schema: `summary`, and `suggestions[≤5] {kind, routine, exercise_key, replacement_key, value, reason}`.
+  - `SuggestionCheck` validates each suggestion against the library, the routines and the guardrails. Anything else is advice only.
+  - *Apply* uses the existing paths: `PersonaRepository`'s target preview and save (`reason = REVIEW`), `TrainingRepository`'s routine edits with *Undo*, Training setup for strength days, and the stall card's deload.
+  - The prompt on M5's check-in card, which lives in `ui/checkin`, so M11 stays out of `TodayScreen.kt`.
+- **Data (v11):**
+  ```text
+  programme_review  id, week_start, created_at, sections, sent_text, ai_request_id,
+                    response_json?, applied_json   -- which suggestions you applied
+  ```
+  `TargetReason` gains `REVIEW`.
+- **Tests:**
+  - the report for each combination of sections: body trends only when ticked, and the never-sent fields never present;
+  - the schema and parsing;
+  - every suggestion kind validated and applied, and *Undo* for routine changes;
+  - unknown exercises and values outside the guardrails downgraded to advice;
+  - the request against a mock server;
+  - the migration to v11.
+- **Risks:**
+  - A suggestion can be poor. Nothing applies without your tap, the guardrails hold, and the progression engine stays rules.
+  - The report grows with many routines. It's capped at about 4,000 tokens, trimming per-exercise detail first.
+- **Parallel:** with M12.
+
+#### M12: Nudges, reminders and the widget
+
+*RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05; PRD §12.8; no Room change.*
+- **Scope:**
+  - WorkManager with Hilt's worker factory, the first milestone to use it.
+  - A `ReminderScheduler`, the *Reminders* and *Weekly check-in* channels (§6.6), and the 2-a-day ledger.
+  - `Nudges` in `:domain`: the goal policy's nudge list, the 25% threshold, and the food ranking and portion sizing.
+  - Today's evening card, and a Glance widget fed by the same `TodaySnapshot` as the notifications.
+- **Data:** settings only: `reminders` (each one's on or off, time and weekdays). The daily ledger is device state, kept out of exports (`NOT_EXPORTED`).
+- **New dependencies:** `androidx.work:work-runtime-ktx`, `androidx.hilt:hilt-work` and `androidx.glance:glance-appwidget`.
+- **Tests:**
+  - the skip rules and the cap, in time order, over a simulated day;
+  - nudge content for each goal, and food ranking and portions;
+  - reminder times across the day boundary and a time-zone change;
+  - the widget's state.
+- **Risks:** WorkManager's timing is inexact (±15 minutes is fine, §6.6), and battery saver can delay it further; the cap still holds. Widget updates are limited to food-log changes and the day boundary.
+- **Parallel:** with M11.
+
+#### M13: Health Connect in
+
+*AR-01, AR-02, AR-04, IB-07; PRD §12.9; Room v12.*
 - **Scope:**
   - `HealthConnectSource` replaces the M0 spike: a permission per feature, a sync at launch plus a daily worker, and change tokens (§6.3).
   - Steps with the goal on Today and Body, and the phone's step counter as the fallback.
   - Sleep in the weigh-in sheet and on Today, prefilled from `SleepSessionRecord`.
+  - Other apps' workouts (AR-04): `ExerciseSessionRecord`s from any app but Recomp, saved as completed extra sessions with `hc_record_id` set (the column exists), so the weekly plan, History and the calendar count them. They're read-only, and never written back (M16).
   - InBody drafts on Body, which open the scan form.
-- **Data (v10):**
+- **Data (v12):**
   ```text
   scan_draft  id, measured_at, weight_g, body_fat_pct?, bmr_kcal?, hc_ids
                                         -- an InBody measurement waiting for muscle and visceral fat;
@@ -1062,73 +1120,87 @@ Parallel milestones share only the registration files, with small additive edits
   Steps and sleep fill M5's `daily_activity`. Change tokens are device state in settings, kept out of exports.
 - **Tests:**
   - grouping InBody records by timestamp into one draft, and matching a scan typed within 10 minutes;
-  - steps by day, as decided (◆);
+  - steps by calendar day;
+  - other apps' workouts mapped to a session kind and counted once, Recomp's own skipped, and an edited or deleted one in Health Connect followed;
   - an expired change token: a full re-read of 30 days creates no duplicates;
   - the step counter resetting at reboot;
-  - the migration to v10.
+  - the migration to v12.
 - **Risks:**
   - Google Fit's and InBody's Health Connect access were off on the reference phone (M0). The setup screen says how to turn each on.
   - A change token expires after 30 days without a sync.
   - Health Connect can be missing or out of date on other phones. Everything works without it.
-- **Parallel:** with M10.
+- **Parallel:** with M14.
 
-#### M12: InBody share and scan-informed targets
+#### M14: Recipes
 
-*IB-03, IB-05; PRD §12.8; no Room change.*
+*NU-22; PRD §12.10; Room v13.*
+- **Scope:** the recipe editor. A recipe is a `food` with `source = RECIPE`, whose values are recomputed from its ingredients when it's saved, and whose serving is a `food_unit`.
+- **Data (v13):**
+  ```text
+  recipe             food_id (PK, → food), servings?, cooked_weight_g?
+  recipe_ingredient  id, recipe_id (→ recipe), position, food_id (→ food), grams
+  ```
+  `FoodSource` gains `RECIPE`.
+- **Tests:** values per 100 g with and without a cooked weight; the diet tag from the strictest ingredient; an edited ingredient leaving past logs alone; a recipe inside itself refused; the migration to v13.
+- **Risks:** raw and cooked weights are easy to mix up, so the editor says which one the totals assume.
+- **Parallel:** with M13.
+
+#### M15: InBody share and scan-informed targets
+
+*IB-03, IB-05; PRD §12.11; no Room change.*
 - **Scope:**
-  - The share target (§6.7) and its picker, with *InBody result*.
-  - With ◆ (A), `AiKind.INBODY` with a hand-written schema and its own notice.
-  - The image saved as the scan's `image_path`.
+  - The share target (§6.7) and its picker, with *InBody result*: the scan form with the image pinned above it, prefilled from an InBody draft from the same time (M13). No AI reads it: body data stays on the phone (decided 2026-10-18).
+  - The image saved as the scan's `image_path`, deleted with the scan.
   - Lean mass in `TargetInputs` (Katch-McArdle, §5.3's vector B), the *Preview targets with your scan* prompt, the body-fat finish line and the scan-based goal-weight suggestion.
-- **Data:** none. `image_path` and `source = SHARE_AI` already exist.
+- **Data:** none. `image_path` already exists; `source = SHARE_AI` stays unused.
 - **Tests:**
   - golden vector B end to end;
   - the 60-day and protocol rules for which scan counts;
   - the body-fat goal weight;
-  - the INBODY request and its failures against a mock server, as in M3c, and a reply with fields missing.
-- **Risks:** screenshots differ between InBody app versions and paper sheets, so every field stays editable and marked until checked. Sending body data to AI changes a privacy promise (◆).
-- **Parallel:** with M13.
+  - a shared image with and without a matching draft, and the image deleted with its scan.
+- **Risks:** the image is sensitive: it stays in app-private storage, out of Android's own backup, and is never sent anywhere. Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
+- **Parallel:** with M16.
 
-#### M13: Data out
+#### M16: Data out
 
-*DA-02, DA-03, DA-04; PRD §12.9; no Room change.*
+*DA-02, DA-03, DA-04; PRD §12.12; no Room change.*
 - **Scope:**
   - The automatic backup worker: a persisted folder permission, `BackupManager`'s export, the last 8 kept.
   - CSV export.
-  - Health Connect writes: `ExerciseSessionRecord`, one `NutritionRecord` per meal and `WeightRecord`, each with a `clientRecordId` (§6.3).
-- **Data:** none. The `clientRecordId` stands in for a local mapping table, so `workout_session.hc_record_id` can stay unused.
+  - Health Connect writes: `ExerciseSessionRecord`, one `NutritionRecord` per meal and `WeightRecord`, each with a `clientRecordId` (§6.3). Sessions read from other apps (M13) are never written back.
+- **Data:** none. The `clientRecordId` stands in for a local mapping table; `workout_session.hc_record_id` marks only sessions read from other apps (M13).
 - **Tests:**
   - keeping 8 files, and a revoked folder permission giving a clear message, not a crash;
   - CSV escaping and columns;
   - the records built for a day, through edits and deletes, and meals with quick adds;
-  - scan weights never written.
+  - scan weights and other apps' sessions never written.
 - **Risks:** a Drive folder can be slow or offline, so the worker retries with backoff and Settings shows the last success. Nutrition written to Health Connect is readable by every app you give access; it's off by default.
-- **Parallel:** with M12.
+- **Parallel:** with M15.
 
-#### M14: Body extras
+#### M17: Body extras
 
-*BM-03, BM-04, YG-03, YG-04; PRD §12.10; Room v11.*
+*BM-03, BM-04, YG-03, YG-04; PRD §12.13; Room v14.*
 - **Scope:**
   - The measurements sheet and its settings.
-  - Photos: capture into `files/photos/`, compare, and the 4-week prompt. With ◆ (A), photos in the export and the automatic backup.
+  - Photos: capture into `files/photos/`, compare, and the 4-week prompt. *Include photos* in the export and the automatic backup, off by default.
   - Focus-area chips, and the mobility card.
-- **Data (v11):** `progress_photo id, log_date, taken_at, pose(FRONT|SIDE|BACK), file_path`, as in §4 plus `taken_at`. `MeasurementType` gains `SIT_AND_REACH` (cm), `SQUAT_HOLD` (seconds) and `TOE_TOUCH` (1 or 0), an enum change only. `yoga_detail.focus_areas` already exists.
+- **Data (v14):** `progress_photo id, log_date, taken_at, pose(FRONT|SIDE|BACK), file_path`, as in §4 plus `taken_at`. `MeasurementType` gains `SIT_AND_REACH` (cm), `SQUAT_HOLD` (seconds) and `TOE_TOUCH` (1 or 0), an enum change only. `yoga_detail.focus_areas` already exists.
 - **Tests:**
   - a backup with and without photos: the 16 MB budget still covers the JSON, and photos stream as separate entries with a per-file cap;
   - a photo file that's gone missing;
   - Android's own backup leaving `files/photos/` out (the include-only rules already do);
-  - the migration to v11, and mobility values.
+  - the migration to v14, and mobility values.
 - **Risks:** photos are the most sensitive data in the app. They stay in app-private storage, out of the gallery and out of Android's own backup.
-- **Parallel:** with M15.
+- **Parallel:** with M18.
 
-#### M15: Camera food
+#### M18: Camera food
 
-*NU-21, NU-19, NU-20; PRD §12.11; no Room change.*
+*NU-21, NU-19, NU-20; PRD §12.14; no Room change.*
 - **Scope:**
-  - CameraX for the barcode scanner and the label photo, and the recognition libraries (◆).
+  - CameraX for the barcode scanner and the label photo. ZXing reads barcodes; the on-device text recogniser is open source (e.g. Tesseract), picked after a short trial on real labels. No ML Kit (decided 2026-10-18; §7).
   - An Open Food Facts client with a custom User-Agent, for product lookups and search, saving results as `food(source = OFF)`.
   - Label OCR parsing into New food (§6.4).
-  - `AiKind.LABEL` and `MEAL_PHOTO` requests with hand-written schemas.
+  - `AiKind.LABEL` and `MEAL_PHOTO` requests with hand-written schemas, through M7's providers.
   - *Nutrition label* and *Meal photo* in the share picker.
 - **Data:** none. `food.barcode`, the `OFF` and `LABEL_OCR` food sources, the `BARCODE`, `LABEL` and `AI_PHOTO` log sources, and `meal_draft.photo_path` already exist.
 - **Tests:**
@@ -1136,31 +1208,17 @@ Parallel milestones share only the registration files, with small additive edits
   - Open Food Facts replies with fields missing;
   - photo downscaling to about 1,500 px;
   - the request shapes against a mock server.
-- **Risks:** §7's privacy line (◆). Open Food Facts covers Indian brands patchily, so label scan is the fallback. Camera permissions and lifecycle on the phone.
-- **Parallel:** with M14.
-
-#### M16: Recipes
-
-*NU-22; PRD §12.12; Room v12.*
-- **Scope:** the recipe editor. A recipe is a `food` with `source = RECIPE`, whose values are recomputed from its ingredients when it's saved, and whose serving is a `food_unit`.
-- **Data (v12):**
-  ```text
-  recipe             food_id (PK, → food), servings?, cooked_weight_g?
-  recipe_ingredient  id, recipe_id (→ recipe), position, food_id (→ food), grams
-  ```
-  `FoodSource` gains `RECIPE`.
-- **Tests:** values per 100 g with and without a cooked weight; the diet tag from the strictest ingredient; an edited ingredient leaving past logs alone; a recipe inside itself refused; the migration to v12.
-- **Risks:** raw and cooked weights are easy to mix up, so the editor says which one the totals assume.
+- **Risks:** an open-source recogniser reads labels less well than ML Kit would; AI cleans up when it's on, and every field stays editable. The recogniser's model file is fetched at build time with a pinned checksum, like INDB, if its licence doesn't allow committing it. Open Food Facts covers Indian brands patchily, so label scan is the fallback. Camera permissions and lifecycle on the phone.
 - **Parallel:** with M17.
 
-#### M17: Goals
+#### M19: Goals
 
-*PS-04, PS-05, GL-03, GL-06, GL-09 (pregnancy); PRD §12.13; no Room change.*
+*PS-04, PS-05, GL-03, GL-06, GL-09 (pregnancy); PRD §12.15; no Room change.*
 - **Scope:**
   - *What to expect* for each goal change.
   - `GoalPlan` gains `reachedOn`, `breakUntil` and `lastBreakEndedOn`. Reaching the finish line and `maintenance_break_due` (§5.8) are checked with each check-in and at launch.
   - A break is two target versions; `TargetReason` gains `BREAK` and `RESUME`.
-  - `AiKind.GOAL`, with a hand-written `{intent, follow_up_question}` schema.
+  - `AiKind.GOAL` through M7's providers, with a hand-written `{intent, follow_up_question}` schema.
   - `Profile.pregnant` and its guardrail.
   - Presets loaded from `assets/presets/*.json`.
 - **Data:** none. Target reasons are stored as text, and the plan's state lives in the persona JSON.
@@ -1171,11 +1229,11 @@ Parallel milestones share only the registration files, with small additive edits
   - the GOAL request against a mock server, and its fallback;
   - every bundled preset decoding and completing.
 - **Risks:** the automatic resume writes a target version while you're not looking. It's the one exception to "targets never change on their own", and accepting the break agrees to it.
-- **Parallel:** with M16.
+- **Parallel:** none; it runs before M20.
 
-#### M18: lb and in
+#### M20: lb and in
 
-*PR-05; PRD §12.14; no Room change.*
+*PR-05; PRD §12.16; no Room change.*
 - **Scope:** the shared formatters take the unit; steppers and typed entry convert at the edge; lb steps for lifts; height in feet and inches.
 - **Tests:** kg ↔ lb round trips on stored grams (225 lb is 102,058 g and shows as 225.0 lb); lb steps on the engine's integer grams; rounding only at display.
 - **Risks:** it touches every screen with a weight or a length, so it runs alone and last.
@@ -1193,12 +1251,12 @@ Parallel milestones share only the registration files, with small additive edits
 | Logging fatigue | Saved meals, copy day, quick add, AI logging. Targets judged on weekly averages. |
 | Data loss | Per-set writes, mandatory migration tests, auto-backup, round-trip test. |
 | The engine progresses too fast in a deficit | Conservative defaults, deficit-aware stall window, everything overridable. Retune after 4 weeks of real data. |
-| Scope creep | The P0 list is the MVP. Nothing from P1 starts until the MVP has been used daily for 2 weeks (see *When code starts* in §10's v1.1 plan). |
+| Scope creep | The P0 list is the MVP. The rule that nothing from P1 starts until the MVP has been used daily for 2 weeks was waived on 2026-10-18: v1.1 is built while the MVP is dogfooded, and dogfood fixes go first. |
 | v1.1 builds upgrade the app you use every day | A backup before any schema change, installs only along `main`'s chain of Room versions, a shared install ledger, and invented data in a separate dev install (§10, v1.1 plan). |
 | Parallel milestones collide | Two at a time, only in the planned waves; fixed Room versions; shared registration files only; rebase before the PR and before the phone check (§10). |
-| Recognition libraries phone home (ML Kit sends usage metrics to Google) | Open-source recognisers, or a changed and disclosed §7 (PRD §12.11). |
-| Photos make backups too big for the import's 16 MB budget | Photos stream as separate zip entries with a per-file cap, and are off by default in exports (M14). |
-| Health Connect access is off in the writing apps | M11's setup screen says which app to change and how; every feature works without Health Connect. |
+| Recognition libraries phone home (ML Kit sends usage metrics to Google) | Open-source recognisers only (decided 2026-10-18, PRD §12.14). |
+| Photos make backups too big for the import's 16 MB budget | Photos stream as separate zip entries with a per-file cap, and are off by default in exports (M17). |
+| Health Connect access is off in the writing apps | M13's setup screen says which app to change and how; every feature works without Health Connect. |
 
 ## 12. Open technical decisions
 
@@ -1207,4 +1265,5 @@ Parallel milestones share only the registration files, with small additive edits
 3. ~~**Indian food database**~~ *Settled in M3b:* INDB, fetched at build time with diet tags from ingredient codes (§6.4). Open: ask the authors about bundling, and whether a fried-recipe correction exists.
 4. **Package name and app name:** "Recomp" is a placeholder.
 5. **Charts:** stay hand-drawn on Compose `Canvas` as a shared component (M8). Adopt Vico only if a chart needs pan and zoom.
-6. **Text and barcode recognition:** ML Kit, or open-source recognisers such as ZXing and Tesseract (PRD §12.11). To decide before M15.
+6. ~~**Text and barcode recognition**~~ *Settled 2026-10-18:* open source, not ML Kit: ZXing for barcodes, and an on-device text recogniser such as Tesseract, picked after a trial in M18 (PRD §12.14).
+7. **AI providers' structured outputs:** each provider's schema support is confirmed in M7 against its current docs; an OpenAI-compatible server without it falls back to JSON mode plus validation.
