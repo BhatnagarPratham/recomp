@@ -9,7 +9,9 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import app.recomp.domain.nutrition.Goal
+import app.recomp.domain.nutrition.NutritionTargets
 import java.time.LocalDate
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 
 /** Why a target version was written (TRD §4). MANUAL is any change you made in onboarding's review or Settings. */
@@ -35,6 +37,20 @@ data class NutritionTargetEntity(
     @ColumnInfo(name = "created_at") val createdAt: Long,
 )
 
+/** [targets] as a version in force from [effectiveFrom]. */
+fun NutritionTargets.toVersion(goal: Goal, effectiveFrom: LocalDate, reason: TargetReason, now: Long) = NutritionTargetEntity(
+    effectiveFrom = effectiveFrom,
+    goal = goal,
+    kcal = kcal,
+    proteinG = proteinG,
+    fatG = fatG,
+    carbsG = carbsG,
+    tdeeEstimate = tdeeKcal.roundToInt(),
+    bmrKcal = bmrKcal.roundToInt(),
+    reason = reason,
+    createdAt = now,
+)
+
 @Dao
 interface NutritionDao {
     /** The version in force on [date]: the latest one that started on or before it. */
@@ -50,6 +66,12 @@ interface NutritionDao {
 
     @Query("SELECT * FROM nutrition_target ORDER BY effective_from")
     suspend fun all(): List<NutritionTargetEntity>
+
+    @Query("SELECT * FROM nutrition_target ORDER BY effective_from LIMIT 1")
+    suspend fun first(): NutritionTargetEntity?
+
+    @Query("SELECT * FROM nutrition_target WHERE id = :id")
+    suspend fun target(id: Long): NutritionTargetEntity?
 
     /** Replaces a version that starts on the same day (the unique index on effective_from). */
     @Insert(onConflict = OnConflictStrategy.REPLACE)

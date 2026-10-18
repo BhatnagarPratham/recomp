@@ -7,6 +7,7 @@ import app.recomp.domain.persona.Profile
 import java.time.LocalDate
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -181,5 +182,15 @@ class NutritionCalculatorTest {
         // One day before the 30th birthday the age is still 29; on it, vector A exactly.
         assertEquals(29, TargetInputs.from(profile, plan, LocalDate.of(2026, 10, 17)).ageYears)
         assertEquals(recomp, TargetInputs.from(profile, plan, LocalDate.of(2026, 10, 18)))
+    }
+
+    @Test
+    fun `a maintenance estimate replaces BMR times activity, and nothing else changes`() {
+        val t = NutritionCalculator.startingTargets(recomp.copy(maintenanceKcal = 2480.0))
+        assertTargets(t, bmr = 1899, tdee = 2480, adjustment = -523, kcal = 1960, protein = 125, fat = 54, carbs = 243)
+        assertTrue(t.adaptiveTdee)
+        // The formula's own TDEE is still there, for "the formula says 2,610".
+        assertEquals(2611, t.formulaTdeeKcal.roundToInt())
+        assertFalse(NutritionCalculator.startingTargets(recomp).adaptiveTdee)
     }
 }

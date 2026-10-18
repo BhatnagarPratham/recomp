@@ -54,6 +54,7 @@ import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.repo.AiGateView
 import app.recomp.data.repo.AiRepository
+import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.DayLog
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
@@ -94,6 +95,7 @@ class FoodViewModel @Inject constructor(
     private val foods: FoodRepository,
     private val nutrition: NutritionRepository,
     private val ai: AiRepository,
+    private val checkins: CheckinRepository,
     days: DayBoundary,
 ) : ViewModel() {
     /** Today's log date (PR-03), rolling over while the screen is open. */
@@ -108,6 +110,11 @@ class FoodViewModel @Inject constructor(
     val day: StateFlow<DayLog?> = date.flatMapLatest { log.observeDay(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val slots: StateFlow<List<MealSlot>> = log.mealSlots.stateIn(viewModelScope, SharingStarted.Eagerly, MealSlots.DEFAULT)
+
+    /** PRD §12.1: a day you marked incomplete is left out of the 7-day averages and the maintenance estimate. */
+    val incomplete: StateFlow<Boolean> = date.flatMapLatest { checkins.observeFoodIncomplete(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setIncomplete(on: Boolean) = viewModelScope.launch { checkins.setFoodIncomplete(date.value, on) }
 
     /** Drafts offer *Estimate now* only once the gate is READY (AI-02). */
     val gate: StateFlow<AiGateView?> = ai.gate.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -189,6 +196,7 @@ fun FoodScreen(
     val date by viewModel.date.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val slots by viewModel.slots.collectAsStateWithLifecycle()
+    val incomplete by viewModel.incomplete.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var editing by remember { mutableStateOf<Editing?>(null) }
@@ -244,11 +252,21 @@ fun FoodScreen(
                     ) { Text("›", style = MaterialTheme.typography.headlineSmall) }
                     OverflowMenu("Day options") { close ->
                         MenuItem("Copy from another day") { close(); copying = CopyTarget(null) }
+                        MenuItem(if (incomplete) "Mark day as complete" else "Mark day as incomplete") { close(); viewModel.setIncomplete(!incomplete) }
                         if (date != today) MenuItem("Go to today") { close(); viewModel.goTo(today) }
                     }
                 }
             }
             val d = day ?: return@LazyColumn
+            if (incomplete) {
+                item {
+                    Text(
+                        "Marked incomplete: this day is left out of your 7-day averages and maintenance estimate.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             item { SummaryCard(d) }
             items(d.meals, key = { it.slot.key }) { meal ->
                 MealCard(

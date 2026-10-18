@@ -65,6 +65,7 @@ import app.recomp.ui.components.formatDayStart
 import app.recomp.ui.setup.ExtraEditor
 import app.recomp.ui.setup.WalkthroughCard
 import app.recomp.ui.setup.description
+import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
@@ -478,6 +479,7 @@ private fun LazyListScope.targetsStep(ui: OnboardingUi, vm: OnboardingViewModel)
             policy = policy,
             before = ui.before.takeIf { ui.mode == FlowMode.GOAL },
             onOverride = vm::setOverrides,
+            estimateWeek = ui.maintenance?.weekStart,
         )
     }
     item { Text(GoalText.NOT_MEDICAL_ADVICE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -489,10 +491,18 @@ private fun LazyListScope.guardrailNotes(notes: List<GuardrailNote>) {
 
 /**
  * Calories, protein, fat and carbs, each with where it came from (PR-02). Tapping one of the first three
- * sets your own value; carbs always fill the rest. [before] shows a Settings change's old numbers.
+ * sets your own value; carbs always fill the rest. [before] shows a Settings change's old numbers; [estimateWeek] is
+ * the check-in whose maintenance estimate the targets use (TRD §5.4).
  */
 @Composable
-fun TargetList(targets: NutritionTargets, policy: GoalPolicy, before: NutritionTargetEntity?, onOverride: (TargetOverrides) -> Unit) {
+fun TargetList(
+    targets: NutritionTargets,
+    policy: GoalPolicy,
+    before: NutritionTargetEntity?,
+    onOverride: (TargetOverrides) -> Unit,
+    estimateWeek: LocalDate? = null,
+    kcalNote: String? = null,
+) {
     var editing by remember { mutableStateOf<String?>(null) }
     val o = targets.overrides
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -500,7 +510,7 @@ fun TargetList(targets: NutritionTargets, policy: GoalPolicy, before: NutritionT
         TargetRow("Protein", "${targets.proteinG} g", before?.proteinG?.let { "$it g" }, GoalText.protein(targets), o.proteinG != null, { editing = "protein" }) {
             onOverride(o.copy(proteinG = null))
         }
-        TargetRow("Calories", GoalText.kcal(targets.kcal), before?.kcal?.let(GoalText::kcal), GoalText.calories(targets, policy), o.kcal != null, { editing = "kcal" }) {
+        TargetRow("Calories", GoalText.kcal(targets.kcal), before?.kcal?.let(GoalText::kcal), GoalText.calories(targets, policy, estimateWeek), o.kcal != null, { editing = "kcal" }, note = kcalNote) {
             onOverride(o.copy(kcal = null))
         }
         TargetRow("Fat", "${targets.fatG} g", before?.fatG?.let { "$it g" }, GoalText.fat(targets), o.fatG != null, { editing = "fat" }) {
@@ -529,7 +539,16 @@ fun TargetList(targets: NutritionTargets, policy: GoalPolicy, before: NutritionT
 }
 
 @Composable
-private fun TargetRow(label: String, value: String, was: String?, why: String, overridden: Boolean, onEdit: (() -> Unit)?, onReset: () -> Unit) {
+private fun TargetRow(
+    label: String,
+    value: String,
+    was: String?,
+    why: String,
+    overridden: Boolean,
+    onEdit: (() -> Unit)?,
+    note: String? = null,
+    onReset: () -> Unit,
+) {
     val content: @Composable () -> Unit = {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -538,6 +557,7 @@ private fun TargetRow(label: String, value: String, was: String?, why: String, o
                 Text(value, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             }
             Text(why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary) }
             if (overridden) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Set by you", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.weight(1f))

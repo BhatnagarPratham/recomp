@@ -9,6 +9,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -30,6 +31,8 @@ import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.body.BodyScreen
 import app.recomp.ui.body.ScanScreen
+import app.recomp.ui.checkin.CheckinScreen
+import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -50,6 +53,7 @@ import app.recomp.ui.train.TrainScreen
 import app.recomp.ui.workout.SummaryScreen
 import app.recomp.ui.workout.WorkoutScreen
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -65,6 +69,9 @@ import kotlinx.serialization.Serializable
 
 /** A scan's form (IB-01); 0 is a new scan. */
 @Serializable data class ScanRoute(val scanId: Long = 0)
+
+/** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
+@Serializable data class CheckinRoute(val weekStart: String)
 
 @Serializable data object SettingsRoute
 
@@ -159,13 +166,16 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<TodayRoute> {
-                TodayScreen(
-                    onOpenWorkout = nav::openWorkout,
-                    onOpenSummary = { nav.navigate(SummaryRoute(it)) },
-                    onOpenFood = { nav.openTopLevel(FoodRoute) },
-                    onOpenBody = { nav.openTopLevel(BodyRoute) },
-                )
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                    TodayScreen(
+                        onOpenWorkout = nav::openWorkout,
+                        onOpenSummary = { nav.navigate(SummaryRoute(it)) },
+                        onOpenFood = { nav.openTopLevel(FoodRoute) },
+                        onOpenBody = { nav.openTopLevel(BodyRoute) },
+                    )
+                }
             }
+            composable<CheckinRoute> { CheckinScreen(onBack = { nav.popBackStack() }) }
             composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
@@ -200,14 +210,16 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<SettingsRoute> {
-                SettingsScreen(
-                    onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
-                    onOpenTraining = { nav.navigate(SetupRoute) },
-                    onOpenDev = { nav.navigate(DevRoute) },
-                    onOpenMeals = { nav.navigate(MealSlotsRoute) },
-                    onOpenPortions = { nav.navigate(PortionSizesRoute) },
-                    onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
-                )
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                    SettingsScreen(
+                        onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
+                        onOpenTraining = { nav.navigate(SetupRoute) },
+                        onOpenDev = { nav.navigate(DevRoute) },
+                        onOpenMeals = { nav.navigate(MealSlotsRoute) },
+                        onOpenPortions = { nav.navigate(PortionSizesRoute) },
+                        onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
+                    )
+                }
             }
             composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
@@ -325,6 +337,9 @@ private fun NavHostController.openTopLevel(route: Any) = navigate(route) {
     launchSingleTop = true
     restoreState = true
 }
+
+/** A week's check-in (PRD §12.1), from Today's card or Settings. */
+private fun NavHostController.openCheckin(weekStart: LocalDate) = navigate(CheckinRoute(weekStart.toString())) { launchSingleTop = true }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */
 private fun NavHostController.backToHome() {

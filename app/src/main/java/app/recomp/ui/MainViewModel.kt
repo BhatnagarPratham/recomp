@@ -6,6 +6,7 @@ import app.recomp.data.backup.BackupManager
 import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.food.FoodSeeder
+import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
@@ -48,6 +49,7 @@ class MainViewModel @Inject constructor(
     personas: PersonaRepository,
     foodSeeder: FoodSeeder,
     backups: BackupManager,
+    checkins: CheckinRepository,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -77,7 +79,11 @@ class MainViewModel @Inject constructor(
     }
 
     init {
-        viewModelScope.launch { _restoreNotice.value = backups.finishPendingRestore() }
+        viewModelScope.launch {
+            _restoreNotice.value = backups.finishPendingRestore()
+            // Weeks that ended while the app was closed, against the data as the restore left it (PRD §12.1).
+            checkins.catchUp()
+        }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
     }

@@ -33,8 +33,10 @@ import kotlinx.serialization.json.Json
         BodyCompositionEntity::class,
         BodyWeightEntity::class,
         MeasurementEntity::class,
+        WeeklyCheckinEntity::class,
+        DailyActivityEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -48,6 +50,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun savedMealDao(): SavedMealDao
     abstract fun aiDao(): AiDao
     abstract fun bodyDao(): BodyDao
+    abstract fun checkinDao(): CheckinDao
     abstract fun backupCheckDao(): BackupCheckDao
 
     companion object {
@@ -59,6 +62,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_4_5,
             Migrations.MIGRATION_5_6,
             Migrations.MIGRATION_6_7,
+            Migrations.MIGRATION_7_8,
         )
     }
 }

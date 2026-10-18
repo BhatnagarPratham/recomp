@@ -9,6 +9,7 @@ import androidx.room.Room
 import app.recomp.data.db.AiDao
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyDao
+import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
@@ -71,6 +72,9 @@ object DatabaseModule {
 
     @Provides
     fun provideBodyDao(db: AppDatabase): BodyDao = db.bodyDao()
+
+    @Provides
+    fun provideCheckinDao(db: AppDatabase): CheckinDao = db.checkinDao()
 
     @Provides
     @Singleton

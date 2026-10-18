@@ -155,6 +155,9 @@ interface FoodLogDao {
     @Query("SELECT log_date, SUM(kcal) AS kcal, SUM(protein_g) AS protein_g FROM food_log WHERE log_date BETWEEN :from AND :to GROUP BY log_date")
     fun observeIntake(from: LocalDate, to: LocalDate): Flow<List<DayIntakeRow>>
 
+    @Query("SELECT log_date, SUM(kcal) AS kcal, SUM(protein_g) AS protein_g FROM food_log WHERE log_date BETWEEN :from AND :to GROUP BY log_date")
+    suspend fun intake(from: LocalDate, to: LocalDate): List<DayIntakeRow>
+
     /** The days before [before] with food logged, newest first (NU-13's copy). */
     @Query(
         """

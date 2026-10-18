@@ -204,4 +204,20 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_measurement_type_log_date` ON `measurement` (`type`, `log_date`)")
         }
     }
+
+    /** M5, weekly check-in: one row per week, and per-day facts starting with incomplete food days. SQL from schemas/8.json. */
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `weekly_checkin` (`week_start` TEXT NOT NULL, `computed_at` INTEGER NOT NULL, " +
+                    "`window_days` INTEGER NOT NULL, `logged_days` INTEGER NOT NULL, `weigh_ins` INTEGER NOT NULL, `kcal_mean` REAL, " +
+                    "`trend_start_g` INTEGER, `trend_end_g` INTEGER, `tdee_obs` INTEGER, `tdee_prev` INTEGER NOT NULL, `tdee_new` INTEGER NOT NULL, " +
+                    "`flag` TEXT, `proposed_kcal` INTEGER, `decision` TEXT NOT NULL, `decided_at` INTEGER, `target_id` INTEGER, PRIMARY KEY(`week_start`))",
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `daily_activity` (`log_date` TEXT NOT NULL, `food_incomplete` INTEGER NOT NULL, `steps` INTEGER, " +
+                    "`steps_synced_at` INTEGER, `sleep_hours` REAL, PRIMARY KEY(`log_date`))",
+            )
+        }
+    }
 }

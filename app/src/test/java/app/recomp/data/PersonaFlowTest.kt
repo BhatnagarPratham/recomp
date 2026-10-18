@@ -1,7 +1,10 @@
 package app.recomp.data
 
+import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.TargetReason
+import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.repo.ExtraDraft
+import app.recomp.data.repo.MaintenanceEstimate
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.TrainingSetup
 import app.recomp.domain.model.SessionKind
@@ -26,6 +29,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -220,5 +224,47 @@ class PersonaFlowTest {
         app.nutrition.lockRampBaseline()
         assertEquals(RampState(today()), app.prefs.ramp.first())
         assertNotNull(app.nutrition.observeToday().first())
+    }
+
+    @Test
+    fun `once a check-in has an estimate, Settings' targets use it as maintenance, whatever was decided`() = runBlocking {
+        onboard()
+        assertNull(personas.maintenance())
+        assertFalse(personas.preview(profile = vectorA().copy(weightKg = 93.0)).after.adaptiveTdee)
+
+        // A kept week with an estimate, then a week without enough data, which carries it forward.
+        val week = today().minusWeeks(2).with(DayOfWeek.MONDAY)
+        val checkins = app.db.checkinDao()
+        checkins.upsert(
+            WeeklyCheckinEntity(
+                weekStart = week, computedAt = 1, windowDays = 21, loggedDays = 20, weighIns = 21, kcalMean = 2100.0,
+                tdeeObs = 2300, tdeePrev = 2611, tdeeNew = 2461, decision = CheckinDecision.KEPT, decidedAt = 2,
+            ),
+        )
+        checkins.upsert(WeeklyCheckinEntity(weekStart = week.plusWeeks(1), computedAt = 3, windowDays = 21, loggedDays = 9, weighIns = 12, tdeePrev = 2461, tdeeNew = 2461))
+        assertEquals(MaintenanceEstimate(2461, week), personas.maintenance())
+        assertEquals(MaintenanceEstimate(2461, week), personas.maintenance.first())
+
+        // 93 kg: BMR 1,879 stays the formula's, and the floor with it; TDEE is the estimate.
+        val preview = personas.preview(profile = vectorA().copy(weightKg = 93.0))
+        assertEquals(MaintenanceEstimate(2461, week), preview.maintenance)
+        assertTrue(preview.after.adaptiveTdee)
+        assertEquals(2461.0, preview.after.tdeeKcal, 0.0)
+        assertEquals(1879, preview.after.bmrKcal.roundToInt())
+        assertEquals(2583, preview.after.formulaTdeeKcal.roundToInt())
+        // 2,461 − 511.5 for 0.5% of 93 kg a week.
+        assertEquals(1950, preview.after.kcal)
+
+        personas.save(profile = vectorA().copy(weightKg = 93.0))
+        val row = dao.targetOn(today())!!
+        assertEquals(TargetReason.MANUAL, row.reason)
+        assertEquals(1950, row.kcal)
+        assertEquals(2461, row.tdeeEstimate)
+        assertEquals(1879, row.bmrKcal)
+        // The display uses it too, and the formula stays the default elsewhere.
+        val p = app.prefs.profile.first()!!
+        val plan = app.prefs.currentPersona().goal!!.toPlan()
+        assertEquals(1950, personas.targetsFor(p, plan, TargetOverrides(), today(), personas.maintenance()).kcal)
+        assertEquals(2583, personas.targetsFor(p, plan, TargetOverrides(), today()).tdeeKcal.roundToInt())
     }
 }

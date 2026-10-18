@@ -10,6 +10,7 @@ import app.recomp.domain.persona.GuardrailNote
 import app.recomp.ui.components.Labels
 import java.text.NumberFormat
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.abs
@@ -106,14 +107,31 @@ object GoalText {
 
     // Where each number came from (PR-02)
 
-    fun calories(t: NutritionTargets, policy: GoalPolicy): String {
+    /**
+     * Settings shows what a change would save (TRD §5.4), which can differ from the target in force: while a check-in
+     * proposal waits, after *Keep*, or after an *Adjust*. Null when they agree.
+     */
+    fun inForceNote(computedKcal: Int, inForceKcal: Int?, checkinWaiting: Boolean): String? {
+        if (inForceKcal == null || inForceKcal == computedKcal) return null
+        return "Today's target is ${kcal(inForceKcal)} until you " + if (checkinWaiting) "answer the check-in or change something here." else "change something here."
+    }
+
+    private fun tens(kcal: Double): Int = (kcal / 10).roundToInt() * 10
+
+    /** [estimateWeek] is the check-in week whose maintenance estimate set TDEE (TRD §5.4), when [t] uses one. */
+    fun calories(t: NutritionTargets, policy: GoalPolicy, estimateWeek: LocalDate? = null): String {
         val set = t.overrides.kcal
         if (set != null) return if (set < t.floorKcal) "Set by you, raised to your safety floor of ${kcal(t.floorKcal)}." else "Set by you."
         val bmr = when (t.bmrFormula) {
             BmrFormula.MIFFLIN_ST_JEOR -> "${kcal(t.bmrKcal)} at rest (Mifflin-St Jeor, from your sex, age, height and weight)"
             BmrFormula.KATCH_MCARDLE -> "${kcal(t.bmrKcal)} at rest (Katch-McArdle, from your scan's lean mass)"
         }
-        val base = "Maintenance is about ${kcal(t.tdeeKcal)}: $bmr × ${t.activityFactor} for your activity."
+        val base = if (t.adaptiveTdee) {
+            val from = estimateWeek?.let { " from your check-in of ${it.format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault()))}" } ?: " from your check-ins"
+            "Maintenance is about ${kcal(tens(t.tdeeKcal))},$from (the formula says ${n(tens(t.formulaTdeeKcal))})."
+        } else {
+            "Maintenance is about ${kcal(t.tdeeKcal)}: $bmr × ${t.activityFactor} for your activity."
+        }
         val adj = t.energyAdjustmentKcal
         val goal = when {
             adj < 0 -> " Your goal takes off ${kcal(-adj)} a day for ${rateLabel(policy)}" + (if (t.adjustmentCapped) ", capped at 25% of maintenance." else ".")

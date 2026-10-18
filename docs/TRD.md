@@ -134,7 +134,17 @@ saved_meal_item     id, saved_meal_id, position, food_id?, name, quantity, unit_
 nutrition_target    id, effective_from (unique: one version per day), goal, kcal, protein_g, fat_g, carbs_g,
                     tdee_estimate, bmr_kcal, reason(INITIAL|CHECKIN|MANUAL), created_at
                                           -- protein_g is the full target; the ramp (§5.3) is applied on read
-daily_activity      log_date (PK), steps?, steps_synced_at?, sleep_hours?   -- steps from HC, sleep typed in
+weekly_checkin      week_start (PK, the Monday), computed_at, window_days, logged_days, weigh_ins,
+                    kcal_mean?, trend_start_g?, trend_end_g?, tdee_obs?, tdee_prev, tdee_new,
+                    flag?(LOSS_SLOW|FLAT|DRIFT|GAIN_SLOW|GAIN_FAST), proposed_kcal?,
+                    decision(PENDING|ACCEPTED|ADJUSTED|KEPT|LAPSED), decided_at?, target_id?
+                                          -- NU-05 (§5.4): one row per week; decided rows are frozen;
+                                          -- target_id is the version Accept or Adjust wrote (a same-day change replaces it);
+                                          -- flag and proposed_kcal use the goal and body data as they were when the week was
+                                          -- computed: weeks caught up together are judged by that day's goal, and the ones that
+                                          -- close in the same catch-up keep no proposal
+daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
+                                          -- food_incomplete from the Food tab's day menu (M5); steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
                     status (§6.2), latency_ms, response_json?   -- AI-03 spend + debugging; tokens summed over every attempt;
@@ -159,8 +169,8 @@ A stored JSON value that no longer decodes (for example one saved by a newer bui
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
-- New tables: `weekly_checkin` (M5), `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
-- New columns: `daily_activity.food_incomplete` (M5, which creates the table), `session_exercise.superset_group` (M6), `ai_request_log.provider` (M7), `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13).
+- New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
+- New columns: `session_exercise.superset_group` (M6), `ai_request_log.provider` (M7), `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13).
 - New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
@@ -772,7 +782,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M3b: Food logging** | The INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. | NU-10 to NU-16 |
 | **M3c: AI logging** | `AiGate` with AI Describe it, drafts and the spend cap. | NU-17, AI P0 |
 | **M4: Body, Today and data** ✅ | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
-| **M5: Weekly check-in** | Adaptive maintenance estimate, the weekly check-in with per-goal flags and a proposed target, incomplete days (Room v8) | NU-05, GL-08 (flags) |
+| **M5: Weekly check-in** ✅ | Adaptive maintenance estimate, the weekly check-in with per-goal flags and a proposed target, incomplete days (Room v8) | NU-05, GL-08 (flags) |
 | **M6: In the gym** | Supersets, warm-up suggestions, assisted exercises, RIR-aware jumps, substitutes (Room v9) | RT-05, WL-11, WL-09 (assisted), PO-08, EX-04 |
 | **M7: AI providers** | Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint, each with its own key (Room v10) | AI-05 |
 | **M8: Weekly review** | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
@@ -974,6 +984,7 @@ Parallel milestones share only the registration files, with small additive edits
   daily_activity  log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
                                         -- §4's planned table plus the flag; M13 adds sleep_source in its own migration
   ```
+  - Setting `checkin_seen`: the Monday of the latest check-in you opened, so Today's card goes once it's seen. It's in `settings` and exported with the rows it refers to, and an import refuses one that isn't a date.
   - `tdee_prev` is the previous row's `tdee_new`, or for the first check-in the `tdee_estimate` of the target in force.
   - A decided row is frozen. A pending one is recomputed when opened, so late logging counts.
   - The window is 21 days when the primary source has 10 or more weigh-ins in it, else 28 days with at least 4 (§5.4).
@@ -988,6 +999,48 @@ Parallel milestones share only the registration files, with small additive edits
   - A real proposal needs 21 days of data, so the phone check of proposals uses a dev install with invented data.
   - `inDeficit` stays on the target row's TDEE (§5.1). An accepted check-in refreshes it.
 - **Parallel:** with M6.
+
+**M5 results (2026-10-18, reference phone on Android 15, release build over M4 data).** Built as §5.4 and PRD §12.1 describe, with these choices where they left room:
+- **A calorie override you set** stays on *Accept*; *Use the new target* (shown only when you have one) resets it; *Adjust* sets the calories itself, so it replaces the override, and the screen says so.
+- **A pending week is recomputed** one last time before it lapses, so food logged late still counts in the estimate the next week starts from.
+- **Catch-up runs** at launch (after any unfinished import), after an import, whenever Today's log date changes, and before a check-in opens. So a Monday that starts while the app is open computes the week too, and an older pending week lapses rather than being answered from a stale estimate.
+- **The guardrails apply as in Settings** (PRD §4.9): every week is judged and proposed with the stored goal after `Guardrails.apply` at the trend weight. *Accept* writes the guarded goal and stores it, as a Settings save does, and the screen shows the note.
+- **A clock that ran ahead:** catch-up drops unanswered rows (pending, or lapsed by the app) for weeks that haven't ended *and* that were computed later than now. It keeps your answers, and reopens the week those rows had lapsed. A log date that only moves back, e.g. "day starts at" changed on a Monday morning, leaves every row as it was.
+- **One answer at a time:** the buttons wait while an answer saves. A second tap is refused quietly, because the screen already shows the first answer. A failure after the target is saved says so rather than "unchanged".
+- **Settings → Calories** shows what a change would save. When that differs from today's target, as it does while a proposal waits or after *Keep* or *Adjust*, it says "Today's target is 2,000 kcal until you answer the check-in or change something here".
+
+Tests cover:
+- `:domain`:
+  - `AdaptiveTdee` on a simulated body with a known TDEE: daily and weekly weighing, gaps in both, steady under-logging (the deficit against logged calories is still the real one), the 80% rule on both windows, incomplete days, the window choice, the clamp, and the gap stored on each row.
+  - An early water drop of 1.5 kg reads as up to about 260 kcal of extra burn. The half step keeps the estimate's peak lower and later, and it's gone once the drop leaves the window.
+  - A trend only four weeks old still lags, so a new user's first estimate reads up to about 150 kcal low.
+  - `CheckinFlags`: each flag at its edges, and rates, the 4-week change and waist pairs from weigh-ins.
+  - `CheckinProposal`: TRD §5.3 vector A's inputs at a new estimate, the floor, the 50 kcal rule, overrides, and the *Adjust* range. It always takes in the proposal, checked for every goal and pace at every maintenance from 1,200 to 3,600.
+- Repository:
+  - catch-up in order, the day boundary, and catch-up on open;
+  - the estimate's chain, frozen rows, recompute on open, and lapse;
+  - proposals only on weeks that could be seen;
+  - a clock that ran ahead and came back, and a log date that moved back across Monday midnight;
+  - Today's card;
+  - *Accept*, *Use the new target*, *Adjust* (clamped) and *Keep*;
+  - two answers at once, and settings that fail after the save;
+  - the decision's log date;
+  - the guardrails: the review's probe of a cut at BMI 18.48 is judged as Maintain with no deficit, and an accepted Maintain proposal writes and stores Maintain;
+  - incomplete days in the estimate and in Today's average, keeping the day's other columns;
+  - Settings' targets from the latest estimate, including a kept week's and past a later week without one.
+- Migrations: 7→8, and 6→7→8 in one open.
+- Backup: the round trip with both new tables and `checkin_seen`, and a bad `checkin_seen` refused.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M4 | ✅ A backup was exported first (Settings → Data). The release build installed over the M4 (v7) data and migration 7→8 ran: Today opened with the targets intact, and the Food tab's day menu had *Mark day as incomplete*. The first real check-in comes the Monday after the first full week. |
+| Check-in with six weeks of invented data | ✅ Checked in a separate debug install (`app.recomp.m5dev`, uninstalled afterwards). Launch caught up five weeks. The first two had too little food for an estimate, and the two days marked incomplete were left out of the next ones (20, 19 and 19 of 21 logged). The estimate went 2,460 → 2,376 → 2,335 → 2,318 kcal, and the recomp's flag fired. Today's card read "Week of 5 Oct · a new target to look at". The screen read "About 2,320 kcal a day, from 21 days of food and weigh-ins (the formula said 2,430)" and "Lower your target to 1,870 kcal (now 2,000)". <!-- pii-ok: invented dev-install values --> |
+| Answers | ✅ *Adjust* stopped at the 1,770 floor and saved 1,820 as a check-in version carrying the new estimate. *Use the new target*, with a 2,100 override, saved 1,870 and removed the override. *Keep* left the target alone. <!-- pii-ok: invented dev-install values --> |
+| Settings | ✅ Settings → Targets → Calories read "Maintenance is about 2,320 kcal, from your check-in of 5 Oct (the formula says 2,460)". The *Weekly check-in* row opened the check-in, and after *Accept*, Settings and Today both showed 1,870. <!-- pii-ok: invented dev-install values --> |
+| Incomplete days | ✅ The Food tab's day menu marked a day incomplete and back, with its note. |
+| Fixed during the phone run | The outlined buttons had no visible border on the tinted proposal card, and the Settings row's long value squeezed its title onto one letter per line. Both fixed and re-checked. |
+| Review fixes | A fresh-session review of #10 found 0 blockers, 3 should-fix and 6 nits, all fixed with tests: the guardrails, the answer flow, catch-up triggers, the *Adjust* range, the decision date, a changed goal's verdict, the incomplete-day write, proposals on caught-up weeks, and the clock. |
+| Not run on the phone | A real check-in, because the first week ends after the install. Lapse and catch-up over real weeks. Settings' note when its number differs from today's target, and the review fixes: the phone was unplugged. The tests cover them. |
 
 #### M6: In the gym
 

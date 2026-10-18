@@ -66,6 +66,12 @@ interface BackupCheckDao {
 
     @Query("SELECT * FROM measurement")
     suspend fun measurement(): List<MeasurementEntity>
+
+    @Query("SELECT * FROM weekly_checkin")
+    suspend fun weeklyCheckin(): List<WeeklyCheckinEntity>
+
+    @Query("SELECT * FROM daily_activity")
+    suspend fun dailyActivity(): List<DailyActivityEntity>
 }
 
 /** Every table's reader, by table name. */
@@ -89,4 +95,6 @@ fun BackupCheckDao.readers(): Map<String, suspend () -> List<Any>> = mapOf(
     "body_composition" to { bodyComposition() },
     "body_weight" to { bodyWeight() },
     "measurement" to { measurement() },
+    "weekly_checkin" to { weeklyCheckin() },
+    "daily_activity" to { dailyActivity() },
 )
