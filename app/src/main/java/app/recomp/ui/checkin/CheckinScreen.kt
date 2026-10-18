@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -176,7 +175,8 @@ private fun CheckinContent(v: CheckinView, viewModel: CheckinViewModel) {
 private fun ProposalCard(v: CheckinView, proposedKcal: Int, range: IntRange, viewModel: CheckinViewModel) {
     var adjusting by remember { mutableStateOf<Int?>(null) }
     var typing by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+    // The default card, so the outlined buttons keep a visible border in both themes.
+    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(CheckinText.proposal(proposedKcal, v.current.kcal), style = MaterialTheme.typography.titleMedium)
             Text("Saves a new target from today, at the new maintenance estimate.", color = MaterialTheme.colorScheme.onSurfaceVariant)

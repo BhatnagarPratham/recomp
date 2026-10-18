@@ -53,6 +53,7 @@ import app.recomp.ui.train.TrainScreen
 import app.recomp.ui.workout.SummaryScreen
 import app.recomp.ui.workout.WorkoutScreen
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -165,7 +166,7 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<TodayRoute> {
-                CompositionLocalProvider(LocalOpenCheckin provides { nav.navigate(CheckinRoute(it.toString())) { launchSingleTop = true } }) {
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
                     TodayScreen(
                         onOpenWorkout = nav::openWorkout,
                         onOpenSummary = { nav.navigate(SummaryRoute(it)) },
@@ -209,14 +210,16 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<SettingsRoute> {
-                SettingsScreen(
-                    onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
-                    onOpenTraining = { nav.navigate(SetupRoute) },
-                    onOpenDev = { nav.navigate(DevRoute) },
-                    onOpenMeals = { nav.navigate(MealSlotsRoute) },
-                    onOpenPortions = { nav.navigate(PortionSizesRoute) },
-                    onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
-                )
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                    SettingsScreen(
+                        onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
+                        onOpenTraining = { nav.navigate(SetupRoute) },
+                        onOpenDev = { nav.navigate(DevRoute) },
+                        onOpenMeals = { nav.navigate(MealSlotsRoute) },
+                        onOpenPortions = { nav.navigate(PortionSizesRoute) },
+                        onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
+                    )
+                }
             }
             composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
@@ -334,6 +337,9 @@ private fun NavHostController.openTopLevel(route: Any) = navigate(route) {
     launchSingleTop = true
     restoreState = true
 }
+
+/** A week's check-in (PRD §12.1), from Today's card or Settings. */
+private fun NavHostController.openCheckin(weekStart: LocalDate) = navigate(CheckinRoute(weekStart.toString())) { launchSingleTop = true }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */
 private fun NavHostController.backToHome() {

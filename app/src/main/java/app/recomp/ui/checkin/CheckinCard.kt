@@ -22,6 +22,7 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.repo.CheckinRepository
+import app.recomp.ui.settings.SettingRow
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
@@ -32,8 +33,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * Opens a week's check-in. The nav host provides it around Today, so the card needs nothing from Today's own
- * parameters, and later milestones (M8, M11) change the card here without touching `TodayScreen.kt`.
+ * Opens a week's check-in. The nav host provides it around Today and Settings, so neither screen needs a new
+ * parameter, and later milestones (M8, M11) change the card here without touching `TodayScreen.kt`.
  */
 val LocalOpenCheckin = staticCompositionLocalOf<(LocalDate) -> Unit> { {} }
 
@@ -47,6 +48,23 @@ class CheckinCardViewModel @Inject constructor(private val checkins: CheckinRepo
         // starts while Today is open.
         viewModelScope.launch { days.observeToday().collectLatest { checkins.catchUp(it) } }
     }
+}
+
+@HiltViewModel
+class LatestCheckinViewModel @Inject constructor(checkins: CheckinRepository) : ViewModel() {
+    val latest: StateFlow<WeeklyCheckinEntity?> = checkins.observeLatest().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+}
+
+/**
+ * Settings → Targets: the latest check-in, so a proposal you didn't answer can be found again once Today's card
+ * has gone. Nothing shows before the first check-in.
+ */
+@Composable
+fun LatestCheckinRow(viewModel: LatestCheckinViewModel = hiltViewModel()) {
+    val row by viewModel.latest.collectAsStateWithLifecycle()
+    val open = LocalOpenCheckin.current
+    val week = row ?: return
+    SettingRow("Weekly check-in", CheckinText.cardLine(week)) { open(week.weekStart) }
 }
 
 /** Today's *Weekly check-in* card (PRD §12.1). Nothing shows when there's no check-in waiting. */

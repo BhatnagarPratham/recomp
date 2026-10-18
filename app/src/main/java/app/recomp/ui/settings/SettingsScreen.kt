@@ -49,6 +49,7 @@ import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.body.BodyText
+import app.recomp.ui.checkin.LatestCheckinRow
 import app.recomp.ui.components.DateDialog
 import app.recomp.ui.components.DayChips
 import app.recomp.ui.components.TimeDialog
@@ -233,6 +234,7 @@ fun SettingsScreen(
         if (targets != null && plan != null) {
             SectionTitle("Targets")
             TargetList(targets, plan.policy, before = null, onOverride = viewModel::changeOverrides)
+            LatestCheckinRow()
         }
 
         if (profile != null) {
