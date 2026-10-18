@@ -23,10 +23,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import app.recomp.data.backup.PendingOutcome
 import app.recomp.ui.AppNav
 import app.recomp.ui.MainViewModel
 import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
+import app.recomp.ui.body.BodyScreen
+import app.recomp.ui.body.ScanScreen
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -57,6 +60,11 @@ import kotlinx.serialization.Serializable
 @Serializable data object FoodRoute
 
 @Serializable data object TrainRoute
+
+@Serializable data object BodyRoute
+
+/** A scan's form (IB-01); 0 is a new scan. */
+@Serializable data class ScanRoute(val scanId: Long = 0)
 
 @Serializable data object SettingsRoute
 
@@ -97,6 +105,7 @@ private val topLevel = listOf(
     TopLevel("Today", "◉", TodayRoute),
     TopLevel("Food", "◍", FoodRoute),
     TopLevel("Train", "▤", TrainRoute),
+    TopLevel("Body", "⚖", BodyRoute),
     TopLevel("Settings", "⚙", SettingsRoute),
 )
 
@@ -154,8 +163,11 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenWorkout = nav::openWorkout,
                     onOpenSummary = { nav.navigate(SummaryRoute(it)) },
                     onOpenFood = { nav.openTopLevel(FoodRoute) },
+                    onOpenBody = { nav.openTopLevel(BodyRoute) },
                 )
             }
+            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
+            composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
                 FoodScreen(
@@ -224,6 +236,29 @@ fun RecompNavHost(main: MainViewModel) {
 
     val unreadable by main.unreadable.collectAsStateWithLifecycle()
     if (unreadable.isNotEmpty()) UnreadableDialog(unreadable, onDismiss = main::dismissUnreadable)
+
+    val restored by main.restoreNotice.collectAsStateWithLifecycle()
+    restored?.let { RestoreNoticeDialog(it, onDismiss = main::dismissRestoreNotice) }
+}
+
+/** An import that was interrupted last time (TRD §6.5): finished now, or it never changed anything. */
+@Composable
+private fun RestoreNoticeDialog(outcome: PendingOutcome, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (outcome == PendingOutcome.NOT_APPLIED) "The last import didn't happen" else "Finishing the last import") },
+        text = {
+            Text(
+                when (outcome) {
+                    PendingOutcome.FINISHED -> "Recomp closed while importing a backup. Its data was already in place, and its settings are now too."
+                    PendingOutcome.NOT_APPLIED -> "Recomp closed while importing a backup, before anything was replaced. Your data and settings are as they were."
+                    PendingOutcome.SETTINGS_FAILED -> "The backup's data is in place, but its settings still couldn't be saved. Recomp tries again next time; " +
+                        "or restore the data from before the import in Settings → Data."
+                },
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
 }
 
 /** Some settings no longer decode (TRD §4). They're kept aside unchanged, and the affected parts are set up again. */
@@ -237,6 +272,7 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
             "protein_ramp" -> "the protein ramp's progress"
             "meal_slots" -> "your meal names"
             "portion_sizes" -> "your portion sizes"
+            "scan_slot" -> "your usual scan slot"
             else -> it
         }
     }

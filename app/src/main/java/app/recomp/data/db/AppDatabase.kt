@@ -30,8 +30,11 @@ import kotlinx.serialization.json.Json
         SavedMealItemEntity::class,
         MealDraftEntity::class,
         AiRequestLogEntity::class,
+        BodyCompositionEntity::class,
+        BodyWeightEntity::class,
+        MeasurementEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -44,6 +47,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun foodLogDao(): FoodLogDao
     abstract fun savedMealDao(): SavedMealDao
     abstract fun aiDao(): AiDao
+    abstract fun bodyDao(): BodyDao
+    abstract fun backupCheckDao(): BackupCheckDao
 
     companion object {
         const val NAME = "recomp.db"
@@ -53,6 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_3_4,
             Migrations.MIGRATION_4_5,
             Migrations.MIGRATION_5_6,
+            Migrations.MIGRATION_6_7,
         )
     }
 }

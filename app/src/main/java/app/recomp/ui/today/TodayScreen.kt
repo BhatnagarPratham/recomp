@@ -37,6 +37,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
+import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.BodyTrend
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PreviewLine
 import app.recomp.data.repo.ProgressionRepository
@@ -47,8 +49,15 @@ import app.recomp.data.repo.TodayNutrition
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
 import app.recomp.domain.nutrition.MainNumber
 import app.recomp.domain.nutrition.ProteinGoal
+import app.recomp.domain.training.RestReason
 import app.recomp.domain.training.WeekProgress
 import app.recomp.domain.training.WeeklyPlan
+import app.recomp.ui.body.BodyEntries
+import app.recomp.ui.body.TrendSummary
+import app.recomp.ui.body.WaistDraft
+import app.recomp.ui.body.WaistSheet
+import app.recomp.ui.body.WeighInDraft
+import app.recomp.ui.body.WeighInSheet
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.extra.ExtraLogSheet
@@ -70,6 +79,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+private data class TodayPlan(
+    val due: List<RoutineEntity>,
+    val other: List<RoutineEntity>,
+    val week: WeekProgress,
+    val rest: RestReason?,
+    val setupDone: Boolean,
+)
+
 data class ActiveCard(val sessionId: Long, val title: String, val startedAt: Long, val setsDone: Int)
 
 data class LastCard(val sessionId: Long, val title: String, val date: LocalDate)
@@ -85,7 +102,12 @@ data class TodayUi(
     val otherExtras: List<RoutineEntity> = emptyList(),
     val week: WeekProgress? = null,
     val last: LastCard? = null,
+    /** HM-01: why today is a rest day, or null when the next routine is up. */
+    val rest: RestReason? = null,
 )
+
+/** Today's weight card (PRD §7.11): the trend, and whether the weekly waist is due. */
+data class TodayBody(val trend: BodyTrend, val waistDue: Boolean)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -94,7 +116,19 @@ class TodayViewModel @Inject constructor(
     private val workouts: WorkoutRepository,
     private val progression: ProgressionRepository,
     nutrition: NutritionRepository,
+    body: BodyRepository,
 ) : ViewModel() {
+    val bodyEntries = BodyEntries(body)
+
+    /** The weight card: trend weight, the week's rate, and *Log waist* once the last one is a week old. */
+    val body: StateFlow<TodayBody?> = combine(body.observeTrend(), body.observeWaist(), workouts.observeToday()) { trend, waist, today ->
+        TodayBody(trend, waist.lastOrNull()?.logDate?.let { !it.isAfter(today.minusDays(7)) } ?: true)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun save(d: WeighInDraft) = viewModelScope.launch { bodyEntries.save(d) }
+
+    fun save(d: WaistDraft) = viewModelScope.launch { bodyEntries.save(d) }
+
     /** GL-07, GL-10: the goal's main number and the 7-day average. */
     val food: StateFlow<TodayNutrition?> = nutrition.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -133,26 +167,28 @@ class TodayViewModel @Inject constructor(
     private val extras = combine(training.settings, training.observeExtras(), week) { settings, extras, (today, week) ->
         val plans = settings.extras.map { it.toPlan() }
         val due = WeeklyPlan.dueToday(today, week, plans).toSet()
-        Triple(
-            extras.filter { it.id in due } to extras.filter { it.id !in due },
-            WeeklyPlan.progress(today, week, settings.strengthDaysPerWeek, plans),
-            settings.setupDone,
+        TodayPlan(
+            due = extras.filter { it.id in due },
+            other = extras.filter { it.id !in due },
+            week = WeeklyPlan.progress(today, week, settings.strengthDaysPerWeek, plans),
+            rest = WeeklyPlan.restDay(today, week, settings.strengthDaysPerWeek),
+            setupDone = settings.setupDone,
         )
     }
 
-    val ui: StateFlow<TodayUi> = combine(active, next, training.observeRotation(), extras, last) { active, next, rotation, extras, last ->
-        val (split, week, setupDone) = extras
+    val ui: StateFlow<TodayUi> = combine(active, next, training.observeRotation(), extras, last) { active, next, rotation, plan, last ->
         TodayUi(
             loaded = true,
-            setupDone = setupDone,
+            setupDone = plan.setupDone,
             active = active,
             next = next.first,
             nextExercises = next.second,
             rotation = rotation,
-            dueExtras = split.first,
-            otherExtras = split.second,
-            week = week,
+            dueExtras = plan.due,
+            otherExtras = plan.other,
+            week = plan.week,
             last = last,
+            rest = plan.rest,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUi())
 
@@ -169,16 +205,23 @@ class TodayViewModel @Inject constructor(
     fun logExtra(routine: RoutineEntity, entry: ExtraEntry) = viewModelScope.launch { workouts.logExtra(routine, entry) }
 }
 
-/** Today (HM-01): the goal's main number, next workout or the active one, extra sessions due, weekly plan progress. */
+/**
+ * Today (HM-01): the goal's main number, the next workout (or a rest day, or the active one), extra sessions
+ * due, the weight card, and weekly plan progress (PRD §7.11).
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TodayScreen(
     onOpenWorkout: (Long) -> Unit,
     onOpenSummary: (Long) -> Unit,
     onOpenFood: () -> Unit,
+    onOpenBody: () -> Unit,
     viewModel: TodayViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val body by viewModel.body.collectAsStateWithLifecycle()
+    var weighIn by remember { mutableStateOf<WeighInDraft?>(null) }
+    var waist by remember { mutableStateOf<WaistDraft?>(null) }
     val food by viewModel.food.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -231,6 +274,8 @@ fun TodayScreen(
                     Button(onClick = { onOpenWorkout(active.sessionId) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Resume") }
                 }
             }
+        } else if (ui.setupDone && ui.rest != null) {
+            RestDayCard(ui, onStart = { start(it) }, onChoose = { choosing = true })
         } else if (ui.setupDone) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -283,6 +328,15 @@ fun TodayScreen(
             }
         }
 
+        body?.let { b ->
+            WeightCard(
+                b,
+                onOpen = onOpenBody,
+                onLogWeight = { scope.launch { weighIn = viewModel.bodyEntries.newWeighIn() } },
+                onLogWaist = { scope.launch { waist = viewModel.bodyEntries.newWaist() } },
+            )
+        }
+
         ui.week?.takeIf { ui.setupDone }?.let { week ->
             val names = (ui.dueExtras + ui.otherExtras).associate { it.id to it.name }
             val parts = listOf("Strength ${week.strengthDays} of ${week.strengthTarget} days") +
@@ -321,6 +375,63 @@ fun TodayScreen(
         ExtraLogSheet(routine, entry, onDismiss = { logging = null }) { saved ->
             logging = null
             viewModel.logExtra(routine, saved)
+        }
+    }
+    weighIn?.let { d ->
+        WeighInSheet(d, onDismiss = { weighIn = null }, onDelete = null) { saved ->
+            weighIn = null
+            viewModel.save(saved)
+        }
+    }
+    waist?.let { d ->
+        WaistSheet(d, onDismiss = { waist = null }, onDelete = null) { saved ->
+            waist = null
+            viewModel.save(saved)
+        }
+    }
+}
+
+/**
+ * HM-01's rest day: today's strength is done, or the week's strength days are. The next routine stays
+ * below it with a smaller *Start anyway*.
+ */
+@Composable
+private fun RestDayCard(ui: TodayUi, onStart: (Long?) -> Unit, onChoose: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Rest day", style = MaterialTheme.typography.titleLarge)
+            val week = ui.week
+            Text(
+                when (ui.rest) {
+                    RestReason.DONE_TODAY -> "Strength done for today."
+                    else -> week?.let { "${it.strengthDays} of ${it.strengthTarget} strength days done this week." } ?: "This week's strength days are done."
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ui.next?.let { next ->
+                Text("${next.name} is next.", style = MaterialTheme.typography.bodyLarge)
+                OutlinedButton(onClick = { onStart(next.id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Start ${next.name} anyway") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (ui.rotation.size > 1) {
+                    TextButton(onClick = onChoose, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Choose another") }
+                }
+                TextButton(onClick = { onStart(null) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Empty workout") }
+            }
+        }
+    }
+}
+
+/** Today's weight card (PRD §7.11): trend weight and the week's rate against the goal's pace. Opens Body. */
+@Composable
+private fun WeightCard(b: TodayBody, onOpen: () -> Unit, onLogWeight: () -> Unit, onLogWaist: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Open Body", onClick = onOpen)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            TrendSummary(b.trend)
+            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onLogWeight, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log weight") }
+                if (b.waistDue) OutlinedButton(onClick = onLogWaist, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log waist") }
+            }
         }
     }
 }

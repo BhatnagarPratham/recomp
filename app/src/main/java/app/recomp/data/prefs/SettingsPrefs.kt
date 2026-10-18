@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SettingsStore
 import app.recomp.domain.ai.AiModel
+import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
 import app.recomp.domain.nutrition.Goal
@@ -48,9 +49,17 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 
-/** An extra session's schedule. [days] are ISO day numbers, Monday = 1. Its name and kind live on the routine. */
+/**
+ * An extra session's schedule. [days] are ISO day numbers, Monday = 1. Its name and kind live on the routine.
+ * The stored classes check their own values, so a value that can't become a plan never decodes: reads treat it
+ * as unreadable (TRD §4) and an import refuses it (§6.5), instead of the app crashing when it's used.
+ */
 @Serializable
 data class ExtraSchedule(val routineId: Long, val days: Set<Int> = emptySet()) {
+    init {
+        require(days.all { it in 1..7 }) { "Weekdays are 1 to 7, not $days" }
+    }
+
     fun toPlan() = ExtraPlan(routineId, days.map(DayOfWeek::of).toSet())
 }
 
@@ -82,6 +91,12 @@ data class StoredGoal(
     @Serializable(with = LocalDateIso::class) val startedOn: LocalDate,
     val aggressiveAcknowledged: Boolean = false,
 ) {
+    init {
+        // GoalPolicy's own rules: rates are magnitudes, and a policy can't both lose and gain.
+        GoalPolicy(goal, lossRatePctPerWeek, surplusFraction, proteinGPerKg)
+        require(proteinGPerKg.isFinite() && proteinGPerKg > 0) { "Protein per kg must be positive" }
+    }
+
     fun toPlan() = GoalPlan(
         policy = GoalPolicy(goal, lossRatePctPerWeek, surplusFraction, proteinGPerKg),
         pace = pace,
@@ -198,6 +213,20 @@ data class AiSettings(
     val noticeSeen: Boolean = false,
 )
 
+/** The usual scan slot (IB-02) as stored under `scan_slot`: an ISO weekday and minutes after midnight. */
+@Serializable
+data class StoredScanSlot(val day: Int, val minutes: Int) {
+    init {
+        require(day in 1..7 && minutes in 0 until 24 * 60) { "No such slot: day $day, minute $minutes" }
+    }
+
+    fun toSlot() = ScanSlot(DayOfWeek.of(day), LocalTime.of(minutes / 60, minutes % 60))
+
+    companion object {
+        fun of(slot: ScanSlot) = StoredScanSlot(slot.day.value, slot.time.hour * 60 + slot.time.minute)
+    }
+}
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -223,6 +252,9 @@ internal object SettingsKeys {
     /** Household measures you calibrated, label → grams (NU-12). Missing labels use the region's defaults. */
     val PORTION_SIZES = stringPreferencesKey("portion_sizes")
 
+    /** IB-02: the usual scan weekday and time. */
+    val SCAN_SLOT = stringPreferencesKey("scan_slot")
+
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
 
@@ -241,6 +273,18 @@ internal object SettingsKeys {
 
     /** Where a value that no longer decodes is kept, untouched, before anything is written over it. */
     fun unreadableCopy(key: Preferences.Key<String>) = stringPreferencesKey("${key.name}_unreadable")
+
+    /**
+     * Settings that never leave the device in an export (TRD §6.5). Secrets live in their own store, never
+     * here; this list and [looksSecret] are the safety net if one ever lands in `settings`.
+     */
+    val NOT_EXPORTED: Set<String> = emptySet()
+
+    private val SECRET_NAME = Regex("(?i)(api[_-]?key|secret|token|password|keyset)")
+
+    fun looksSecret(name: String): Boolean = SECRET_NAME.containsMatchIn(name)
+
+    fun exported(name: String): Boolean = name !in NOT_EXPORTED && !looksSecret(name)
 }
 
 /**
@@ -307,6 +351,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         if (unreadable<StoredRamp>(SettingsKeys.PROTEIN_RAMP)) add(SettingsKeys.PROTEIN_RAMP)
         if (unreadable<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)) add(SettingsKeys.MEAL_SLOTS)
         if (unreadable<Map<String, Double>>(SettingsKeys.PORTION_SIZES)) add(SettingsKeys.PORTION_SIZES)
+        if (unreadable<StoredScanSlot>(SettingsKeys.SCAN_SLOT)) add(SettingsKeys.SCAN_SLOT)
     }
 
     /** Copies each unreadable value aside (once) before a write could replace it with a default. */
@@ -326,7 +371,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     /** PR-03. */
     val dayStart: Flow<LocalTime> = store.data.map { prefs ->
-        prefs[SettingsKeys.DAY_START_MINUTES]?.let { LocalTime.of(it / 60, it % 60) } ?: LogDates.DEFAULT_DAY_START
+        prefs[SettingsKeys.DAY_START_MINUTES]?.takeIf { it in 0 until 24 * 60 }?.let { LocalTime.of(it / 60, it % 60) } ?: LogDates.DEFAULT_DAY_START
     }.distinctUntilChanged()
 
     val overrides: Flow<TargetOverrides> =
@@ -342,6 +387,72 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     /** NU-12: household measures you calibrated. */
     val portionSizes: Flow<Map<String, Double>> =
         store.data.map { it.decode<Map<String, Double>>(SettingsKeys.PORTION_SIZES) ?: emptyMap() }.distinctUntilChanged()
+
+    /** IB-02. Null until set; the first scan sets it. */
+    val scanSlot: Flow<ScanSlot?> =
+        store.data.map { prefs -> prefs.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.let { runCatching { it.toSlot() }.getOrNull() } }.distinctUntilChanged()
+
+    suspend fun setScanSlot(slot: ScanSlot) = store.edit { prefs ->
+        prefs.keepUnreadable()
+        prefs[SettingsKeys.SCAN_SLOT] = settingsJson.encodeToString(StoredScanSlot.of(slot))
+    }
+
+    /**
+     * The settings in [prefs] this version can't use (TRD §6.5): a known key holding the wrong type, JSON that
+     * doesn't decode, or a value out of range. Import refuses a backup with any, so a bad file can't stop the
+     * app from starting.
+     */
+    fun problems(prefs: Preferences): List<String> {
+        val values = prefs.asMap().mapKeys { it.key.name }
+        fun wrongType(key: Preferences.Key<*>, type: kotlin.reflect.KClass<*>) = values[key.name]?.let { !type.isInstance(it) } ?: false
+        fun <T> decodes(key: Preferences.Key<String>, decode: (String) -> T, valid: (T) -> Boolean = { true }): Boolean =
+            (values[key.name] as? String)?.let { text -> runCatching { valid(decode(text)) }.getOrDefault(false) } ?: true
+        val strings = listOf(
+            SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
+            SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
+            SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL,
+        )
+        return buildList {
+            strings.filter { wrongType(it, String::class) }.forEach { add(it.name) }
+            if (wrongType(SettingsKeys.DAY_START_MINUTES, Int::class) || (values[SettingsKeys.DAY_START_MINUTES.name] as? Int)?.let { it !in 0 until 24 * 60 } == true) {
+                add(SettingsKeys.DAY_START_MINUTES.name)
+            }
+            if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
+            if (wrongType(SettingsKeys.AI_MONTHLY_CAP_USD, Double::class)) add(SettingsKeys.AI_MONTHLY_CAP_USD.name)
+            if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
+            // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
+            if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
+                add(SettingsKeys.PERSONA.name)
+            }
+            if (!decodes(SettingsKeys.PROFILE, { settingsJson.decodeFromString<StoredProfile>(it).toProfile() })) add(SettingsKeys.PROFILE.name)
+            if (!decodes(SettingsKeys.TARGET_OVERRIDES, { settingsJson.decodeFromString<StoredOverrides>(it) })) add(SettingsKeys.TARGET_OVERRIDES.name)
+            if (!decodes(SettingsKeys.PROTEIN_RAMP, { settingsJson.decodeFromString<StoredRamp>(it) })) add(SettingsKeys.PROTEIN_RAMP.name)
+            if (!decodes(SettingsKeys.MEAL_SLOTS, { settingsJson.decodeFromString<List<StoredMealSlot>>(it) })) add(SettingsKeys.MEAL_SLOTS.name)
+            if (!decodes(SettingsKeys.PORTION_SIZES, { settingsJson.decodeFromString<Map<String, Double>>(it) })) add(SettingsKeys.PORTION_SIZES.name)
+            if (!decodes(SettingsKeys.SCAN_SLOT, { settingsJson.decodeFromString<StoredScanSlot>(it).toSlot() })) add(SettingsKeys.SCAN_SLOT.name)
+        }.distinct()
+    }
+
+    /** Every setting an export carries (DA-01, TRD §6.5): all of them except the ones that stay on the device. */
+    suspend fun exportable(): Preferences {
+        val all = store.data.first()
+        return all.toMutablePreferences().apply { all.asMap().keys.filter { !SettingsKeys.exported(it.name) }.forEach { remove(it) } }.toPreferences()
+    }
+
+    /**
+     * Replaces every setting with [imported] (TRD §6.5), keeping the ones that never leave the device. Older
+     * backups get the same DataStore migrations an upgraded install does.
+     */
+    suspend fun replaceAll(imported: Preferences) {
+        var incoming = imported.toMutablePreferences().apply { imported.asMap().keys.filter { !SettingsKeys.exported(it.name) }.forEach { remove(it) } }.toPreferences()
+        if (LegacyTrainingMigration.shouldMigrate(incoming)) incoming = LegacyTrainingMigration.migrate(incoming)
+        store.edit { prefs ->
+            val kept = prefs.asMap().filterKeys { !SettingsKeys.exported(it.name) }
+            prefs.clear()
+            prefs += incoming
+            kept.forEach { (key, value) -> @Suppress("UNCHECKED_CAST") prefs[key as Preferences.Key<Any>] = value }
+        }
+    }
 
     suspend fun foodDataVersion(): String? = store.data.first()[SettingsKeys.FOOD_DATA_VERSION]
 

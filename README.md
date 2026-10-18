@@ -15,8 +15,10 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M2: progression: targets for every exercise, live feedback, PRs, stall detection and exercise history.
 > - M3a: personas and targets: presets and onboarding, the goal flow with guardrails, Settings, versioned calorie and macro targets with a protein ramp, and a goal-driven Today screen.
 > - M3b: food logging: a Food tab with meals, search over the Indian Nutrient Databank and protein-rich basics filtered to your diet, custom foods with portion units you can calibrate, saved meals, copy, quick add and origin tags.
+> - M3c: AI meal logging: *Describe it* with your own Claude API key (encrypted on the phone), drafts to estimate later when AI is unreachable, and a monthly spend cap.
+> - M4: body, Today and data: weigh-ins with a smoothed trend from your chosen scale, a weekly waist, body-composition scans with a consistent-conditions check, a Body tab, a Today screen that knows rest days, and export and import of all your data (Settings → Data).
 >
-> AI meal logging (M3c) is next. See the milestones in the TRD.
+> With M4 the MVP is complete. v1.1 is next. See the milestones in the TRD.
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 

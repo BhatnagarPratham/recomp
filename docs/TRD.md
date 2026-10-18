@@ -1,6 +1,6 @@
 # Recomp: Technical Requirements Document
 
-*Draft v0.9, 2026-10-17. Implements [PRD.md](PRD.md) v0.9. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
+*Draft v1.0, 2026-10-18. Implements [PRD.md](PRD.md) v1.0. Requirement IDs (WL-02, PO-05, PS-03…) refer to the PRD.*
 
 ## 1. Scope and constraints
 
@@ -23,7 +23,7 @@
 | Storage | Room (SQLite) for data; DataStore for settings | |
 | Async | Coroutines, Flow | |
 | Background work | WorkManager; a foreground service for the active workout | |
-| Charts | Vico | Compose-native. |
+| Charts | Compose `Canvas` | M4's weight chart is a small hand-drawn chart (dots and a line), so it needs no library. Vico is the candidate when the P1 charts need more. |
 | Health data | Health Connect (`androidx.health.connect:connect-client`) | P1. Steps come from whichever app writes them; §6.3. |
 | On-device OCR | ML Kit Text Recognition v2 | P1. Nutrition labels, without AI. |
 | AI | Anthropic Java SDK (`com.anthropic:anthropic-java`) | Kotlin uses the Java SDK. Builds and passes R8 (M0). Its class-based structured outputs don't work on Android (§6.2). |
@@ -104,12 +104,13 @@ personal_record     id, exercise_id, session_id, type(MAX_LOAD|REPS_AT_LOAD|E1RM
                     achieved_at
 yoga_detail         session_id (PK), style, duration_min, intensity?, focus_areas[], poses[]
                                           -- details for every extra-session kind, not only yoga
-body_weight         id, log_date, weight_g, measured_at, source(INBODY|GYM_SCALE|HOME_SCALE|HEALTH_CONNECT)
+body_weight         id, log_date, measured_at, weight_g, source(HOME_SCALE|SCAN|GYM_SCALE),
+                    scan_id?              -- the scan that recorded it (IB-01); deleted with the scan
 body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CONNECT), weight_g,
                     skeletal_muscle_g, body_fat_g, body_fat_pct, visceral_fat_level, bmr_kcal?,
                     ecw_tbw_ratio?, inbody_score?, segmental_lean_json?,
-                    mins_since_meal, workout_before_scan, protocol_ok, image_path?, notes  -- IB-01/02
-measurement         id, log_date, type(WAIST|CHEST|ARM|THIGH|HIP|MOBILITY_*), value
+                    mins_since_meal, workout_before_scan, mins_from_slot?, protocol_ok, image_path?, notes?  -- IB-01/02
+measurement         id, log_date, measured_at, type(WAIST|CHEST|ARM|THIGH|HIP), value   -- cm; YG-04 adds mobility types
 progress_photo      id, log_date, pose(FRONT|SIDE|BACK), file_path   -- app-private storage
 food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR), barcode?,
                     source_key?           -- unique: "seed:paneer", "indb:ASC001"; ties a row to its bundled file
@@ -147,13 +148,14 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
 - `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
 - `ai_mode` (`OFF|ON`), `ai_model`, `ai_monthly_cap_usd` (absent = no cap) and `ai_notice_seen` (§6.2). The API key is not here: it lives encrypted in its own `secrets` DataStore file.
-- Later: usual scan slot and reminder times.
+- `scan_slot` (IB-02): the usual scan weekday and time of day.
+- Later: reminder times.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
 A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
-**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
@@ -198,7 +200,7 @@ data class ExperiencePolicy(
 )
 ```
 
-- `Profile.weightKg` is the current weight typed in onboarding or Settings. M4's weigh-ins replace it with the trend weight (§5.2).
+- `Profile.weightKg` is the current weight typed in onboarding or Settings. From M4, once the primary source has a weigh-in, the trend weight (§5.2) replaces it wherever targets are computed: `PersonaRepository` previews and saves with it, and About you shows it. Weigh-ins never write a target version on their own.
 - **Onboarding draft.** Presets and onboarding work on a `PersonaDraft` whose fields are nullable. A preset's *Asked* values are null, and the review step can't finish until each is set. `PersonaDraft.complete()` gives the `Persona`.
 
 | Experience | Compound / isolation / high-rep reps | Stall window | Double jump | Deload |
@@ -273,6 +275,16 @@ trend  = trend_prev + α_eff × (w − trend_prev)
 ```
 
 The smoothing accounts for the gap between weigh-ins, so daily and weekly data both give a sensible trend. A weekly InBody reading moves the trend about halfway toward it, the same effect seven daily readings at that weight would have. The trend is seeded with the first weigh-in. Weekly rate = `trend_today − trend_7_days_ago`, interpolated between points and also shown as a percentage of body weight. The UI plots weigh-ins as dots and the trend as a line.
+
+Implemented in `TrendCalculator` (`:domain`, `trend/`):
+- **One reading per day.** Only the earliest primary weigh-in of each `log_date` counts, so `Δd` is a whole number of log days, at least 1. Later weigh-ins that day are plotted but excluded, like other sources.
+- **The rate** is anchored at the latest primary weigh-in, not at today, so a gap in weighing doesn't read as a flat week. It's `trend(last) − trend_at(last − 7 days)`, where `trend_at` interpolates linearly between trend points. It's null until the first point is at least 7 days before the last.
+- **Percentage** = rate ÷ the latest trend × 100.
+- **The goal's pace** (`WeightPace.of(policy)`) is in % of body weight a week:
+  - fat loss and recomp: `−lossRatePctPerWeek`;
+  - lean bulk: 0.25 to 0.5 (PRD §4.2's success range);
+  - Maintain: 0.
+- **Storage.** Weigh-ins are integer grams. The trend is computed on read and never stored, so a changed primary source or an edited weigh-in recomputes it.
 
 ### 5.3 Starting targets (NU-01 to NU-04, IB-05)
 
@@ -372,6 +384,14 @@ trend over ≥ 3 protocol_ok scans = least-squares slope per 4 weeks
 
 Scans taken off protocol are drawn hollow and excluded from both the deltas and the slope. Lean mass for Katch-McArdle (§5.3) comes from the latest protocol-ok scan.
 
+**The protocol check in M4** (`ScanProtocol`, `:domain`, `body/`):
+- **Time of day.** The scan's time of day is compared with the usual slot's as a circular difference, so 23:30 and 00:30 are 60 minutes apart. Without a slot, the time part passes; in practice the first scan sets the slot (PRD §7.9).
+- **Since eating.** The form's *Last ate* chips store fixed minutes: under 2 h = 60, 2–3 h = 150, 3 h or more = 180, fasted overnight = 600. Only the 120-minute threshold matters.
+- **Workout before.** `workout_before_scan` is pre-set when a completed session on the scan's log date ended at or before the scan's time.
+- **Stored result.** `protocol_ok` is stored with `mins_from_slot`, so the reasons it failed can be shown later even if the slot changes. Both are recomputed when the scan is edited, with the slot in force at that time.
+- **Linked weigh-in.** A scan writes a `body_weight` row with `source = SCAN` and `scan_id`, in the same transaction. An edit rewrites it, and deleting the scan cascades to it.
+- **Units.** Masses are integer grams. `body_fat_pct`, `visceral_fat_level` (some machines show halves) and `ecw_tbw_ratio` are REAL. `segmental_lean_json` holds `{rightArmG, leftArmG, trunkG, rightLegG, leftLegG}`.
+
 ### 5.7 Goal recommendation (PRD §4.6, GL-02, GL-03)
 
 Runs only after "Describe your goal". Inputs: an intent (`LOSE_FAT | BUILD_MUSCLE | BOTH | MAINTAIN`), training age, sex, and body fat from a scan in the last 60 days. Without a scan, it falls back to BMI.
@@ -431,6 +451,12 @@ main number, by goal:
 - Today's log date rolls over at the day boundary while the screen is open (`DayBoundary.observeToday`, which also re-checks every minute).
 - The secondary line shows the other of calories and protein. The average line shows how many days were logged, and is replaced by "appears once you log food" when none were.
 - Intake is `food_log` summed per `log_date` (`NutritionRepository.observeIntake`). A day counts as logged once it has any entry.
+
+**Rest day (HM-01, `WeeklyPlan.restDay`).** Today says *Rest day* when one of these holds:
+- a completed strength session is logged today (`DONE_TODAY`);
+- this week's distinct strength days have reached the target (`WEEK_DONE`).
+
+Otherwise it shows the next routine. On a rest day the next routine still shows, with *Start anyway*.
 
 ## 6. Key technical flows
 
@@ -570,7 +596,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **API key storage:**
   - Entered once in Settings → AI. Only printable ASCII without spaces is accepted, which is all a key is made of: a zero-width space, BOM or en dash picked up in a copy would make OkHttp reject the header with the whole key in its error message. A stored value that fails the same check reads as no key.
   - Encrypted with Tink AEAD (AES-256-GCM, associated data naming the key) whose keyset is wrapped by an Android Keystore master key (`AndroidKeysetManager`; the keyset lives in its own shared-preferences file). The ciphertext is stored in the `secrets` DataStore, apart from the settings, so a settings export can never include it.
-  - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer by `data_extraction_rules.xml` (the `secrets` DataStore and the keyset file). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
+  - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer: `data_extraction_rules.xml` includes only the database and the `settings` DataStore, so the `secrets` DataStore and the keyset file are left out (§6.5). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
   - Each person enters their own key into their own install, so no key ever ships inside an APK. A build distributed with a shared key would need a proxy, because a key inside an APK can be extracted.
 
 **Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
@@ -639,8 +665,38 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Every table includes M3c's `meal_draft` and `ai_request_log`; the `secrets` DataStore is never read. Written through the system "create document" picker, so Google Drive works as a target.
 - **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
 - **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
-- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`: the `secrets` DataStore and Tink's keyset file, for cloud backup and device transfer).
+- **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`, below).
 - **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
+
+**The file (M4, `data/backup/`).** A zip with three JSON entries:
+
+| Entry | Contents |
+|-------|----------|
+| `manifest.json` | `format: "recomp-backup"`, `formatVersion` (the zip layout, 1), `schemaVersion` (the Room version that wrote it), `exportedAt`, `appVersion`, and a row count per table |
+| `database.json` | `schema`: every `CREATE` statement from `sqlite_master` (tables, indexes, triggers), and `tables`: per table, `columns` and `rows` as arrays of typed values |
+| `settings.json` | every key in the `settings` DataStore, each with its type (`string`, `int`, `long`, `boolean`, `float`, `double`, `string_set`) |
+
+- **Generic over the schema.**
+  - Export reads `sqlite_master`, so a table added by a later milestone (M3c's `meal_draft` and `ai_request_log`, for example) is included with no code change.
+  - Left out: SQLite's and Room's own tables (`sqlite_*`, `android_metadata`, `room_master_table`), plus FTS virtual tables and their shadow tables. Those are rebuilt from their content table.
+  - Values keep their SQLite storage class: integers stay integers, REAL values round-trip exactly as JSON numbers, and BLOBs are base64.
+  - The snapshot is read inside one transaction, so it's consistent.
+- **Secrets.** The AI key is ciphertext in its own `secrets` DataStore, and Tink's keyset is in the `recomp_ai_keyset` shared preferences (§6.2). Export reads neither, so the key can never be in a backup, and import never writes them. A safety net catches any setting that ever lands in `settings` by mistake: `SettingsKeys.NOT_EXPORTED` is a deny-list, and any key whose name looks secret (`api_key`, `secret`, `token`, `password`, `keyset`) is skipped too. Tests check that a key saved the app's way, or planted in `settings`, never appears in the export.
+- **Restore** (`BackupManager`):
+  1. Decode the zip's three entries straight from the stream, reading at most 16 MB in all (several times any real backup; a year of daily use is about 1 MB of JSON), and check `format`, `formatVersion`, and `schemaVersion` (between 1 and the app's version). A newer backup is refused with "made by a newer version of Recomp". Every known setting must have its type and decode with the app's own decoders, in range (`SettingsPrefs.problems`).
+  2. Build a scratch database in the cache directory from the backup's own `schema`, insert its rows, and set `user_version` to its `schemaVersion`. The schema may only create tables, indexes and triggers under plain names.
+  3. Open the scratch database with Room and the real `MIGRATIONS`. An older backup is migrated by the same tested migrations as an upgraded phone. Room then validates every table. `PRAGMA foreign_key_check` must find no broken link, and every row of every table must read back through Room's converters (`BackupCheckDao`, which a test keeps in step with the tables), so an unknown enum name or a bad date fails here. A damaged, hand-edited or newer-than-claimed file is refused before anything on the phone is touched.
+  4. Write the safety copy: the current data, exported to `files/backups/before-import.zip`.
+  5. In one Room transaction with `PRAGMA defer_foreign_keys = ON`: delete every user table's rows, copy every row from the scratch database by column name, rebuild each FTS index, and run `foreign_key_check` once more before the commit, so a broken link rolls back instead of failing the commit.
+  6. Replace the `settings` DataStore with the backup's settings, keeping any setting that never leaves the device. The DataStore migrations (`LegacyTrainingMigration`) run on old settings first.
+- **Ordering.** The settings can't share the database's transaction, so the database is replaced first; the scratch database has already proved the backup valid. Restore runs to the end even if the screen goes away (`NonCancellable`).
+  - **An interrupted import.** Inside the transaction, just before the commit, the database header's `application_id` is set to a random token, and `files/backups/pending-settings.json` is written with that token and the backup's settings. The token commits or rolls back with the rows.
+  - **At launch,** `BackupManager.finishPendingRestore` looks for that file:
+    - when the header carries its token, the commit happened, so the settings are written now ("Finishing the last import");
+    - when it doesn't, nothing was replaced, and the file is dropped ("The last import didn't happen").
+  - **A failed settings write** keeps the file for the next launch. The message says the data was replaced, and points to the safety copy, which is always there from step 4.
+- Import is refused while a workout is ACTIVE on the phone. A backup taken during a workout restores it as active, and the resume prompt picks it up.
+- **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store (the `secrets` DataStore and Tink's keyset file), is left out by omission. Lint rejects an `<exclude>` outside an included path, so the key files can't also be excluded by name.
 
 ### 6.6 Notifications
 
@@ -689,7 +745,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M3a: Personas and targets** | `Persona` and `GoalPlan` models, presets and onboarding (PS-01 to PS-03), the goal flow with cards, guided suggestion, pace, finish line and guardrails (GL P0), Settings, versioned targets (Room v4) with overrides and the protein ramp, "day starts at", and a goal-driven Today screen; M1's training setup folded in; `inDeficit` wired into progression. | PS, PR-01 to PR-03, GL P0, NU-01 to NU-04 |
 | **M3b: Food logging** | The INDB download task and regional food database with diet filter; foods and regional units; saved meals; copy day; quick add; origin tags; daily view. | NU-10 to NU-16 |
 | **M3c: AI logging** | `AiGate` with AI Describe it, drafts and the spend cap. | NU-17, AI P0 |
-| **M4: Body, Today and data** | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
+| **M4: Body, Today and data** ✅ | Weight sources with the time-aware trend, waist, InBody manual entry with the conditions check, Today screen, export and import. **MVP complete; start dogfooding.** | BM P0, IB P0, HM-01, DA-01 |
 | **M5+: v1.1** | Adaptive target with weekly check-in and review, Will it fit?, label scan, local parser, AI meal photos, the share target (§6.7) with InBody import from screenshots and Health Connect, recomp chart and InBody-based targets, steps through Health Connect, sleep in the check-in, barcode, charts, reminders, widget, auto-backup | P1 |
 
 **M0 results (2026-10-17, reference phone on Android 15):**
@@ -767,6 +823,35 @@ The stall card needs four or more stalled sessions, so it's covered by tests onl
 | Describe it with a dummy key | ✅ The privacy notice showed once, then "Estimating with Claude Opus 5.5…". The API's 401 came back as `AUTH`: the description became a draft in Snacks ("Your API key was rejected"), and the add-food screen was back with search, My meals and Quick add. *Estimate now* failed the same way, replaced the draft rather than adding one, and the Food tab said why. Settings showed $0.00 for 2 requests. The first run found that the outcome message never reached the screen it returned to (a screen's view model has a different saved-state handle from its nav entry); fixed and re-checked. |
 | No key | ✅ The button reads *Describe it · keep a draft*; the screen says why, offers *Add key*, and its action is *Save draft*. |
 | Not run on the phone | A real estimate, which needs your key. The offline and over-cap states (the tests cover them; the phone's airplane mode wasn't touched). Review edits and the learning loop (the tests cover them). The test draft was deleted and the dummy key removed; AI is left on with no key. |
+
+**M4 results (2026-10-18, reference phone on Android 15, release build over M3c data). With M4 the MVP is complete; dogfooding starts (PRD §9: every workout and every day of food for 2 straight weeks).** The UX calls were settled with the user first (PRD v1.0): a Body tab, the rest-day rule, the trend weight only on a target change, and a safety copy on import. Tests cover:
+- `:domain`:
+  - `TrendCalculator`: daily, weekly and mixed spacing, seeding, the primary-source and first-of-day filters, interpolation, the rate anchored at the last weigh-in, and the pace for each goal.
+  - `ScanProtocol`: the 90-minute edges, the midnight wrap, meal, workout, every reason at once, and no slot.
+  - `WeeklyPlan.restDay`.
+- Repositories:
+  - weigh-ins and the trend, edit, delete and undo;
+  - the trend weight in target previews, never a version on its own;
+  - scan, slot and protocol, the linked weigh-in and its cascade, and trained-before from the workout log.
+- Migrations: 5→6 (M3c), 6→7, and the 5→6→7 chain.
+- Backup:
+  - the round trip, with every table filled including M3c's;
+  - the safety copy, and an older (v5) file upgraded on import;
+  - refusals that leave the phone's data untouched: newer, not a zip, damaged JSON, a non-CREATE schema, a column mismatch, a broken foreign key, an unknown enum value, and settings of the wrong type or out of range;
+  - an active workout blocks import;
+  - the AI key is never exported.
+
+An independent review before the phone run found that a backup with a broken foreign key could leave the database stuck in a transaction, and that out-of-range values could crash the app at launch. Both are now refused before anything is replaced (§6.5).
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M3c | ✅ The release build installed over the M3c (v6) data, migration 6→7 ran, and Today opened with the targets intact and a rest day ("Strength done for today", *Start Pull anyway*) after the day's earlier workout. The bottom bar gained Body. |
+| Export → import | ✅ Settings → Data → *Export all data* saved `recomp-backup-2026-10-18.zip` to Downloads through the system dialog ("5 workouts, 0 food entries, 0 weigh-ins, 0 scans"). A weigh-in logged after it was gone after *Import a backup* → *Replace*. Today and Body refreshed without a restart, and *Restore the data from before the import* appeared. |
+| Weigh-in sheet | ✅ It prefilled the typed weight, with the primary source's chip selected, and the trend started from it. |
+| Body and Today with five weeks of invented data | ✅ Checked in a separate debug install (`app.recomp.m4dev`, uninstalled afterwards). The chart drew home-scale weigh-ins as filled dots on the trend line and gym-scale ones as hollow dots. Today's weight card read "−0.5 kg this week (−0.6%) · goal −0.5% a week". <!-- pii-ok: invented --> The scan table marked an off-protocol scan with its reasons. The phone run found that the table was too wide for the card; fixed so it fits at the default font size. |
+| Scan form | ✅ Body fat % filled in from fat mass ÷ weight, and the live verdict read "Off protocol: 7 h 43 min from your usual time" for a scan typed in at night. The time dialog takes typed input. |
+| Trend weight in Settings (dev install) | ✅ About you showed "82.3 kg · trend" with a note that the targets still used the typed weight. Tapping it previewed 2,100 → 1,980 kcal with protein unchanged (it follows the goal weight). After saving, the note went away. <!-- pii-ok: invented dev-install values --> |
+| Not run on the phone | Saving a scan (the dev run backed out of the form) and the waist sheet; the tests cover both. A backup from an older version and the refusals (the tests cover them). Android's own Auto Backup restore. The test weigh-in was removed by the import; the backup file stays in Downloads, and the app's safety copy holds the state from just before the import. |
 
 ## 11. Risks and mitigations
 

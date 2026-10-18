@@ -48,6 +48,10 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_session WHERE routine_id = :routineId AND status = 'COMPLETED' ORDER BY started_at DESC LIMIT 1")
     suspend fun lastCompletedOfRoutine(routineId: Long): WorkoutSessionEntity?
 
+    /** Whether any session on [date] had finished by [at], for a scan's "trained before" (TRD §5.6). */
+    @Query("SELECT EXISTS(SELECT 1 FROM workout_session WHERE status = 'COMPLETED' AND log_date = :date AND ended_at IS NOT NULL AND ended_at <= :at)")
+    suspend fun completedBefore(date: LocalDate, at: Long): Boolean
+
     // Exercises in a session
 
     @Transaction

@@ -176,4 +176,32 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_request_log_created_at` ON `ai_request_log` (`created_at`)")
         }
     }
+
+    /** M4, body data: scans, weigh-ins and tape measurements. SQL from schemas/7.json. */
+    val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `body_composition` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `measured_at` INTEGER NOT NULL, " +
+                    "`log_date` TEXT NOT NULL, `source` TEXT NOT NULL, `weight_g` INTEGER NOT NULL, `skeletal_muscle_g` INTEGER NOT NULL, " +
+                    "`body_fat_g` INTEGER NOT NULL, `body_fat_pct` REAL NOT NULL, `visceral_fat_level` REAL NOT NULL, `bmr_kcal` INTEGER, " +
+                    "`ecw_tbw_ratio` REAL, `inbody_score` INTEGER, `segmental_lean_json` TEXT, `mins_since_meal` INTEGER NOT NULL, " +
+                    "`workout_before_scan` INTEGER NOT NULL, `mins_from_slot` INTEGER, `protocol_ok` INTEGER NOT NULL, `image_path` TEXT, `notes` TEXT)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_composition_measured_at` ON `body_composition` (`measured_at`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `body_weight` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, " +
+                    "`measured_at` INTEGER NOT NULL, `weight_g` INTEGER NOT NULL, `source` TEXT NOT NULL, `scan_id` INTEGER, " +
+                    "FOREIGN KEY(`scan_id`) REFERENCES `body_composition`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_weight_log_date` ON `body_weight` (`log_date`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_weight_scan_id` ON `body_weight` (`scan_id`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `measurement` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, " +
+                    "`measured_at` INTEGER NOT NULL, `type` TEXT NOT NULL, `value` REAL NOT NULL)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_measurement_type_log_date` ON `measurement` (`type`, `log_date`)")
+        }
+    }
 }

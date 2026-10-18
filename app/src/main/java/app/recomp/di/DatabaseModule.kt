@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import app.recomp.data.db.AiDao
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.BodyDao
 import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
@@ -67,6 +68,9 @@ object DatabaseModule {
 
     @Provides
     fun provideAiDao(db: AppDatabase): AiDao = db.aiDao()
+
+    @Provides
+    fun provideBodyDao(db: AppDatabase): BodyDao = db.bodyDao()
 
     @Provides
     @Singleton

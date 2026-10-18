@@ -5,6 +5,10 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.db.AiRequestLogEntity
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.BodyCompositionEntity
+import app.recomp.data.db.BodyWeightEntity
+import app.recomp.data.db.MeasurementEntity
+import app.recomp.data.db.MeasurementType
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
@@ -19,13 +23,11 @@ import app.recomp.domain.food.LogSource
 import app.recomp.domain.food.Origin
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.nutrition.Goal
+import app.recomp.domain.persona.WeightSource
 import java.io.File
 import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -46,27 +48,11 @@ class MigrationTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
-    private val schemaDir = File("schemas/app.recomp.data.db.AppDatabase")
+    private val schemaDir = Schemas.dir
 
-    private fun schema(version: Int) =
-        Json.parseToJsonElement(File(schemaDir, "$version.json").readText()).jsonObject.getValue("database").jsonObject
+    private fun schema(version: Int) = Schemas.of(version)
 
-    /** Creates an empty database exactly as Room would have at [version], from the exported schema. */
-    private fun createAt(version: Int, file: File): SQLiteDatabase {
-        val db = SQLiteDatabase.openOrCreateDatabase(file, null)
-        val s = schema(version)
-        s.getValue("entities").jsonArray.forEach { entity ->
-            val e = entity.jsonObject
-            val table = e.getValue("tableName").jsonPrimitive.content
-            db.execSQL(e.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table))
-            e["indices"]?.jsonArray?.forEach { db.execSQL(it.jsonObject.getValue("createSql").jsonPrimitive.content.replace("\${TABLE_NAME}", table)) }
-            // FTS tables keep their content table in sync with triggers (v5's food_fts).
-            e["contentSyncTriggers"]?.jsonArray?.forEach { db.execSQL(it.jsonPrimitive.content) }
-        }
-        s.getValue("setupQueries").jsonArray.forEach { db.execSQL(it.jsonPrimitive.content) }
-        db.version = version
-        return db
-    }
+    private fun createAt(version: Int, file: File): SQLiteDatabase = Schemas.createAt(version, file)
 
     private fun openWithRoom(file: File) =
         Room.databaseBuilder(ApplicationProvider.getApplicationContext(), AppDatabase::class.java, file.absolutePath)
@@ -254,6 +240,61 @@ class MigrationTest {
             assertEquals(0.0, ai.spendSince(11), 0.0)
             assertEquals(1, ai.observeSpend(0).first().requests)
         }
+        room.close()
+    }
+
+    @Test
+    fun `6 to 7 keeps drafts and the AI log and adds weigh-ins, scans and measurements`() {
+        val file = File(tmp.root, "v6.db")
+        createAt(6, file).use { db ->
+            db.execSQL(
+                "INSERT INTO nutrition_target (effective_from, goal, kcal, protein_g, fat_g, carbs_g, tdee_estimate, bmr_kcal, reason, created_at) " +
+                    "VALUES ('2026-10-17', 'RECOMP', 2090, 125, 58, 267, 2611, 1899, 'INITIAL', 1)",
+            )
+            db.execSQL("INSERT INTO meal_draft (created_at, log_date, meal_slot, text, origin) VALUES (1, '2026-10-18', 'dinner', 'paneer wrap', 'ORDERED')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(2090, room.nutritionDao().targetOn(LocalDate.of(2026, 10, 18))!!.kcal)
+            assertEquals("paneer wrap", room.aiDao().observeDrafts(LocalDate.of(2026, 10, 18)).first().single().text)
+
+            val body = room.bodyDao()
+            val day = LocalDate.of(2026, 10, 19)
+            body.insert(BodyWeightEntity(logDate = day, measuredAt = 1, weightG = 80_000, source = WeightSource.HOME_SCALE))
+            val scanId = body.insert(
+                BodyCompositionEntity(
+                    measuredAt = 2, logDate = day, weightG = 80_000, skeletalMuscleG = 33_000, bodyFatG = 20_000, bodyFatPct = 25.0,
+                    visceralFatLevel = 9.0, minsSinceMeal = 180, workoutBeforeScan = false, minsFromSlot = 0, protocolOk = true,
+                ),
+            )
+            body.insert(BodyWeightEntity(logDate = day, measuredAt = 2, weightG = 80_000, source = WeightSource.SCAN, scanId = scanId))
+            body.insert(MeasurementEntity(logDate = day, measuredAt = 1, type = MeasurementType.WAIST, value = 90.5))
+            assertEquals(2, body.weighIns().size)
+            assertEquals(90.5, body.lastMeasurement(MeasurementType.WAIST)!!.value, 0.0)
+
+            // The migration's foreign key takes a scan's weigh-in with it.
+            body.delete(body.scan(scanId)!!)
+            assertEquals(listOf(WeightSource.HOME_SCALE), body.weighIns().map { it.source })
+        }
+        room.close()
+    }
+
+    @Test
+    fun `5 to 6 to 7 in one open keeps the food log and ends with every table`() {
+        val file = File(tmp.root, "v5-chain.db")
+        createAt(5, file).use { db ->
+            db.execSQL(
+                "INSERT INTO food_log (log_date, meal_slot, name, quantity, unit_label, kcal, protein_g, origin, source, logged_at) " +
+                    "VALUES ('2026-10-18', 'lunch', 'Quick add', 1, 'serving', 500, 30, 'HOME', 'QUICK_ADD', 1)",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(500.0, room.foodLogDao().day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
+            assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+            assertEquals(emptyList<MealDraftEntity>(), room.aiDao().observeDrafts(LocalDate.of(2026, 10, 18)).first())
+        }
+        assertEquals(7, room.openHelper.readableDatabase.version)
         room.close()
     }
 

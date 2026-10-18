@@ -4,7 +4,12 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
+import app.recomp.data.prefs.ExtraSchedule
+import app.recomp.data.prefs.StoredPersona
+import app.recomp.domain.training.LogDates
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.persona.Profile
@@ -49,6 +54,30 @@ class SettingsPrefsTest {
         assertFalse(prefs.persona.first().onboarded)
         assertNull(prefs.persona.first().split)
     }
+
+    @Test
+    fun `a persona that decodes but can't become a plan is unreadable too, and never crashes a read`() = runBlocking {
+        val day9 = """{"split":"PPL","extras":[{"routineId":3,"days":[9]}]}"""
+        val badGoal = """{"split":"PPL","goal":{"goal":"FAT_LOSS","lossRatePctPerWeek":-0.5,"proteinGPerKg":2.0,"startedOn":"2026-10-01"}}"""
+        val both = """{"split":"PPL","goal":{"goal":"RECOMP","lossRatePctPerWeek":0.5,"surplusFraction":0.1,"proteinGPerKg":1.6,"startedOn":"2026-10-01"}}"""
+        listOf(day9, badGoal, both).forEach { stored ->
+            val (prefs, _) = storeWith(persona to stored)
+            assertEquals(stored, listOf("persona"), prefs.unreadable.first())
+            assertEquals(stored, StoredPersona(), prefs.persona.first())
+            assertEquals(stored, emptyList<ExtraSchedule>(), prefs.training.first().extras)
+            assertEquals(stored, listOf("persona"), prefs.problems(prefsOf(stored)))
+        }
+    }
+
+    @Test
+    fun `a scan slot or day start out of range reads as unset`() = runBlocking {
+        val (prefs, _) = storeWith(stringPreferencesKey("scan_slot") to """{"day":9,"minutes":600}""", intPreferencesKey("day_start_minutes") to 99_999)
+        assertNull(prefs.scanSlot.first())
+        assertEquals(LogDates.DEFAULT_DAY_START, prefs.dayStart.first())
+        assertEquals(listOf("scan_slot"), prefs.unreadable.first())
+    }
+
+    private fun prefsOf(personaJson: String) = mutablePreferencesOf(persona to personaJson)
 
     @Test
     fun `writing the persona keeps the unreadable value aside first`() = runBlocking {
