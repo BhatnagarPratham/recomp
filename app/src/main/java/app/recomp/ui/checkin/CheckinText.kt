@@ -87,14 +87,15 @@ object CheckinText {
         null -> "About ${GoalText.kcal(round10(v.row.tdeeNew))} a day, from ${v.row.windowDays} days of food and weigh-ins (the formula said ${GoalText.n(round10(v.formulaTdee))})"
         EstimateGap.WEIGH_INS -> "Needs more weigh-ins: ${v.row.weighIns} in the last ${AdaptiveTdee.WEEKLY_WINDOW_DAYS} days, at least ${AdaptiveTdee.WEEKLY_MIN_WEIGH_INS} " +
             "(or ${AdaptiveTdee.DAILY_MIN_WEIGH_INS} in ${AdaptiveTdee.DAILY_WINDOW_DAYS} days)"
-        EstimateGap.FOOD_DAYS, EstimateGap.HISTORY -> "Needs ${v.row.windowDays} days with food and weigh-ins: ${v.row.loggedDays} so far"
+        EstimateGap.FOOD_DAYS -> "Needs food on ${AdaptiveTdee.minLoggedDays(v.row.windowDays)} of the last ${v.row.windowDays} days: ${v.row.loggedDays} so far"
+        EstimateGap.HISTORY -> "Needs weigh-ins covering the last ${v.row.windowDays} days"
     }
 
     /** What the estimate moved from, or what the missing data means. */
     fun estimateDetail(v: CheckinView): String = when (v.gap) {
         null -> "This window measured ${GoalText.kcal(v.row.tdeeObs ?: v.row.tdeeNew)}. The estimate moves halfway there each week, at most ${AdaptiveTdee.MAX_STEP_KCAL.toInt()} kcal."
-        EstimateGap.FOOD_DAYS -> "At least ${AdaptiveTdee.minLoggedDays(v.row.windowDays)} of the ${v.row.windowDays} days need food logged. Days marked incomplete are left out."
-        EstimateGap.HISTORY -> "Your weigh-ins need to cover all ${v.row.windowDays} days."
+        EstimateGap.FOOD_DAYS -> "A day with no food, or one you marked incomplete, doesn't count."
+        EstimateGap.HISTORY -> "Your trend starts inside the window, so the estimate waits until it covers it."
         EstimateGap.WEIGH_INS -> "Weigh in daily, or at least weekly."
     }
 
