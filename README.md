@@ -17,8 +17,9 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M3b: food logging: a Food tab with meals, search over the Indian Nutrient Databank and protein-rich basics filtered to your diet, custom foods with portion units you can calibrate, saved meals, copy, quick add and origin tags.
 > - M3c: AI meal logging: *Describe it* with your own Claude API key (encrypted on the phone), drafts to estimate later when AI is unreachable, and a monthly spend cap.
 > - M4: body, Today and data: weigh-ins with a smoothed trend from your chosen scale, a weekly waist, body-composition scans with a consistent-conditions check, a Body tab, a Today screen that knows rest days, and export and import of all your data (Settings → Data).
+> - M5: a weekly check-in that estimates your real maintenance calories from your food and weight trend, flags when your goal is off pace, and proposes a new target you accept, adjust or keep. Days you mark incomplete are left out.
 >
-> With M4 the MVP is complete. v1.1 is next. See the milestones in the TRD.
+> With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 

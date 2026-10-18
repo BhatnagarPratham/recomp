@@ -699,6 +699,7 @@ These rules hold for every block:
      - *Accept* and *Adjust* save a new target version from today (reason: check-in).
      - A calorie override you set (PR-02) stays, unless you choose *Use the new target*, which resets it.
 - **Settings follows the estimate.** Once a check-in has a maintenance estimate, Settings works out targets from it instead of the formula, and Settings → Targets says so ("from your check-in of 13 Oct"). An *Adjust* isn't carried into a later Settings change. Settings also has a *Weekly check-in* row that reopens the latest one.
+  - Settings shows what a change there would save. When that differs from today's target, for example while a proposal waits, it says so under Calories: "Today's target is 2,000 kcal until you answer the check-in or change something here".
 - **Flags** (§4.8), judged on the trend, never on single weigh-ins:
 
   | Goal | Fires when |
