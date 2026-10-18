@@ -1102,7 +1102,8 @@ Tests cover:
   - assisted progression, PRs, history and overrides;
   - RIR through history to the double step;
   - the frozen JSON's new fields and *Same movement*.
-- Migration 8→9 and the 7→8→9 chain, from the exported schemas; the backup round trip with a superset group.
+- Migration 8→9 from M5's v8 with rows in `weekly_checkin` and `daily_activity`, and the 7→8→9 chain, from the exported schemas.
+- Backups: the round trip with a superset group, and a v7 and an M5 v8 backup each importing into v9 with their workouts and check-ins.
 - The notification's current set in superset order.
 - Compose UI tests on Robolectric: tick → next set with rest in a plain workout; tick → the next exercise's set with no rest, then rest after the round, in a superset; the warm-up line's *Add*.
 
