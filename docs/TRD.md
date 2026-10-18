@@ -278,6 +278,8 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
   - `DELOAD` adds the assistance that takes about 10% off the effective load, rounded *up* to the step; before a weigh-in, one step.
   - e1RM, PRs, the stall score and session volume use today's trend weight minus each set's assistance (`Loads.lifted`). Every session is judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall.
   - Before the first weigh-in, less assistance is the "least assistance" record, ties go to more reps, and there's no e1RM or volume. Records keep the assistance in `load_g`.
+  - So an assisted MAX_LOAD record's `value` changes meaning at the first weigh-in: the assistance before it, trend weight minus assistance after. Charts and anything else that reads assisted records use `load_g` (or recompute from the sets), never `value`.
+  - With no assistance left, targets and history read "BW", and the next step is added load or a harder variation.
 - **Double step (PO-08, M6).** Only the top sets need 3+ reps in reserve; a set logged without RIR doesn't count. The 5% limit keeps dumbbells and light isolation work to one step. The target line says why: "weight up (2 steps: every set had 3+ reps left)".
 - **Steps.** `INCREASE` adds one increment to the top load. `DELOAD` takes 90% of the top load and rounds *down* to a multiple of the increment. Targets list one rep count per target set; `ADD_REPS` pads a short last exposure with its last set's reps.
 - **Stall metric.** The best Epley score over every working set, with no rep cap. It's a poor absolute 1RM above 12 reps, but as a progress measure it's consistent between sessions and rises with reps; excluding or capping high-rep sets made 12–20 rep work look stalled while reps climbed. Bodyweight sets use reps. Displayed e1RMs and E1RM PRs still use sets of 12 reps or fewer.
@@ -508,9 +510,9 @@ Otherwise it shows the next routine. On a rest day the next routine still shows,
 
 1. **Start.** Insert `workout_session(status = ACTIVE)`, its `session_exercise` rows (targets and superset groups copied from the routine, recommendations frozen from M2) and their `set_entry` rows: last session's warm-ups, then `target_sets` working sets, all with null values. Only one session can be ACTIVE at a time; a second start throws.
 2. **Every ticked set is written to Room immediately** as a single `UPDATE` of load, reps, RIR and `completed_at`. Edits before the tick are written too. The workout UI is a Flow over the database, so process death loses nothing. Ghost values are computed in the ViewModel from the hot query (`Prefill` in `:domain`), never stored. On launch, an ACTIVE session triggers a "Resume workout?" prompt. If the session is more than 4 hours old, the prompt offers to finish it, using the last set's time as the end time.
-   - **Tick order (RT-05, M6).** Ticking selects the next unticked set (`Supersets.afterTick` in `:domain`). An exercise on its own goes set by set, with its rest after each. A superset goes round by round: its warm-ups first, then the n-th set of each exercise in turn. Inside a round the next exercise's set follows with no rest, and any rest still running ends. After the round's last exercise, rest starts with that exercise's rest time. There's no rest after the workout's last set.
+   - **Tick order (RT-05, M6).** Ticking selects the next unticked set (`Supersets.afterTick` in `:domain`). An exercise on its own goes set by set, with its rest after each. A superset goes round by round: its warm-ups first, then the n-th set of each exercise in turn. Inside a round the next exercise's set follows with no rest (or an earlier exercise's, when the round started on a later one), and any rest still running ends. The ongoing notification and the rest-over alert name the first unticked set in the same order. After the round's last exercise, rest starts with that exercise's rest time. There's no rest after the workout's last set.
    - **Superset edits (M6).** *Superset with next* joins two or three consecutive exercises, and *Split superset* frees them; groups are renumbered 1, 2, 3… in order on every save. *Move up/down* never breaks one: inside a superset an exercise swaps with its neighbour, at its edge the whole superset moves, and an exercise moving past a superset jumps it. A swap keeps its slot's group.
-   - **Warm-ups (WL-11, M6).** `WarmupPlanner` suggests 40%, 60% and 80% of today's target load, as 8, 5 and 3 reps, for the first compound, weighted exercise with a target load. Loads round down to the exercise's step, and warm-ups under two steps are dropped. The line shows until the exercise has a warm-up set or a ticked set. *Add* inserts the suggestions as warm-up sets with their values entered, ahead of the working sets, and selects the first.
+   - **Warm-ups (WL-11, M6).** `WarmupPlanner` suggests 40%, 60% and 80% of today's target load, as 8, 5 and 3 reps, for the first compound, weighted exercise with a target load. Loads round down to the exercise's step, and warm-ups under two steps are dropped. On a barbell a lighter warm-up is raised to the empty bar (20 kg); duplicates and any at the target are dropped. The line shows until the exercise has a warm-up set or a ticked set. *Add* inserts the suggestions as warm-up sets with their values entered, ahead of the working sets, and selects the first. It does nothing once the exercise has a warm-up or a ticked set, so a double tap can't add them twice.
 3. **`ActiveWorkoutService`** is a foreground service that runs only while a session is ACTIVE. It observes the active session and the rest timer, and stops itself when there's no active session. Its ongoing notification shows elapsed time, the current exercise and set, and the rest countdown, with *Skip rest* and *+30 s* actions; tapping it opens the workout.
    - Android 14+ needs a declared service type. Use `health`, which requires the `ACTIVITY_RECOGNITION` runtime permission. **Confirmed in M0** on the reference phone (Android 15).
    - *Start* asks for `ACTIVITY_RECOGNITION` and `POST_NOTIFICATIONS` first. If they're refused, the workout still runs with the in-app rest banner, which vibrates when rest ends while the app is open.
@@ -1081,20 +1083,27 @@ Tests cover:
 - **Assisted lifts:** before a weigh-in they move one step at a time; a deload adds about 10% of the effective load as assistance (§5.1).
 - **Warm-ups:** offered only for weighted lifts, since a share of an added plate or of the assistance isn't a warm-up, and the line goes away once the exercise has a ticked set.
 - **Moves:** never break a superset (§6.1).
+- **After a fresh-session review:**
+  - a superset round started on its later exercise goes back to the earlier one with no rest;
+  - the notification names the set in superset order;
+  - warm-up *Add* can't add twice;
+  - barbell warm-ups start at the empty bar, settled as a PRD §12.2 clarification;
+  - zero assistance reads "BW".
 
 Tests cover:
 - `:domain`:
   - assisted lifts: less assistance as progress, the guard on the effective load, deload, the harder variation at zero, the stall score and PRs with and without a weigh-in, and volume from what each set lifted;
   - the double step: RIR 3+ on every top set, a missing RIR, a policy without it, the 5% limit, back-off sets;
-  - `WarmupPlanner`: rounding, the two-step cut-off, duplicate loads;
-  - `Supersets`: join, split, normalize, block moves, and the tick order with rest, including warm-ups and uneven set counts.
+  - `WarmupPlanner`: rounding, the two-step cut-off, duplicate loads, the barbell's empty bar;
+  - `Supersets`: join, split, normalize, block moves, and the tick order with rest, including warm-ups, uneven set counts and a round started on its later exercise.
 - Repositories:
   - grouping mid-workout leaves the routine alone until saved back, save-back keeps the groups, a swap keeps its group, and removing one of two ends the superset;
-  - warm-up insertion;
+  - warm-up insertion, and *Add* twice or after a ticked set adding nothing;
   - assisted progression, PRs, history and overrides;
   - RIR through history to the double step;
   - the frozen JSON's new fields and *Same movement*.
 - Migration 8→9 and the 7→8→9 chain, from the exported schemas; the backup round trip with a superset group.
+- The notification's current set in superset order.
 - Compose UI tests on Robolectric: tick → next set with rest in a plain workout; tick → the next exercise's set with no rest, then rest after the round, in a superset; the warm-up line's *Add*.
 
 | Check | Result |

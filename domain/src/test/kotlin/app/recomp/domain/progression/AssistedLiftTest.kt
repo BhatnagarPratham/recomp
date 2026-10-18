@@ -101,6 +101,12 @@ class AssistedLiftTest {
             Recommendation(Action.INCREASE, 0, listOf(8, 8, 8), assisted = true),
             ProgressionEngine.recommend(small, history(exposure(2_500, 12, 12, 12, rir = 3)), weighedIn),
         )
+        // 7.5 kg left with a 5 kg step: the double step takes it all, more than one step, so it says two.
+        val bigStep = ProgressionContext(policy, bodyWeightG = 120_000)
+        assertEquals(
+            Recommendation(Action.INCREASE, 0, listOf(8, 8, 8), steps = 2, assisted = true),
+            ProgressionEngine.recommend(pullUp, history(exposure(7_500, 12, 12, 12, rir = 3)), bigStep),
+        )
     }
 
     @Test
@@ -109,6 +115,11 @@ class AssistedLiftTest {
         assertEquals(Action.INCREASE, rec.action)
         assertTrue(rec.harderVariation)
         assertEquals("add load or a harder variation", Targets.actionLabel(rec))
+        assertEquals("BW × 12", Targets.describe(rec))
+        assertEquals("BW × 12/12", Loads.describe(listOf(LoggedSet(WORKING, 0, 12), LoggedSet(WORKING, 0, 12)), LoadType.ASSISTED))
+        // The step down to none reads as bodyweight, too.
+        val last = ProgressionEngine.recommend(pullUp, history(exposure(5_000, 12, 12, 12)), weighedIn)
+        assertEquals("Assisted pull-up goes to bodyweight", Targets.nextTime("Assisted pull-up", last, 5_000))
     }
 
     @Test

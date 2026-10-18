@@ -127,7 +127,8 @@ object ProgressionEngine {
         if (cfg.loadType != LoadType.ASSISTED) return Recommendation(Action.INCREASE, top + steps * cfg.incrementG, bottom, steps = steps)
         if (top <= 0) return Recommendation(Action.INCREASE, 0, List(cfg.targetSets) { cfg.repMax }, harderVariation = true)
         val load = (top - steps * cfg.incrementG).coerceAtLeast(0)
-        return Recommendation(Action.INCREASE, load, bottom, steps = if (load == top - steps * cfg.incrementG) steps else 1)
+        // When the last of the assistance is under two steps, the double step still took more than one.
+        return Recommendation(Action.INCREASE, load, bottom, steps = if (double && top - load > cfg.incrementG) 2 else 1)
     }
 
     /** Bodyweight (`REPS_ONLY`): reps climb to the top of the range, then add load or a harder variation. */

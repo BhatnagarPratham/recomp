@@ -61,7 +61,7 @@ object Loads {
 
     /**
      * Compact history line, e.g. "45 × 12/11/10" or "40 × 12, 42.5 × 10/9". Warm-ups are left out.
-     * Bodyweight sets print as "BW × 15/12", and assisted ones as "assist 25 × 8/8".
+     * Bodyweight sets print as "BW × 15/12", and assisted ones as "assist 25 × 8/8" ("BW" with no assistance).
      */
     fun describe(sets: List<LoggedSet>, loadType: LoadType = LoadType.WEIGHTED): String {
         val counted = sets.filter { it.type != SetType.WARMUP }
@@ -74,7 +74,7 @@ object Loads {
         return runs.joinToString(", ") { (load, reps) ->
             val weight = when {
                 load == null -> "BW"
-                loadType == LoadType.ASSISTED -> "assist ${formatKg(load)}"
+                loadType == LoadType.ASSISTED -> if (load == 0) "BW" else "assist ${formatKg(load)}"
                 else -> formatKg(load)
             }
             "$weight × ${reps.joinToString("/")}"

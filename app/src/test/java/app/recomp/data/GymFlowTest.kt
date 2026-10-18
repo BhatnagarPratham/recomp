@@ -144,6 +144,21 @@ class GymFlowTest {
         assertNull(workouts.addWarmups(bench.entry.id, emptyList()))
     }
 
+    @Test
+    fun `adding warm-ups twice, or after a ticked set, adds nothing`() = runBlocking {
+        val session = workouts.startRoutine(push().id, now = clock)
+        val (bench, press) = rows(session).take(2)
+        val plan = listOf(SetValues(20_000, 8), SetValues(30_000, 5))
+        assertTrue(workouts.addWarmups(bench.entry.id, plan) != null)
+        // A double tap before the screen catches up.
+        assertNull(workouts.addWarmups(bench.entry.id, plan))
+        assertEquals(listOf(SetType.WARMUP, SetType.WARMUP, SetType.WORKING, SetType.WORKING, SetType.WORKING), rows(session).first().sets.sortedBy { it.setIndex }.map { it.setType })
+
+        workouts.completeSet(press.sets.minBy { it.setIndex }.id, 15_000, 10, null, now = clock)
+        assertNull(workouts.addWarmups(press.entry.id, plan))
+        assertTrue(rows(session)[1].sets.none { it.setType == SetType.WARMUP })
+    }
+
     // Assisted lifts (WL-09)
 
     @Test

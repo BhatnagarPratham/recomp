@@ -94,14 +94,14 @@ class WorkoutScreenTest {
     fun `the first heavy lift offers warm-ups, and Add puts them in to tick first`() {
         val session = runBlocking { pushWithHistory() }
         show(session)
-        // Today's bench target is 40 kg: 40%, 60% and 80%, rounded down to 2.5 kg.
-        awaitText("Warm-up: 15 × 8 · 22.5 × 5 · 30 × 3")
+        // Today's bench target is 40 kg: 40%, 60% and 80%, rounded down to 2.5 kg, and never under the 20 kg bar.
+        awaitText("Warm-up: 20 × 8 · 22.5 × 5 · 30 × 3")
         // Only the first compound lift with a target load gets the line.
         assertEquals(1, compose.onAllNodesWithText("Warm-up:", substring = true).fetchSemanticsNodes().size)
 
         compose.onNodeWithContentDescription("Add warm-up sets").performClick()
         awaitText("Bench press · set 1 of 6 · warm-up")
-        compose.onNodeWithText("Warm-up: 15 × 8 · 22.5 × 5 · 30 × 3").assertDoesNotExist()
+        compose.onNodeWithText("Warm-up: 20 × 8 · 22.5 × 5 · 30 × 3").assertDoesNotExist()
     }
 
     @Test

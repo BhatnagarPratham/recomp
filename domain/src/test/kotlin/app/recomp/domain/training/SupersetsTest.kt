@@ -77,6 +77,9 @@ class SupersetsTest {
 
     private fun ExerciseRef.set(i: Int) = sets[i].id
 
+    /** The same exercise with these sets ticked. */
+    private fun ExerciseRef.done(vararg i: Int) = copy(sets = sets.mapIndexed { j, s -> if (j in i) s.copy(done = true) else s })
+
     @Test
     fun `a plain workout goes set by set, resting after each, and not after the last`() {
         val a = exercise(null, 3)
@@ -96,8 +99,8 @@ class SupersetsTest {
         val workout = listOf(a, b, c)
         assertEquals(listOf(a.set(0), b.set(0), a.set(1), b.set(1), a.set(2), b.set(2)), Supersets.order(workout).take(6).map { it.setId })
         assertEquals(AfterTick(b.set(0), rest = false), Supersets.afterTick(workout, a.set(0)))
-        assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(workout, b.set(0)))
-        assertEquals(AfterTick(c.set(0), rest = true), Supersets.afterTick(workout, b.set(2)))
+        assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(listOf(a.done(0), b, c), b.set(0)))
+        assertEquals(AfterTick(c.set(0), rest = true), Supersets.afterTick(listOf(a.done(0, 1, 2), b.done(0, 1), c), b.set(2)))
     }
 
     @Test
@@ -107,16 +110,15 @@ class SupersetsTest {
         val c = exercise(1, 2)
         val workout = listOf(a, b, c)
         assertEquals(AfterTick(b.set(0), rest = false), Supersets.afterTick(workout, a.set(0)))
-        assertEquals(AfterTick(c.set(0), rest = false), Supersets.afterTick(workout, b.set(0)))
-        assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(workout, c.set(0)))
+        assertEquals(AfterTick(c.set(0), rest = false), Supersets.afterTick(listOf(a.done(0), b, c), b.set(0)))
+        assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(listOf(a.done(0), b.done(0), c), c.set(0)))
     }
 
     @Test
     fun `an extra set on one exercise is a round of its own`() {
         val a = exercise(1, 4)
         val b = exercise(1, 3)
-        val workout = listOf(a, b)
-        assertEquals(AfterTick(a.set(3), rest = true), Supersets.afterTick(workout, b.set(2)))
+        assertEquals(AfterTick(a.set(3), rest = true), Supersets.afterTick(listOf(a.done(0, 1, 2), b.done(0, 1)), b.set(2)))
         assertEquals(AfterTick(null, rest = false), Supersets.afterTick(listOf(exercise(1, 2, done = setOf(0, 1)), exercise(1, 1, done = setOf(0))), 999))
     }
 
@@ -136,8 +138,25 @@ class SupersetsTest {
         val b = exercise(1, 2, done = setOf(0))
         val workout = listOf(a, b)
         assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(workout, a.set(0)))
-        // Wrapping back to a set left earlier rests too.
-        val left = listOf(exercise(1, 1), exercise(1, 1))
-        assertEquals(AfterTick(left[0].set(0), rest = true), Supersets.afterTick(left, left[1].set(0)))
+        // Wrapping back to a set left in an earlier round rests too.
+        val c = exercise(1, 2, done = setOf(1))
+        val d = exercise(1, 2, done = setOf(0))
+        assertEquals(AfterTick(c.set(0), rest = true), Supersets.afterTick(listOf(c, d), d.set(1)))
+    }
+
+    @Test
+    fun `starting a round on the second exercise selects the first exercise's set of that round with no rest`() {
+        // The B machine was free first.
+        val a = exercise(1, 3)
+        val b = exercise(1, 3)
+        val workout = listOf(a, b)
+        assertEquals(AfterTick(a.set(0), rest = false), Supersets.afterTick(workout, b.set(0)))
+        // Then A's set ends the round: rest, and on to round 2.
+        assertEquals(AfterTick(a.set(1), rest = true), Supersets.afterTick(listOf(a, b.done(0)), a.set(0)))
+        // In a three-exercise round the later exercise comes before the earlier one.
+        val x = exercise(1, 1)
+        val y = exercise(1, 1)
+        val z = exercise(1, 1)
+        assertEquals(AfterTick(z.set(0), rest = false), Supersets.afterTick(listOf(x, y, z), y.set(0)))
     }
 }

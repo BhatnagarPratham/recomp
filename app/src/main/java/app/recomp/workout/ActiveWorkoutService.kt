@@ -20,6 +20,8 @@ import app.recomp.MainActivity
 import app.recomp.data.db.SessionExerciseWithSets
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.repo.WorkoutRepository
+import app.recomp.domain.model.SetType
+import app.recomp.domain.training.Supersets
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -139,22 +141,12 @@ class ActiveWorkoutService : Service() {
         restWakeLock?.takeIf { it.isHeld }?.release()
     }
 
-    /** "Bench press · set 2 of 3" for the first exercise with an unticked set. */
-    private fun currentSet(exercises: List<SessionExerciseWithSets>): String {
-        for (exercise in exercises) {
-            val sets = exercise.sets.sortedBy { it.setIndex }
-            val next = sets.indexOfFirst { it.completedAt == null }
-            if (next >= 0) return "${exercise.exercise.name} · set ${next + 1} of ${sets.size}"
-        }
-        return if (exercises.isEmpty()) "Add an exercise to start" else "All sets done"
-    }
-
     private fun ongoing(s: Snapshot): Notification {
         val resting = s.rest != null && s.rest.endsAt > System.currentTimeMillis()
         val builder = NotificationCompat.Builder(this, NotificationChannels.WORKOUT)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(if (resting) "${s.title} · resting" else s.title)
-            .setContentText(if (resting) "Next: ${currentSet(s.exercises)}" else currentSet(s.exercises))
+            .setContentText(if (resting) "Next: ${currentSetText(s.exercises)}" else currentSetText(s.exercises))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -182,7 +174,7 @@ class ActiveWorkoutService : Service() {
         .build()
 
     private fun alertRestOver() {
-        val next = lastSnapshot?.let { currentSet(it.exercises) } ?: "Time for your next set"
+        val next = lastSnapshot?.let { currentSetText(it.exercises) } ?: "Time for your next set"
         val alert = NotificationCompat.Builder(this, NotificationChannels.REST_TIMER)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("Rest over")
@@ -273,4 +265,19 @@ class ActiveWorkoutService : Service() {
                 .vibrate(VibrationEffect.createWaveform(NotificationChannels.REST_VIBRATION, -1))
         }
     }
+}
+
+/**
+ * "Bench press · set 2 of 3" for the notification and the rest-over alert: the first unticked set in
+ * [Supersets.order], which is what the workout screen selects, so a superset goes round by round here too.
+ */
+internal fun currentSetText(exercises: List<SessionExerciseWithSets>): String {
+    if (exercises.isEmpty()) return "Add an exercise to start"
+    val sets = exercises.map { ex -> ex.sets.sortedBy { it.setIndex } }
+    val refs = exercises.mapIndexed { i, ex ->
+        Supersets.ExerciseRef(ex.entry.supersetGroup, sets[i].map { Supersets.SetRef(it.id, it.setType == SetType.WARMUP, it.completedAt != null) })
+    }
+    val slot = Supersets.order(refs).firstOrNull { !it.done } ?: return "All sets done"
+    val own = sets[slot.exercise]
+    return "${exercises[slot.exercise].exercise.name} · set ${own.indexOfFirst { it.id == slot.setId } + 1} of ${own.size}"
 }

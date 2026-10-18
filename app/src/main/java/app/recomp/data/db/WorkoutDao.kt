@@ -169,6 +169,10 @@ interface WorkoutDao {
     @Query("UPDATE set_entry SET set_type = :type WHERE id = :id")
     suspend fun setType(id: Long, type: SetType)
 
+    /** Whether an exercise already has a warm-up or a ticked set, so WL-11's suggestion no longer applies. */
+    @Query("SELECT EXISTS(SELECT 1 FROM set_entry WHERE session_exercise_id = :sessionExerciseId AND (set_type = 'WARMUP' OR completed_at IS NOT NULL))")
+    suspend fun hasWarmupOrTicked(sessionExerciseId: Long): Boolean
+
     /** Makes room at the start of an exercise for [count] sets, e.g. warm-ups (WL-11). */
     @Query("UPDATE set_entry SET set_index = set_index + :count WHERE session_exercise_id = :sessionExerciseId")
     suspend fun shiftSetIndexes(sessionExerciseId: Long, count: Int)

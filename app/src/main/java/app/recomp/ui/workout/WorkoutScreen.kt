@@ -290,7 +290,7 @@ fun WorkoutScreen(
         is Dialog.Pick -> ExercisePickerSheet(
             title = d.swapFor?.let { "Swap ${it.name}" } ?: "Add exercise",
             library = library,
-            swapping = d.swapFor?.let { swap -> library.firstOrNull { it.id == swap.exerciseId } },
+            swapping = d.swapFor?.entity,
             onDismiss = { dialog = null },
             onPick = { ex ->
                 dialog = null
@@ -327,7 +327,7 @@ private fun Elapsed(startedAt: Long) {
 private fun loadText(ex: ExerciseUi, load: Int?): String = when (ex.loadType) {
     LoadType.BODYWEIGHT -> "BW"
     LoadType.BODYWEIGHT_PLUS -> if (load == null || load == 0) "BW" else "BW+${Loads.formatKg(load)}"
-    LoadType.ASSISTED -> "assist " + (load?.let { Loads.formatKg(it) } ?: "—")
+    LoadType.ASSISTED -> if (load == 0) "BW" else "assist " + (load?.let { Loads.formatKg(it) } ?: "—")
     LoadType.WEIGHTED -> load?.let { Loads.formatKg(it) } ?: "—"
 }
 
@@ -622,7 +622,7 @@ private fun RestBanner(rest: RestState, onSkip: () -> Unit, onAdd: () -> Unit) {
 private fun WarmupLine(text: String, onAdd: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Add warm-up sets" }) { Text("Add") }
+        TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = GymTouch).semantics { contentDescription = "Add warm-up sets" }) { Text("Add") }
     }
 }
 

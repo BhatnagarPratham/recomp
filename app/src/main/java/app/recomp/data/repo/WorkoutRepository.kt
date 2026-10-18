@@ -232,10 +232,12 @@ class WorkoutRepository @Inject constructor(
 
     /**
      * WL-11's *Add*: the suggested warm-ups go in before the exercise's other sets, with their loads and
-     * reps entered, for you to tick. Returns the first one's id, to select it.
+     * reps entered, for you to tick. Returns the first one's id, to select it. It does nothing (null) once
+     * the exercise has a warm-up or a ticked set, so a double tap or a stale screen can't add them twice.
      */
     suspend fun addWarmups(sessionExerciseId: Long, plan: List<SetValues>): Long? = db.withTransaction {
         if (plan.isEmpty() || workoutDao.sessionExercise(sessionExerciseId) == null) return@withTransaction null
+        if (workoutDao.hasWarmupOrTicked(sessionExerciseId)) return@withTransaction null
         workoutDao.shiftSetIndexes(sessionExerciseId, plan.size)
         plan.mapIndexed { i, warmup ->
             workoutDao.insertSet(

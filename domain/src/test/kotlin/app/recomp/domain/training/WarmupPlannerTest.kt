@@ -39,6 +39,20 @@ class WarmupPlannerTest {
     }
 
     @Test
+    fun `on a barbell nothing is lighter than the empty bar`() {
+        fun bar(targetKg: Double) =
+            WarmupPlanner.plan((targetKg * 1000).toInt(), 2_500, floorG = WarmupPlanner.BAR_G).map { Loads.formatKg(it.loadG!!) to it.reps }
+        // A 40 kg squat: 15 kg can't be loaded, so the first warm-up is the bar.
+        assertEquals(listOf("20" to 8, "22.5" to 5, "30" to 3), bar(40.0))
+        // 30 kg: 12 → 10 and 18 → 17.5 both become the bar, once.
+        assertEquals(listOf("20" to 8, "22.5" to 3), bar(30.0))
+        // A target at the bar itself needs no warm-up at it.
+        assertEquals(emptyList<Pair<String, Int>>(), bar(20.0))
+        // Heavy enough, the bar changes nothing.
+        assertEquals(listOf("20" to 8, "30" to 5, "40" to 3), bar(50.0))
+    }
+
+    @Test
     fun `no target load or no step means no warm-ups`() {
         assertEquals(emptyList<SetValues>(), WarmupPlanner.plan(0, 2_500))
         assertEquals(emptyList<SetValues>(), WarmupPlanner.plan(50_000, 0))

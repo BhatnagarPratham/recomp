@@ -10,9 +10,10 @@ object Targets {
     /** Per-set ghost values for the working sets (PRD §7.4: working sets prefill from today's target). */
     fun workingSets(rec: Recommendation): List<SetValues> = rec.reps.map { SetValues(rec.loadG, it) }
 
-    /** "45 × 12/12/10", "assist 20 × 8", "BW × 15/15/15", or "× 12" when the weight is yours to pick. */
+    /** "45 × 12/12/10", "assist 20 × 8", "BW × 15/15/15" (no assistance left, too), or "× 12" when the weight is yours to pick. */
     fun describe(rec: Recommendation): String {
         val load = when {
+            rec.assisted && rec.loadG == 0 -> "BW"
             rec.loadG != null -> if (rec.assisted) "assist ${Loads.formatKg(rec.loadG)}" else Loads.formatKg(rec.loadG)
             rec.action == Action.BASELINE -> ""
             else -> "BW"
@@ -75,5 +76,9 @@ object Targets {
 
     private fun increaseLabel(rec: Recommendation) = if (rec.assisted) "less assistance" else "weight up"
 
-    private fun weight(loadG: Int, assisted: Boolean) = if (assisted) "assist ${Loads.formatKg(loadG)} kg" else "${Loads.formatKg(loadG)} kg"
+    private fun weight(loadG: Int, assisted: Boolean) = when {
+        assisted && loadG == 0 -> "bodyweight"
+        assisted -> "assist ${Loads.formatKg(loadG)} kg"
+        else -> "${Loads.formatKg(loadG)} kg"
+    }
 }

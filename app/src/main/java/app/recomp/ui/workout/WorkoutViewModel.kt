@@ -61,6 +61,8 @@ data class SetUi(
 data class ExerciseUi(
     val id: Long,
     val exerciseId: Long,
+    /** The exercise itself, archived or not, for *Swap*'s *Same movement* (EX-04). */
+    val entity: ExerciseEntity,
     val name: String,
     val equipment: Equipment,
     val mechanic: Mechanic,
@@ -170,14 +172,15 @@ class WorkoutViewModel @Inject constructor(
         restTimer.state,
     ) { (session, title, keepScreenOn), rows, history, requested, rest ->
         val groups = Supersets.normalize(rows.map { it.entry.supersetGroup })
-        val heavy = rows.indexOfFirst { it.isHeavyLift() }
-        val exercises = rows.mapIndexed { i, row ->
+        val built = rows.mapIndexed { i, row ->
             row.toUi(history[row.exercise.id]).copy(
                 supersetGroup = groups[i],
                 superset = Supersets.position(groups, i),
                 canSupersetWithNext = Supersets.canJoinNext(groups, i),
-            ).let { if (i == heavy) it.withWarmup() else it }
+            )
         }
+        val heavy = built.indexOfFirst { it.isHeavyLift() }
+        val exercises = built.mapIndexed { i, ex -> if (i == heavy) ex.withWarmup() else ex }
         // Ticking walks supersets round by round, so the first set to select follows the same order.
         val order = Supersets.order(exercises.map { it.ref() })
         val selected = requested?.takeIf { id -> order.any { it.setId == id } } ?: order.firstOrNull { !it.done }?.setId
@@ -195,15 +198,15 @@ class WorkoutViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkoutUi())
 
     /** WL-11: the first compound lift with a target load. Bodyweight and assisted loads aren't warmed up as a share. */
-    private fun SessionExerciseWithSets.isHeavyLift(): Boolean =
-        exercise.mechanic == Mechanic.COMPOUND && exercise.loadType == LoadType.WEIGHTED &&
-            ProgressionRepository.decode(entry.recommendationJson)?.takeIf { it.action != Action.BASELINE }?.loadG != null
+    private fun ExerciseUi.isHeavyLift(): Boolean =
+        mechanic == Mechanic.COMPOUND && loadType == LoadType.WEIGHTED && target?.takeIf { it.action != Action.BASELINE }?.loadG != null
 
-    /** The warm-up line shows until the exercise has warm-up sets or its first set is ticked. */
+    /** The warm-up line shows until the exercise has warm-up sets or its first set is ticked. A barbell starts at the bar. */
     private fun ExerciseUi.withWarmup(): ExerciseUi {
         if (sets.any { it.type == SetType.WARMUP || it.done }) return this
         val load = target?.loadG ?: return this
-        return copy(warmup = WarmupPlanner.plan(load, incrementG))
+        val floor = if (equipment == Equipment.BARBELL) WarmupPlanner.BAR_G else 0
+        return copy(warmup = WarmupPlanner.plan(load, incrementG, floor))
     }
 
     private fun SessionExerciseWithSets.toUi(last: List<LoggedSet>?): ExerciseUi {
@@ -222,6 +225,7 @@ class WorkoutViewModel @Inject constructor(
         return ExerciseUi(
             id = entry.id,
             exerciseId = exercise.id,
+            entity = exercise,
             name = exercise.name,
             equipment = exercise.equipment,
             mechanic = exercise.mechanic,

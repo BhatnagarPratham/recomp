@@ -206,7 +206,7 @@ fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewMode
 private fun recordValue(pr: PersonalRecordEntity, assisted: Boolean): String = when (pr.type) {
     PrType.MAX_LOAD -> if (assisted) Labels.assist(pr.loadG ?: 0) else "${Loads.formatKg(pr.value.toInt())} kg"
     PrType.REPS_AT_LOAD -> "${pr.value} reps" + when {
-        assisted -> " at ${Labels.assist(pr.loadG ?: 0)}"
+        assisted -> if ((pr.loadG ?: 0) == 0) " with no assistance" else " at ${Labels.assist(pr.loadG!!)}"
         else -> pr.loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
     }
     PrType.E1RM -> "about ${(pr.value + 500) / 1000} kg"
