@@ -1,6 +1,6 @@
 # Recomp: Product Requirements Document
 
-*Draft v1.0, 2026-10-18. Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
+*Draft v1.1, 2026-10-18: the MVP as built, plus the proposed v1.1 designs (§12). Companion doc: [TRD.md](TRD.md). Open source under MIT: fork it and configure it for yourself.*
 
 ## 1. Summary
 
@@ -243,6 +243,7 @@ Examples use the reference persona.
 | PR-02 | P0 | Compute starting targets for calories, protein, fat and carbs from the goal policy, with a plain-language explanation. Every target can be overridden. |
 | PR-03 | P0 | ★ Configurable "day starts at" time (default 4 AM; midnight to 6 AM in hourly steps), so a late-night snack counts toward the right day. Changing it never moves days already logged. |
 | PR-04 | P0 | Onboarding walks through the chosen split once to confirm the equipment and smallest weight step for each exercise. That sets the progression increments. |
+| PR-05 | P1 | Show and enter body weight, lifts and lengths in lb and in. Storage stays metric (§4.1). |
 
 **Equipment walkthrough (PR-04).** One scrolling list of the split's exercises, grouped by routine:
 - Where the template lists alternatives (the "/" rows in §7.3), you pick the variant your gym has, e.g. dumbbell or machine shoulder press. Picking one swaps the exercise in the routine, because a machine press and a dumbbell press keep separate histories.
@@ -260,7 +261,7 @@ Examples use the reference persona.
 6. **Gym equipment** (PR-04), only when routines need building: on a fresh install, or when you picked a different split.
 
 - **First run** opens onboarding instead of Today. So does the first launch after upgrading from a version without a persona; the training settings you already had are carried over and pre-filled, and an unfinished workout can still be resumed.
-- **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1.
+- **Units:** kg and cm only in the MVP. The persona stores the choice, and lb and in arrive in v1.1 (PR-05).
 
 **Settings (PS-02).** The last bottom tab, after Today, Food, Train and Body. Sections: Goal (opens the goal flow), Targets, About you, Training (opens Training setup), Food (diet, region, protein ramp, meals, portion sizes, hidden foods and where the food data comes from), AI (on or off, API key, model, this month's spend and the cap; §7.12), Body data (weight source, usual scan slot, units), Day starts at, Data (export and import, §7.14) and Developer (the M0 spike screen). Every row shows its current value.
 - **Targets can be overridden** (PR-02): calories, protein and fat. Carbs always fill the remaining calories. An overridden number is labelled *set by you* and stays until you reset it. Calories can't be set below the safety floor (§4.9).
@@ -645,7 +646,7 @@ Ranked by impact.
 | Release | Scope | Exit criterion |
 |---------|-------|----------------|
 | **MVP** (all P0) | Personas: the four goals with goal cards, guided suggestion, pace presets, finish line and guardrails (GL P0); experience, diet, Indian and International regions, split templates, presets, onboarding (PS-01 to PS-03); goal-driven Today screen with 7-day averages; profile and targets with protein ramp; strength logging (prefill, RIR, rest timer, crash-proof); progression engine with PRs and stall detection; extra-session log; nutrition (regional food database, custom foods and units, saved meals, copy day, quick add, origin tags, AI Describe it); AI on/off with fallbacks and spend cap; weight sources, trend and waist; scan entry with the conditions check; Today screen; history; export and import. | Used for every workout and every day of food for 2 straight weeks. |
-| **v1.1** (P1) | Goal switch, Goal reached card and maintenance breaks; AI goal interpretation; goal-specific nudges and check-in flags; presets as data files; adaptive target with weekly check-in and review; Will it fit?; label scan; offline describe parser; AI meal photos; InBody share and Health Connect import; body-composition chart and scan-informed targets; steps through Health Connect; sleep; barcode; recipes; tape measurements and photos; charts; muscle-group volume; reminders; widget; auto-backup; supersets; warm-ups; snack allowance. | The weekly review answers "is my goal on track?" without opening anything else. |
+| **v1.1** (P1) | Every P1 requirement, in milestones M5 to M18 (TRD §10, designs in §12): the weekly check-in with an adaptive target, its per-goal flags, and the weekly review with a consistency calendar and the body-composition chart; supersets, warm-ups, assisted exercises, RIR-aware jumps and substitutes; the offline describe parser, Will it fit? and a snack allowance; reminders, goal-specific nudges with the evening protein nudge, and a widget; editing past workouts, charts and muscle-group volume; steps, sleep and InBody import through Health Connect; InBody share and scan-informed targets; auto-backup, CSV export and Health Connect write-back; tape measurements, progress photos, focus areas and mobility markers; label scan, barcode and AI meal photos; recipes; goal switch, Goal reached card, maintenance breaks, AI goal interpretation, the pregnancy toggle and presets as data files; lb and in. | The weekly review answers "is my goal on track?" without opening anything else. |
 | **v2** (P2) | Persona export and import, AI weekly coach, readiness check, plate calculator, workout-history import, periodised blocks for advanced lifters, Wear OS companion. | — |
 
 ## 10. Success metrics (first 12 weeks of use)
@@ -671,3 +672,257 @@ Ranked by impact.
 1. Which presets beyond the five in §4.4 are worth shipping? Candidates: older adults, a strength-focused powerlifting split, and returning after a break.
 2. ~~Should lb/in display ship in the MVP or in v1.1?~~ *Settled in M3:* v1.1. The MVP is metric only; the persona already stores the choice.
 3. Is "Pescatarian" enough, or does the diet filter also need custom exclusions (e.g. Jain: no root vegetables)?
+
+## 12. v1.1 designs (proposed)
+
+*Proposed on 2026-10-18 with the v1.1 plan (TRD §10). Nothing here is built yet. Each block becomes its milestone's spec once you approve it, and no code for that milestone starts before then. ◆ marks a choice with a real alternative; option (A) is the recommendation.*
+
+These rules hold for every block:
+- New features are opt-in or quiet by default, and work with AI off (AI-01) unless §7.12's table says they need AI.
+- Numbers are judged as trends and weekly averages, never as one bad day (§5, GL-10).
+- Anything that varies between people is a persona or Settings value (PS-03).
+- Targets never change on their own. A new estimate shows as a before-and-after preview, and you save it (M4's rule for the trend weight). Ending a maintenance break you accepted is the one exception (§12.13).
+
+### 12.1 M5: Weekly check-in and adaptive target (NU-05, GL-08 flags, J7)
+
+- **When.** A week runs Monday to Sunday, like the weekly plan. Its check-in opens on the Monday after. Today shows a *Weekly check-in* card until you've opened it or the next week's is ready.
+- **The screen** (*Week of 13 Oct*), top to bottom:
+  1. **The goal's headline** (§4.8), e.g. waist and trend weight for a recomp, the loss rate for a cut. Below it, one verdict: *On track*, the flag that fired ("Losing slower than planned: −0.2% a week against −0.75%"), or *Not enough data yet*.
+  2. **7-day averages:** calories and protein against target, and days logged.
+  3. **Trend weight:** the change and the rate against the pace, and the waist change.
+  4. **Your maintenance estimate:** "About 2,480 kcal a day, from 21 days of food and weigh-ins (the formula said 2,610)". Until there's enough data: "Needs 21 days with food and weigh-ins: 12 so far".
+  5. **The proposal,** only when the goal's flag fires: "Lower your target to 1,960 kcal (now 2,090)", with *Accept*, *Adjust* and *Keep*.
+     - *Adjust* is a −/+ 50 kcal stepper, held to the floor and caps (§4.9).
+     - *Accept* and *Adjust* save a new target version from today (reason: check-in).
+     - A calorie override you set (PR-02) stays, unless you choose *Use the new target*, which resets it.
+- **Flags** (§4.8), judged on the trend, never on single weigh-ins:
+
+  | Goal | Fires when |
+  |------|-----------|
+  | Fat loss | The weekly rate is under half the pace for 2 weeks in a row |
+  | Recomp | Over 4 weeks, trend weight changed by less than 0.5% and waist by less than 1 cm. It needs a waist reading near each end; without them it asks you to log your waist |
+  | Maintain | Trend weight moved more than 1% over 4 weeks |
+  | Lean bulk | The weekly rate is under 0.1% or over 0.5% for 2 weeks in a row |
+
+  - Every proposal is the targets recomputed with the new maintenance estimate at your current pace.
+  - A proposal that would move the target by less than 50 kcal isn't shown.
+  - The estimate updates every week whether or not a flag fires, so the next proposal starts from it.
+- **Incomplete days.** The Food tab's day menu has *Mark day as incomplete* (and back). That day shows a small note.
+  - ◆ **Decide:** (A) incomplete days are left out of both the maintenance estimate and the 7-day average on Today; (B) they're left out of the estimate only.
+- **A missed check-in isn't lost.** Its estimate still counts, and an unanswered proposal lapses when the next week's is ready.
+
+### 12.2 M6: In the gym (RT-05, WL-11, WL-09 assisted, PO-08, EX-04)
+
+- **Supersets (RT-05).** In a routine, or mid-workout from a card's menu, *Superset with next* joins two or three consecutive exercises. *Split superset* undoes it.
+  - The joined cards show a bracket and "Superset".
+  - Ticking a set selects the same set of the next exercise in the group, with no rest. After the last exercise of a round, rest starts with that exercise's rest time.
+  - Each exercise keeps its own target and progression.
+  - Saving the workout back to the routine keeps the groups.
+- **Warm-ups (WL-11),** for the first compound lift that has a target load:
+  - Its card shows "Warm-up: 20 × 8 · 30 × 5 · 40 × 3", about 40%, 60% and 80% of today's target, rounded down to the exercise's step. Sets under two steps are left out, so light lifts get fewer or none.
+  - It isn't shown when the exercise already has warm-up sets, e.g. the ones M1 recreates from last session.
+  - ◆ **Decide:** (A) the line has *Add*, which adds them as warm-up sets for you to tick; (B) they're added as warm-up rows automatically. Under (B), rows you didn't tick would trigger the finish confirmation.
+- **Assisted exercises (WL-09).** Assisted pull-ups and dips log the assistance: the stepper reads "Assist 25 kg".
+  - Progress means less assistance: *Increase* reads "assist 20 kg".
+  - PRs and the e1RM use your trend weight minus the assistance. Before your first weigh-in, less assistance counts as better and the e1RM is hidden.
+- **RIR-aware jumps (PO-08).** Where the experience policy allows it (Beginner), every working set at the top of the range with 3+ reps in reserve earns a double step: "Increase: 50 kg (2 steps: every set had 3+ reps left)".
+  - Only when one step is at most 5% of the load, so dumbbells don't leap.
+- **Substitutes (EX-04).** *Swap* opens the picker with *Same movement* first: exercises with the same movement pattern and primary muscle, on other equipment. Everything else follows.
+
+### 12.3 M7: Faster food logging (AI-04, NU-18, NU-06)
+
+- **Describe it works with AI off (AI-04).** The button is always on the add-food screen.
+  - The local parser reads text like "2 roti, 1 katori dal makhani and salad". It matches quantities, units (yours, plus synonyms like chapati → roti and bowl → katori) and names against your foods and the database.
+  - The review is M3c's: the matched items with their amounts, and "Couldn't find: salad" with *Search* and *Quick add*.
+  - Each item says where its numbers came from: *Your food*, *Database* or *Claude*.
+  - ◆ **Decide, with AI on:** (A) the parser goes first and Claude estimates only what it couldn't match, in the same review; an *Ordered* meal goes straight to Claude, because restaurant oil is what the database misses. (B) Claude estimates the whole meal whenever AI is ready, and the parser is only the offline path. (A) makes repeat dishes instant and free; (B) gives Claude the whole meal's context.
+- **Will it fit? (NU-18, J4).** A button in the Food tab's top bar and on the add-food screen.
+  - You describe the dish; its origin is *Ordered* by default.
+  - The result shows today's main number before and after, without logging anything: "Protein left 62 g → 30 g · calories 380 left → 40 over".
+  - *Log it* adds it to the meal for the time of day, which you can change.
+  - With AI on it's one request, counted in the spend. With AI off, the parser and the database answer.
+- **Snack allowance (NU-06).** Settings → Food → Snack allowance: off by default, or 100–300 kcal in steps of 50, counted against one meal (Snacks by default).
+  - It's part of the calorie target, not extra. The day view says "includes a 150 kcal snack allowance", and the snack meal shows "60 of 150 kcal".
+  - ◆ **Decide:** (A) build it this way; (B) move NU-06 to P2, since a single day over target is already never styled as a failure (GL-10).
+
+### 12.4 M8: Weekly review (HM-03, HM-04, IB-04)
+
+- **The review extends M5's check-in screen.** There's one per week, with ‹ and › between weeks, and the current week shows what's in so far. Today's weekly-plan card opens it too.
+- **Sections,** after the headline, verdict and proposal (§12.1):
+  - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target); and the share of calories from *Ordered* and *Packaged* food.
+  - **Training:** sessions done against planned, for strength and each extra session; PRs; and lifts showing a stall card.
+  - **Body:** the trend weight and waist changes; the week's scan against the previous one, with noise labels; average steps and sleep, once M11 tracks them.
+- **Consistency calendar (HM-04):** a month grid in the review.
+  - A day gets a filled dot for a strength workout, a ring for an extra session and a tint when food was logged.
+  - There are no streak counts, and nothing marks a missed day.
+- **Body-composition chart (IB-04),** on the Body tab above the scan table: three small charts on one time axis, over 12 weeks or everything:
+  1. muscle mass and fat mass from scans;
+  2. trend weight;
+  3. waist.
+
+  On-protocol scans are filled dots. Off-protocol scans are hollow and left out of the lines. Each change between on-protocol scans is labelled, e.g. "+0.4 kg muscle · within noise" (under 1 kg of muscle or 1% body fat, TRD §5.6). From three on-protocol scans, the slope per 4 weeks shows.
+
+### 12.5 M9: Nudges, reminders and the widget (RM-01, NU-23, GL-08 nudges, PO-11, IB-06, HM-05)
+
+- **Settings → Reminders.** Each is off until you turn it on. The first one you turn on asks for notification permission.
+
+  | Reminder | Default time | Skipped when |
+  |----------|--------------|--------------|
+  | Morning weigh-in | 07:30 | you've weighed in today |
+  | Lunch not logged | 14:30 | Lunch has an entry |
+  | Evening nudge (below) | 20:30 | there's nothing to nudge about |
+  | Workout day, on weekdays you pick | 08:00 | a strength workout is done today |
+  | Weekly check-in | Monday 09:00 | you've opened it |
+  | Scan slot | 3 h before your usual slot | you've logged a scan today |
+
+- **At most 2 a day.**
+  - ◆ **Decide:** (A) in time order: the first two that are still needed that day are sent, and Settings warns when more than two could be due on one day. (B) A fixed priority (scan slot, check-in, workout, evening, lunch, weigh-in), which can hold back an earlier reminder to leave room for a later one.
+- **The evening nudge follows the goal** (GL-08). The nudge list is part of the goal policy:
+  - Fat loss: protein left, and steps left once M11 tracks them.
+  - Recomp: protein left.
+  - Maintain: none by default.
+  - Lean bulk: calories still to eat ("You're 600 kcal short tonight").
+- **The protein nudge (NU-23)** fires when at least 25% of the day's protein target is left at the nudge time.
+  - It suggests 2–3 of *your* most-logged foods that your diet allows, ranked by protein per 100 kcal. Each comes with a portion that fits what's left: "Hung curd · 200 g · 22 g protein · 210 kcal".
+  - Tapping one logs it into the evening meal, with *Undo*.
+  - The same card shows on Today after the nudge time, whether or not the notification is on.
+- **Workout day (PO-11):** "Pull is next · 3 lifts are due for a weight increase". The rotation stays calendar-free (RT-02); the weekdays are only for the reminder.
+- **Scan slot (IB-06):** the protocol, e.g. "Scan at 10:00 · eat by 08:00 · before your workout".
+- **Widget (HM-05):**
+  - It shows the goal's main number with protein (or calories), and "Pull next" or "Rest day".
+  - It's 4×1, and resizes to 2×2.
+  - Tapping it opens Today; *Log food* opens the Food tab.
+  - It updates when you log food and at the day boundary.
+
+### 12.6 M10: Training history (WL-10, PO-09, PO-10)
+
+- **History** on the Train tab: every workout and extra session, newest first.
+- **Editing a past workout (WL-10).** It opens like the summary, with editable rows:
+  - weight, reps, RIR and set type; add or delete sets; remove an exercise;
+  - the date, start and end times, and notes;
+  - *Delete workout*, which asks first.
+
+  Then:
+  - PRs, stall cards and next time's targets are recomputed from the edited history, and the screen says so. Targets frozen on past sessions stay as they were shown.
+  - Deleting your last strength workout moves the rotation back.
+  - An active workout is still edited in the workout screen.
+- **Charts (PO-09).** Exercise history gets a chart: the best e1RM per session as a line and the top set as dots, over 12 weeks or everything. Bodyweight exercises chart reps, and assisted ones the effective load.
+- **Weekly sets per muscle (PO-10).** A Train tab card for this week: each muscle's working sets (1 for its primary muscle, ½ for each secondary) against a band.
+  - The band is 10–20 by default, editable in Settings → Training.
+  - It's information only: no warning colours and no notification.
+
+### 12.7 M11: Health Connect: steps, sleep and InBody import (AR-01, AR-02, IB-07)
+
+- **Settings → Health Connect** lists what can be read (steps, sleep, InBody's body data) and what each needs, e.g. "Turn on Health Connect access in Google Fit". Each is off until you turn it on, which asks for that permission only.
+- **Steps (AR-01).** Settings → Body data → Steps: off, or on with a goal (8,000 by default, from 2,000 to 20,000).
+  - Today shows "6,240 of 8,000 steps" under the weight card, and Body shows the 7-day average.
+  - If no app writes steps to Health Connect, the phone's own step counter is used (TRD §6.3).
+  - ◆ **Decide:** (A) steps count by calendar day, so they match Google Fit; (B) by log day (from "day starts at"), like food.
+- **Sleep (AR-02).**
+  - The weigh-in sheet gets *Slept* chips: 5 or less, 6, 7, 8 and 9+ hours, or type it to the half hour. It's for the night that ended that morning.
+  - Today's weight card asks until it's entered.
+  - If a tracker writes sleep to Health Connect, that's prefilled. What you type wins.
+- **InBody import (IB-07).** Each new InBody measurement in Health Connect (weight, body fat % and BMR) becomes a draft.
+  - Body shows "New InBody scan, Mon 10:05: add muscle and visceral fat". It opens the scan form filled in, with the protocol questions as usual.
+  - *Dismiss* drops the draft.
+  - A scan you already typed within 10 minutes of it is matched instead of duplicated.
+
+### 12.8 M12: InBody share and scan-based targets (IB-03, IB-05)
+
+- **Share to Recomp (IB-03).** Sharing an image to Recomp asks "What is this?": *InBody result*, and from M15 *Nutrition label* and *Meal photo*.
+  - With AI on, Claude reads the screenshot (or a photo of the paper sheet), and the scan form opens filled in. Each field is marked "from the image" until you check it.
+  - With AI off, the form opens with the image pinned above it.
+  - The image is kept with the scan, on the phone only. Deleting the scan deletes it.
+  - ◆ **Decide:** this sends a picture of your body numbers to Anthropic, and the notice for meals (§7.12) promises body data is never sent. (A) Allow it for InBody only, with its own one-time notice: "The image goes to Anthropic, including the body numbers on it". (B) Keep body data on the phone: no AI for InBody, so you type the numbers with the image beside them, and Health Connect fills in what it can.
+- **Scan-based targets (IB-05),** with an on-protocol scan from the last 60 days:
+  - BMR uses your lean mass (Katch-McArdle), which is more accurate than height and weight.
+  - Targets don't change on their own. After a scan that moves BMR by 20 kcal or more, Body offers *Preview targets with your scan*, before and after.
+  - The **body-fat finish line** becomes available. Its goal weight is lean mass ÷ (1 − target %), and the suggested goal weight uses the scan (§4.2).
+  - Once the weekly check-in has a maintenance estimate (M5), that sets the calories. The scan's BMR still sets the floor.
+
+### 12.9 M13: Data out (DA-02, DA-03, DA-04)
+
+- **Automatic backup (DA-02).** Settings → Data → *Automatic backup*: choose a folder once, e.g. one in Google Drive.
+  - Every Sunday night, when the battery isn't low, the app writes `recomp-backup-YYYY-MM-DD.zip` there and keeps the last 8.
+  - Settings shows the last backup's date, or why it failed.
+- **CSV export (DA-03).** *Export as CSV* saves one zip with `workouts.csv` (one row per set), `food.csv` (one row per entry), `weigh-ins.csv` and `scans.csv`, for spreadsheets. It can't be imported back; the full backup does that.
+- **Write to Health Connect (DA-04).** Settings → Health Connect → *Share with other apps*, off by default.
+  - It writes your workouts, one nutrition record per meal, and the weigh-ins you log. Scan weights aren't written, since the InBody app already writes them.
+  - Turning it on writes the last 30 days. After that, your edits and deletes follow.
+
+### 12.10 M14: Body extras (BM-03, BM-04, YG-03, YG-04)
+
+- **Tape measurements (BM-03).** Settings → Body data → Tape measurements: choose any of chest, arm, thigh and hip. Waist is always on.
+  - *Log waist* becomes *Log measurements*: waist first, then the others once they're 4 or more weeks old.
+  - Each site has a one-line how-to, e.g. "Right arm, relaxed, at the widest point".
+  - Body shows each one's latest value and its change.
+- **Progress photos (BM-04).** Body → Photos: front, side and back.
+  - They go straight into Recomp's private storage and never reach the gallery.
+  - *Compare* puts two dates side by side for one pose.
+  - Body suggests new photos every 4 weeks, with no notification.
+  - Photos never leave the phone: they aren't sent to AI or included in Android's own backup.
+  - ◆ **Decide, backups:** (A) the full export and the automatic backup get *Include photos*, off by default; (B) photos are never exported.
+  - ◆ **Decide, camera:** (A) the phone's camera app takes them, which is simplest; (B) an in-app camera shows the last photo of that pose faintly, so you can line up. (B) is more work, though M15 brings the camera library anyway.
+- **Focus areas (YG-03).** The extra-session form gets chips (hips, hamstrings, back, shoulders, core, full body), prefilled from last time.
+- **Mobility markers (YG-04),** monthly, on a Body card when Settings → Training → *Mobility markers* is on. It's on by default when you have a yoga or mobility session.
+  - Sit-and-reach in cm past your toes (negative when you're short of them).
+  - Deep-squat hold in seconds, with a stopwatch.
+  - Toe touch, yes or no.
+
+  Each has its how-to and its history.
+
+### 12.11 M15: Camera food (NU-19, NU-21, NU-20)
+
+- **Barcode (NU-21).** *Scan barcode* on the add-food screen opens the camera.
+  - A food you already have opens its portion sheet.
+  - Otherwise Open Food Facts is asked. The product shows with its values per 100 g, and *Save* makes it one of your foods.
+  - Not found: "Not on Open Food Facts: scan the label instead".
+  - In the International region, search also asks Open Food Facts when your own results are few, shown as a separate section.
+  - Only the barcode or the search words are sent.
+- **Label scan (NU-19).** *Scan label* in New food: photograph the nutrition table, and on-device text recognition fills in the values per 100 g, starting with the FSSAI layout.
+  - Each filled field is highlighted for you to check.
+  - With AI on, the photo and the recognised text also go to Claude, for a cleaner fill.
+- **Meal photos (NU-20).** Describe it gets a camera and gallery button.
+  - A photo, with optional words ("2 rotis, dal"), gets the same review as text.
+  - The photo is kept only while it's a draft, and deleted once the meal is saved.
+  - The privacy notice adds photos.
+- ◆ **Decide, privacy:** Google's ML Kit (on-device text and barcode recognition) also sends usage metrics to Google, but TRD §7 promises the only network calls go to Anthropic and Open Food Facts. (A) Keep the promise: an open-source barcode reader (ZXing) and an open-source on-device text recogniser (e.g. Tesseract), chosen after a short trial on real labels. (B) Use ML Kit for its better recognition, and change §7 to disclose the metrics.
+
+### 12.12 M16: Recipes (NU-22)
+
+- *New food* → *Recipe*: a name, ingredients picked from search with their amounts, and the cooked weight (weigh the pot; optional) or the number of servings.
+- It shows values per 100 g and per serving, and becomes one of your foods, so it's in search, the parser and saved meals. It gets a *serving* unit (cooked weight ÷ servings) next to the usual measures.
+- Its diet tag is its strictest ingredient's. Editing a recipe changes future logs only.
+
+### 12.13 M17: Goals (PS-04, PS-05, GL-03, GL-06, GL-09)
+
+- **Goal switch (PS-04).** The goal flow's before-and-after step gains *What to expect*, one line for the change, e.g. from a cut to a lean bulk: "The scale will jump 1–2 kg in the first two weeks as water and glycogen come back; judge from week 3".
+  - Comparisons ("since you started", the review's weeks and the charts' goal markers) start from the switch.
+  - History stays.
+- **Goal reached (GL-06).** A card on Today and in the check-in, once the trend crosses the finish line or the date passes: "You reached 78 kg on the trend". It offers the next phase from §4.7:
+  - *Start 2 weeks at maintenance*;
+  - *Choose a new goal*;
+  - *Keep going*, which clears the finish line; you can set a new one.
+- **Maintenance break (GL-06).** After 12 weeks in a deficit without reaching the finish line, the check-in suggests 1 or 2 weeks at maintenance.
+  - Accepting sets maintenance targets from that day. Today says "Maintenance break · back to your recomp on Mon 3 Nov", with *End early*.
+  - The goal resumes on its own on that date, and the 12 weeks start counting again.
+  - *Not now* asks again in 4 weeks.
+- **AI goal interpretation (GL-03).** With AI on, *Describe your goal* sends only the text you typed.
+  - Claude returns an intent and, at most, one follow-up question with an answer box.
+  - The same rules as offline then pick the goal (§4.6).
+  - Any failure falls back to the three questions.
+- **Pregnancy and breastfeeding (GL-09).** A switch in About you, in onboarding and Settings.
+  - When it's on, fat loss and recomp are greyed out with the reason. An active deficit moves to Maintain with the usual preview, and a note suggests asking a doctor or midwife about calories and protein.
+  - It's body data: kept with the profile, never sent to AI and never shared in a persona (PS-06).
+  - ◆ **Decide:** (A) shown to everyone; (B) shown only when sex is set to female.
+- **Presets as data files (PS-05).** The five presets move to `assets/presets/*.json`. Nothing changes on screen.
+
+### 12.14 M18: lb and in (PR-05)
+
+- Settings → Body data → Units switches display and entry everywhere:
+  - body weight in lb;
+  - lifts in lb, with lb steps (2.5, 5 or 10 lb);
+  - lengths in inches, and height in feet and inches.
+
+  Food stays in grams and the region's household measures.
+- Switching asks whether to move your exercises' weight steps to the nearest lb plates (2.5 kg → 5 lb). Logged history stays exact, because storage is always metric.
