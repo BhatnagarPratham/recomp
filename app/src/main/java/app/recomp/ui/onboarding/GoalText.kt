@@ -107,6 +107,15 @@ object GoalText {
 
     // Where each number came from (PR-02)
 
+    /**
+     * Settings shows what a change would save (TRD §5.4), which can differ from the target in force: while a check-in
+     * proposal waits, after *Keep*, or after an *Adjust*. Null when they agree.
+     */
+    fun inForceNote(computedKcal: Int, inForceKcal: Int?, checkinWaiting: Boolean): String? {
+        if (inForceKcal == null || inForceKcal == computedKcal) return null
+        return "Today's target is ${kcal(inForceKcal)} until you " + if (checkinWaiting) "answer the check-in or change something here." else "change something here."
+    }
+
     private fun tens(kcal: Double): Int = (kcal / 10).roundToInt() * 10
 
     /** [estimateWeek] is the check-in week whose maintenance estimate set TDEE (TRD §5.4), when [t] uses one. */

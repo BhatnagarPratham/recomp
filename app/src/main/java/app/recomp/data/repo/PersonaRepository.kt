@@ -114,6 +114,12 @@ class PersonaRepository @Inject constructor(
 
     suspend fun maintenance(): MaintenanceEstimate? = MaintenanceEstimate.of(checkinDao.latestEstimate())
 
+    /** The version in force on [date], which Settings compares with what a change would save. */
+    fun observeTargetOn(date: LocalDate): Flow<NutritionTargetEntity?> = nutritionDao.observeTargetOn(date)
+
+    /** A check-in proposal is waiting for an answer (PRD §12.1). */
+    val checkinWaiting: Flow<Boolean> = checkinDao.observeLatest().map { it != null && it.pending && it.proposedKcal != null }
+
     suspend fun today(): LocalDate = days.today()
 
     /** The trend weight, once the primary source has a weigh-in (TRD §5.0). */

@@ -167,12 +167,15 @@ class CheckinFlowTest {
     @Test
     fun `accept writes a check-in target from today with the new estimate`() = runBlocking {
         val latest = drifting()
+        assertTrue(app.personas.checkinWaiting.first())
         assertTrue(checkins.accept(latest.weekStart, now = at(42, 18)))
+        assertFalse(app.personas.checkinWaiting.first())
         val row = dao.week(latest.weekStart)!!
         assertEquals(ACCEPTED, row.decision)
         assertEquals(at(42, 18), row.decidedAt)
         val target = app.db.nutritionDao().targetOn(date(42))!!
         assertEquals(row.targetId, target.id)
+        assertEquals(target, app.personas.observeTargetOn(date(42)).first())
         assertEquals(TargetReason.CHECKIN, target.reason)
         assertEquals(date(42), target.effectiveFrom)
         assertEquals(row.tdeeNew, target.tdeeEstimate)

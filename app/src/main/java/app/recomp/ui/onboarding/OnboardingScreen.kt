@@ -501,6 +501,7 @@ fun TargetList(
     before: NutritionTargetEntity?,
     onOverride: (TargetOverrides) -> Unit,
     estimateWeek: LocalDate? = null,
+    kcalNote: String? = null,
 ) {
     var editing by remember { mutableStateOf<String?>(null) }
     val o = targets.overrides
@@ -509,7 +510,7 @@ fun TargetList(
         TargetRow("Protein", "${targets.proteinG} g", before?.proteinG?.let { "$it g" }, GoalText.protein(targets), o.proteinG != null, { editing = "protein" }) {
             onOverride(o.copy(proteinG = null))
         }
-        TargetRow("Calories", GoalText.kcal(targets.kcal), before?.kcal?.let(GoalText::kcal), GoalText.calories(targets, policy, estimateWeek), o.kcal != null, { editing = "kcal" }) {
+        TargetRow("Calories", GoalText.kcal(targets.kcal), before?.kcal?.let(GoalText::kcal), GoalText.calories(targets, policy, estimateWeek), o.kcal != null, { editing = "kcal" }, note = kcalNote) {
             onOverride(o.copy(kcal = null))
         }
         TargetRow("Fat", "${targets.fatG} g", before?.fatG?.let { "$it g" }, GoalText.fat(targets), o.fatG != null, { editing = "fat" }) {
@@ -538,7 +539,16 @@ fun TargetList(
 }
 
 @Composable
-private fun TargetRow(label: String, value: String, was: String?, why: String, overridden: Boolean, onEdit: (() -> Unit)?, onReset: () -> Unit) {
+private fun TargetRow(
+    label: String,
+    value: String,
+    was: String?,
+    why: String,
+    overridden: Boolean,
+    onEdit: (() -> Unit)?,
+    note: String? = null,
+    onReset: () -> Unit,
+) {
     val content: @Composable () -> Unit = {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -547,6 +557,7 @@ private fun TargetRow(label: String, value: String, was: String?, why: String, o
                 Text(value, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             }
             Text(why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary) }
             if (overridden) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Set by you", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.weight(1f))

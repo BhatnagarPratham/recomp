@@ -71,10 +71,12 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -93,11 +95,15 @@ data class SettingsUi(
     val scanSlot: ScanSlot? = null,
     /** The check-in's maintenance estimate, which sets TDEE once there is one (TRD §5.4). */
     val maintenance: MaintenanceEstimate? = null,
+    /** The version in force today, and whether a check-in proposal waits: Settings says so when its number differs. */
+    val inForceKcal: Int? = null,
+    val checkinWaiting: Boolean = false,
 )
 
 /** A change that moves the targets, waiting for you to confirm the before and after (PRD §7.1). */
 data class PendingChange(val preview: TargetPreview, val profile: Profile?, val overrides: TargetOverrides?)
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val personas: PersonaRepository,
@@ -115,9 +121,11 @@ class SettingsViewModel @Inject constructor(
         Triple(stored, profile, Triple(plan, overrides, day to maintenance))
     }
 
-    private val bodyData = combine(body.observeTrend(), body.scanSlot) { trend, slot -> trend.trendKg to slot }
+    private val inForce = combine(today.flatMapLatest { personas.observeTargetOn(it) }, personas.checkinWaiting) { target, waiting -> target?.kcal to waiting }
 
-    val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot) ->
+    private val bodyData = combine(body.observeTrend(), body.scanSlot, inForce) { trend, slot, inForce -> Triple(trend.trendKg, slot, inForce) }
+
+    val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot, inForce) ->
         val (plan, overrides, dayAndEstimate) = rest
         val (day, maintenance) = dayAndEstimate
         SettingsUi(
@@ -133,6 +141,8 @@ class SettingsViewModel @Inject constructor(
             trendKg = trendKg,
             scanSlot = slot,
             maintenance = maintenance,
+            inForceKcal = inForce.first,
+            checkinWaiting = inForce.second,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUi())
 
@@ -238,7 +248,14 @@ fun SettingsScreen(
         val targets = ui.targets
         if (targets != null && plan != null) {
             SectionTitle("Targets")
-            TargetList(targets, plan.policy, before = null, onOverride = viewModel::changeOverrides, estimateWeek = ui.maintenance?.weekStart)
+            TargetList(
+                targets,
+                plan.policy,
+                before = null,
+                onOverride = viewModel::changeOverrides,
+                estimateWeek = ui.maintenance?.weekStart,
+                kcalNote = GoalText.inForceNote(targets.kcal, ui.inForceKcal, ui.checkinWaiting),
+            )
             LatestCheckinRow()
         }
 
