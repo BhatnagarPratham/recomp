@@ -1040,7 +1040,8 @@ Tests cover:
 | Incomplete days | ✅ The Food tab's day menu marked a day incomplete and back, with its note. |
 | Fixed during the phone run | The outlined buttons had no visible border on the tinted proposal card, and the Settings row's long value squeezed its title onto one letter per line. Both fixed and re-checked. |
 | Review fixes | A fresh-session review of #10 found 0 blockers, 3 should-fix and 6 nits, all fixed with tests: the guardrails, the answer flow, catch-up triggers, the *Adjust* range, the decision date, a changed goal's verdict, the incomplete-day write, proposals on caught-up weeks, and the clock. |
-| Not run on the phone | A real check-in, because the first week ends after the install. Lapse and catch-up over real weeks. Settings' note when its number differs from today's target, and the review fixes: the phone was unplugged. The tests cover them. |
+| Settings' note, after the merge | ✅ Checked in the dev install, built from main at 73d86a2. With a proposal waiting, Settings → Calories showed 1,860 kcal and read "Today's target is 2,000 kcal until you answer the check-in or change something here", while Today showed 2,000. After *Keep*, from the Settings row, the note read "…until you change something here", and the check-in said "You kept your target on 18 Oct." After *Accept*, on reset data, Settings and Today both showed 1,870 with no note. <!-- pii-ok: invented dev-install values --> |
+| Not run on the phone | A real check-in, because the first week ends after the install. Lapse and catch-up over real weeks. The review fixes the Settings check didn't pass through: the guardrail note, a second tap during a save, and the clock cases. The tests cover them. |
 
 #### M6: In the gym
 
