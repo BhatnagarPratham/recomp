@@ -139,7 +139,10 @@ weekly_checkin      week_start (PK, the Monday), computed_at, window_days, logge
                     flag?(LOSS_SLOW|FLAT|DRIFT|GAIN_SLOW|GAIN_FAST), proposed_kcal?,
                     decision(PENDING|ACCEPTED|ADJUSTED|KEPT|LAPSED), decided_at?, target_id?
                                           -- NU-05 (§5.4): one row per week; decided rows are frozen;
-                                          -- target_id is the version Accept or Adjust wrote (a same-day change replaces it)
+                                          -- target_id is the version Accept or Adjust wrote (a same-day change replaces it);
+                                          -- flag and proposed_kcal use the goal and body data as they were when the week was
+                                          -- computed: weeks caught up together are judged by that day's goal, and the ones that
+                                          -- close in the same catch-up keep no proposal
 daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
                                           -- food_incomplete from the Food tab's day menu (M5); steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
@@ -1000,7 +1003,10 @@ Parallel milestones share only the registration files, with small additive edits
 **M5 results (2026-10-18, reference phone on Android 15, release build over M4 data).** Built as §5.4 and PRD §12.1 describe, with these choices where they left room:
 - **A calorie override you set** stays on *Accept*; *Use the new target* (shown only when you have one) resets it; *Adjust* sets the calories itself, so it replaces the override, and the screen says so.
 - **A pending week is recomputed** one last time before it lapses, so food logged late still counts in the estimate the next week starts from.
-- **Today's card** runs the catch-up whenever the log date changes, so a Monday that starts while the app is open computes the week too.
+- **Catch-up runs** at launch (after any unfinished import), after an import, whenever Today's log date changes, and before a check-in opens. So a Monday that starts while the app is open computes the week too, and an older pending week lapses rather than being answered from a stale estimate.
+- **The guardrails apply as in Settings** (PRD §4.9): every week is judged and proposed with the stored goal after `Guardrails.apply` at the trend weight. *Accept* writes the guarded goal and stores it, as a Settings save does, and the screen shows the note.
+- **A clock that ran ahead:** catch-up drops unanswered rows for weeks that haven't ended (pending, or lapsed by the app), keeps your answers, and reopens the week those rows had lapsed.
+- **One answer at a time:** the buttons wait while an answer saves. A second tap is refused quietly, because the screen already shows the first answer. A failure after the target is saved says so rather than "unchanged".
 - **Settings → Calories** shows what a change would save. When that differs from today's target, as it does while a proposal waits or after *Keep* or *Adjust*, it says "Today's target is 2,000 kcal until you answer the check-in or change something here".
 
 Tests cover:
@@ -1009,8 +1015,19 @@ Tests cover:
   - An early water drop of 1.5 kg reads as up to about 260 kcal of extra burn. The half step keeps the estimate's peak lower and later, and it's gone once the drop leaves the window.
   - A trend only four weeks old still lags, so a new user's first estimate reads up to about 150 kcal low.
   - `CheckinFlags`: each flag at its edges, and rates, the 4-week change and waist pairs from weigh-ins.
-  - `CheckinProposal`: TRD §5.3 vector A's inputs at a new estimate, the floor, the 50 kcal rule, overrides, and the *Adjust* range.
-- Repository: catch-up in order and the day boundary, the estimate's chain, frozen rows, recompute on open, lapse, Today's card, *Accept*, *Use the new target*, *Adjust* (clamped) and *Keep*, incomplete days in the estimate and in Today's average, and Settings' targets from the latest estimate, including a kept week's and past a later week without one.
+  - `CheckinProposal`: TRD §5.3 vector A's inputs at a new estimate, the floor, the 50 kcal rule, overrides, and the *Adjust* range. It always takes in the proposal, checked for every goal and pace at every maintenance from 1,200 to 3,600.
+- Repository:
+  - catch-up in order, the day boundary, and catch-up on open;
+  - the estimate's chain, frozen rows, recompute on open, and lapse;
+  - proposals only on weeks that could be seen;
+  - a clock that ran ahead and came back;
+  - Today's card;
+  - *Accept*, *Use the new target*, *Adjust* (clamped) and *Keep*;
+  - two answers at once, and settings that fail after the save;
+  - the decision's log date;
+  - the guardrails: the review's probe of a cut at BMI 18.48 is judged as Maintain with no deficit, and an accepted Maintain proposal writes and stores Maintain;
+  - incomplete days in the estimate and in Today's average, keeping the day's other columns;
+  - Settings' targets from the latest estimate, including a kept week's and past a later week without one.
 - Migrations: 7→8, and 6→7→8 in one open.
 - Backup: the round trip with both new tables and `checkin_seen`, and a bad `checkin_seen` refused.
 
@@ -1022,7 +1039,8 @@ Tests cover:
 | Settings | ✅ Settings → Targets → Calories read "Maintenance is about 2,320 kcal, from your check-in of 5 Oct (the formula says 2,460)". The *Weekly check-in* row opened the check-in, and after *Accept*, Settings and Today both showed 1,870. <!-- pii-ok: invented dev-install values --> |
 | Incomplete days | ✅ The Food tab's day menu marked a day incomplete and back, with its note. |
 | Fixed during the phone run | The outlined buttons had no visible border on the tinted proposal card, and the Settings row's long value squeezed its title onto one letter per line. Both fixed and re-checked. |
-| Not run on the phone | A real check-in, because the first week ends after the install. Lapse and catch-up over real weeks. Settings' note when its number differs from today's target, which was added after the phone run; the tests cover it. |
+| Review fixes | A fresh-session review of #10 found 0 blockers, 3 should-fix and 6 nits, all fixed with tests: the guardrails, the answer flow, catch-up triggers, the *Adjust* range, the decision date, a changed goal's verdict, the incomplete-day write, proposals on caught-up weeks, and the clock. |
+| Not run on the phone | A real check-in, because the first week ends after the install. Lapse and catch-up over real weeks. Settings' note when its number differs from today's target, and the review fixes: the phone was unplugged. The tests cover them. |
 
 #### M6: In the gym
 
