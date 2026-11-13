@@ -749,15 +749,22 @@ These rules hold for every block:
 ### 12.4 M8: Weekly review (HM-03, HM-04, IB-04)
 
 - **The review extends M5's check-in screen.** There's one per week, with ‹ and › between weeks, and the current week shows what's in so far. Today's weekly-plan card opens it too.
+  - The current week has no check-in yet, so it shows only the sections. Its food covers the days up to yesterday, because a half-logged today would drag the averages down.
 - **Sections,** after the headline, verdict and proposal (§12.1):
-  - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target; the ramp's baseline week, which has no target, is left out); and the share of calories from *Ordered* and *Packaged* food.
+  - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target; the ramp's baseline week, which has no target, is left out); and the share of calories from *Ordered* and *Packaged* food. Days marked incomplete are left out of all three, as from the 7-day average (§12.1).
   - **Training:** sessions done against planned, for strength and each extra session; PRs; and lifts showing a stall card.
+    - PRs show one line per lift, with each kind of record at its latest value that week. Five lifts show, then "and 3 more lifts with PRs".
+    - A lift counts as stalled when its card showed a stall in one of the week's workouts.
   - **Body:** the trend weight and waist changes; the week's scan against the previous one, with noise labels; average steps and sleep, once M13 tracks them.
 - **The finish line:** "At this rate: around mid-March (goal 78 kg)", or "Moving away from your goal", recomputed each week from the trend (§4.2). <!-- pii-ok: illustrative -->
+  - Barely moving (under 0.05 kg a week) reads "Holding steady, so there's no date at this rate", and over two years out reads "More than two years away at this rate".
+  - A date finish line shows the change expected by then. A body-fat finish line runs on the scans' slope, from three on-protocol scans.
+  - Until there's a rate, it says what it needs.
 - **With AI on,** the review ends with the weekly programme review (§12.7, M11).
 - **Consistency calendar (HM-04):** a month grid in the review.
   - A day gets a filled dot for a strength workout, a ring for an extra session and a tint when food was logged.
   - There are no streak counts, and nothing marks a missed day.
+  - It shows the month of the week's Thursday, as ISO weeks do, so it follows ‹ and ›.
 - **Body-composition chart (IB-04),** on the Body tab above the scan table: three small charts on one time axis, over 12 weeks or everything:
   1. muscle mass and fat mass from scans;
   2. trend weight;
