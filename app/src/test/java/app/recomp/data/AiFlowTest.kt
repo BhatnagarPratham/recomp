@@ -1,11 +1,14 @@
 package app.recomp.data
 
+import androidx.datastore.preferences.core.edit
 import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.CustomFood
 import app.recomp.data.repo.EstimateResult
+import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
+import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Clarification
@@ -230,8 +233,8 @@ class AiFlowTest {
         assertEquals("Ghee on the phulka?", result.meal.clarifyingQuestion)
 
         val sent = app.estimator.requests.single()
-        assertEquals(AiModel.SONNET_5_5, sent.model)
-        assertEquals("test-key", sent.apiKey)
+        assertEquals(AiModel.SONNET_5_5.id, sent.model)
+        assertEquals("test-key", sent.target.apiKey)
         assertTrue(sent.user.startsWith("Origin: Ordered\nMeal: 2 phulka and pickle"))
         assertTrue(sent.system.contains("lacto-vegetarian"))
 
@@ -433,10 +436,10 @@ class AiFlowTest {
 
     @Test
     fun `the key is stored encrypted, never in the settings, and a key that won't decrypt reads as none`() = runBlocking {
-        assertFalse(app.keys.hasKey.first())
+        assertFalse(app.keys.hasKey(AiProviderId.ANTHROPIC).first())
         ai.saveKey(" test-key ")
-        assertTrue(app.keys.hasKey.first())
-        assertEquals("test-key", app.keys.key())
+        assertTrue(app.keys.hasKey(AiProviderId.ANTHROPIC).first())
+        assertEquals("test-key", app.keys.key(AiProviderId.ANTHROPIC))
 
         val raw = File(tmp.root, "app/secrets.preferences_pb").readBytes().toString(Charsets.ISO_8859_1)
         assertFalse("ciphertext only", raw.contains("test-key"))
@@ -444,14 +447,14 @@ class AiFlowTest {
         assertFalse(settings.contains("test-key"))
 
         app.cipher.broken = true
-        assertFalse(app.keys.hasKey.first())
-        assertNull(app.keys.key())
+        assertFalse(app.keys.hasKey(AiProviderId.ANTHROPIC).first())
+        assertNull(app.keys.key(AiProviderId.ANTHROPIC))
         ai.setEnabled(true)
         assertEquals(AiState.NO_KEY, ai.state())
         app.cipher.broken = false
 
         ai.removeKey()
-        assertFalse(app.keys.hasKey.first())
+        assertFalse(app.keys.hasKey(AiProviderId.ANTHROPIC).first())
         try {
             ai.saveKey("two words")
             throw AssertionError("a key with spaces was saved")
@@ -472,7 +475,7 @@ class AiFlowTest {
                 // expected
             }
         }
-        assertFalse(app.keys.hasKey.first())
+        assertFalse(app.keys.hasKey(AiProviderId.ANTHROPIC).first())
         assertTrue(AiKeyStore.looksLikeKey("test-KEY_09.~"))
     }
 
@@ -491,7 +494,7 @@ class AiFlowTest {
         assertFalse(s.enabled)
         assertEquals(AiModel.OPUS_5_5, s.model)
         assertNull(s.monthlyCapUsd)
-        assertFalse(s.noticeSeen)
+        assertFalse(s.noticeSeen(AiKind.MEAL_TEXT))
 
         ai.setEnabled(true)
         ai.setModel(AiModel.HAIKU_5_5)
@@ -501,6 +504,241 @@ class AiFlowTest {
         assertTrue(after.enabled)
         assertEquals(AiModel.HAIKU_5_5, after.model)
         assertEquals(5.0, after.monthlyCapUsd!!, 0.0)
-        assertTrue(after.noticeSeen)
+        assertTrue(after.noticeSeen(AiKind.MEAL_TEXT))
+    }
+
+    // AI providers (AI-05)
+
+    private suspend fun providerOf(id: Long) = ai.request(id)!!.provider
+
+    @Test
+    fun `switching provider keeps both keys, and each provider needs its own`() = runBlocking {
+        ready()
+        assertEquals(AiState.READY, ai.state())
+        assertEquals(setOf(AiProviderId.ANTHROPIC), ai.storedKeys.first())
+
+        ai.setProvider(AiProviderId.OPENAI)
+        assertEquals("Anthropic's key isn't OpenAI's", AiState.NO_KEY, ai.state())
+        assertEquals(AiProviderId.OPENAI, ai.gate.first().provider)
+        assertFalse(ai.hasKey.first())
+        assertEquals(EstimateResult.NotReady(AiState.NO_KEY), ai.estimate("dal", Origin.HOME))
+        assertTrue(app.estimator.requests.isEmpty())
+
+        ai.saveKey("openai-test-key")
+        assertEquals(AiState.READY, ai.state())
+        assertEquals(setOf(AiProviderId.ANTHROPIC, AiProviderId.OPENAI), ai.storedKeys.first())
+        assertEquals("test-key", app.keys.key(AiProviderId.ANTHROPIC))
+        assertEquals("openai-test-key", app.keys.key(AiProviderId.OPENAI))
+
+        // Each request carries the key of the provider in use, and its model.
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item())) }
+        ai.setModel(AiModel.GPT_6_LUNA)
+        val openAi = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        ai.setProvider(AiProviderId.ANTHROPIC)
+        assertEquals("back on Anthropic with its key and model, nothing re-entered", AiState.READY, ai.state())
+        val anthropic = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        val (first, second) = app.estimator.requests
+        assertEquals(listOf(AiProviderId.OPENAI, "openai-test-key", "gpt-6-luna"), listOf(first.target.provider, first.target.apiKey, first.model))
+        assertEquals(listOf(AiProviderId.ANTHROPIC, "test-key", "claude-opus-5-5"), listOf(second.target.provider, second.target.apiKey, second.model))
+        assertFalse("the refusal fallback is Anthropic's alone", first.target.serverFallback)
+        assertTrue(second.target.serverFallback)
+        assertEquals(AiProviderId.OPENAI, providerOf(openAi.requestId))
+        assertEquals(AiProviderId.ANTHROPIC, providerOf(anthropic.requestId))
+
+        // Removing one provider's key leaves the other's.
+        ai.removeKey(AiProviderId.OPENAI)
+        assertEquals(setOf(AiProviderId.ANTHROPIC), ai.storedKeys.first())
+        assertEquals(AiState.READY, ai.state())
+
+        // The stored ciphertext is bound to its provider: one provider's entry can't stand in for another's.
+        val raw = File(tmp.root, "app/secrets.preferences_pb").readBytes().toString(Charsets.ISO_8859_1)
+        assertFalse(raw.contains("test-key"))
+        assertNull(app.keys.key(AiProviderId.GEMINI))
+    }
+
+    @Test
+    fun `one monthly cap counts every provider's requests together`() = runBlocking {
+        ready()
+        ai.saveKey("gemini-test-key", AiProviderId.GEMINI)
+        ai.setMonthlyCap(0.05)
+        // $0.028 on Anthropic, then the same again logged against Gemini: together over the cap.
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item())) }
+        ai.estimate("dal", Origin.HOME)
+        ai.setProvider(AiProviderId.GEMINI)
+        assertEquals(AiState.READY, ai.state())
+        ai.estimate("dal", Origin.HOME)
+        assertEquals(AiState.OVER_CAP, ai.state())
+        ai.setProvider(AiProviderId.ANTHROPIC)
+        assertEquals("the cap isn't per provider", AiState.OVER_CAP, ai.state())
+        val spend = ai.spend.first()
+        assertEquals(2, spend.requests)
+        assertEquals(0.056, spend.costUsd, 1e-9)
+    }
+
+    @Test
+    fun `the reservation is each provider's own upper bound, logged against it`() = runBlocking {
+        ready()
+        ai.saveKey("gemini-test-key", AiProviderId.GEMINI)
+        ai.setProvider(AiProviderId.GEMINI)
+        ai.setModel(AiModel.GEMINI_3_8_FLASH)
+        val hold = CompletableDeferred<Unit>()
+        app.estimator.hold = hold
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item()), attempts = listOf(TokenUsage("gemini-3.8-flash", 1_000, 500)), servedBy = "gemini-3.8-flash-001") }
+        val running = async(Dispatchers.Default) { ai.estimate("dal", Origin.HOME) }
+        withTimeout(5_000) { while (app.estimator.requests.isEmpty()) delay(10) }
+        val bound = app.estimator.requests.single().upperBound
+        val pending = app.db.openHelper.readableDatabase.query("SELECT provider, model, status, cost_usd FROM ai_request_log").use {
+            it.moveToFirst()
+            listOf(it.getString(0), it.getString(1), it.getString(2)) to it.getDouble(3)
+        }
+        assertEquals(listOf("GEMINI", "gemini-3.8-flash", "PENDING"), pending.first)
+        assertEquals((bound.inputTokens * 0.75 + 8_000 * 3.75) / 1_000_000, pending.second, 1e-12)
+        hold.complete(Unit)
+        val done = running.await() as EstimateResult.Estimated
+        val row = ai.request(done.requestId)!!
+        assertEquals(AiProviderId.GEMINI, row.provider)
+        assertEquals("gemini-3.8-flash-001", row.model)
+        assertEquals((1_000 * 0.75 + 500 * 3.75) / 1_000_000, row.costUsd, 1e-12)
+    }
+
+    @Test
+    fun `a compatible server needs its address and model, and its typed prices are what's charged`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        assertEquals(AiState.NO_URL, ai.state())
+        assertEquals(EstimateResult.NotReady(AiState.NO_URL), ai.estimate("dal", Origin.HOME))
+
+        // The URL rules are enforced on the way in: http only to this phone or the local network.
+        for (bad in listOf("http://example.com/v1", "example.com", "https://user:pw@example.com/v1", "")) {
+            assertTrue(bad, runCatching { ai.setCompatible(bad, "m", 0.0, 0.0) }.exceptionOrNull() is IllegalArgumentException)
+        }
+        assertTrue(runCatching { ai.setCompatible("https://example.com/v1", " ", 0.0, 0.0) }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { ai.setCompatible("https://example.com/v1", "m", -1.0, 0.0) }.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(AiState.NO_URL, ai.state())
+
+        ai.setCompatible("https://openrouter.ai/api/v1/", " vendor/test-model ", 0.5, 1.5)
+        assertEquals("over https it needs its key", AiState.NO_KEY, ai.state())
+        ai.saveKey("router-test-key")
+        assertEquals(AiState.READY, ai.state())
+
+        app.estimator.next = { request -> FakeEstimator.reply(AiStatus.OK, estimate(item()), attempts = listOf(TokenUsage(request.model, 2_000, 1_000, rates = request.target.rates))) }
+        val result = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        val sent = app.estimator.requests.single()
+        assertEquals("vendor/test-model", sent.model)
+        assertEquals("https://openrouter.ai/api/v1", sent.target.baseUrl!!.base)
+        assertEquals("router-test-key", sent.target.apiKey)
+        val row = ai.request(result.requestId)!!
+        assertEquals(AiProviderId.COMPATIBLE, row.provider)
+        assertEquals((2_000 * 0.5 + 1_000 * 1.5) / 1_000_000, row.costUsd, 1e-12)
+
+        // A stored URL that no longer passes the rules (an edited backup) reads as not set up: nothing is sent.
+        app.prefs.setAiCompatible("http://example.com/v1", "m", 0.0, 0.0)
+        assertEquals(AiState.NO_URL, ai.state())
+        assertEquals(EstimateResult.NotReady(AiState.NO_URL), ai.estimate("dal", Origin.HOME))
+        assertEquals(1, app.estimator.requests.size)
+    }
+
+    @Test
+    fun `a server over plain http is never given the key, and a free one costs nothing`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        // A key saved earlier, for another server.
+        ai.saveKey("router-test-key")
+        ai.setCompatible("http://localhost:11434/v1", "local-model", 0.0, 0.0)
+        assertEquals(AiState.READY, ai.state())
+        app.estimator.next = { request -> FakeEstimator.reply(AiStatus.OK, estimate(item()), attempts = listOf(TokenUsage(request.model, 2_000, 1_000, rates = request.target.rates))) }
+        val result = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        assertNull("no key over http", app.estimator.requests.single().target.apiKey)
+        assertEquals(0.0, ai.request(result.requestId)!!.costUsd, 0.0)
+        assertEquals(0.0, ai.spend.first().costUsd, 0.0)
+
+        // With no key stored at all it's still ready: it needs none.
+        ai.removeKey()
+        assertEquals(AiState.READY, ai.state())
+        assertEquals(AiState.READY, ai.gate.first().state)
+
+        // This phone needs no internet and no local-network permission.
+        app.connectivity.online.value = false
+        app.localNetwork.allowed.value = false
+        assertEquals(AiState.READY, ai.state())
+    }
+
+    @Test
+    fun `a refused local-network permission has its own state, and nothing is sent`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("http://192.168.1.20:11434/v1", "local-model", 0.0, 0.0)
+        assertEquals(AiState.READY, ai.state())
+
+        app.localNetwork.allowed.value = false
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.state())
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.gate.first().state)
+        assertEquals(EstimateResult.NotReady(AiState.NO_LOCAL_NETWORK), ai.estimate("dal", Origin.HOME))
+        assertTrue(app.estimator.requests.isEmpty())
+        assertEquals(0, requests())
+
+        // A server on your own network needs no internet, only the permission.
+        app.localNetwork.allowed.value = true
+        app.connectivity.online.value = false
+        assertEquals(AiState.READY, ai.state())
+
+        // The permission is about the local network only: the same refusal doesn't stop a server on the internet.
+        app.connectivity.online.value = true
+        app.localNetwork.allowed.value = false
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
+        ai.saveKey("router-test-key")
+        assertEquals(AiState.READY, ai.state())
+        ai.setProvider(AiProviderId.ANTHROPIC)
+        ai.saveKey("test-key")
+        assertEquals(AiState.READY, ai.state())
+        // An https address on the local network still needs it.
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("https://10.0.0.5/v1", "m", 0.0, 0.0)
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.state())
+    }
+
+    @Test
+    fun `the privacy notice is shown once per provider, and again for another server`() = runBlocking {
+        ai.markNoticeSeen()
+        assertTrue(ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        assertFalse("another kind of request has its own notice", ai.settings.first().noticeSeen(AiKind.COACH))
+
+        ai.setProvider(AiProviderId.OPENAI)
+        assertFalse("changing provider shows it again", ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        ai.markNoticeSeen()
+        assertTrue(ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        ai.setProvider(AiProviderId.ANTHROPIC)
+        assertTrue("once", ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
+        assertFalse(ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        ai.markNoticeSeen()
+        assertTrue(ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        ai.setCompatible("http://192.168.1.20:11434/v1", "m", 0.0, 0.0)
+        assertFalse("another server hasn't been told about", ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+        ai.setCompatible("https://openrouter.ai/api/v2", "other", 1.0, 1.0)
+        assertTrue("the same server, whatever the path or model", ai.settings.first().noticeSeen(AiKind.MEAL_TEXT))
+    }
+
+    @Test
+    fun `an install from before providers keeps its key, model and the notice it saw`() = runBlocking {
+        // What M3c to M6 stored: the one notice flag, Anthropic's model under ai_model, and the key under its old name.
+        app.store.edit {
+            it[androidx.datastore.preferences.core.booleanPreferencesKey("ai_notice_seen")] = true
+            it[androidx.datastore.preferences.core.stringPreferencesKey("ai_model")] = "claude-haiku-5-5"
+            it[androidx.datastore.preferences.core.stringPreferencesKey("ai_mode")] = "ON"
+        }
+        assertEquals("the key's entry keeps its name, so an upgrade still finds it", "anthropic_api_key", AiKeyStore.name(AiProviderId.ANTHROPIC))
+        ai.saveKey("test-key")
+        val s = ai.settings.first()
+        assertEquals(AiProviderId.ANTHROPIC, s.provider)
+        assertEquals(AiModel.HAIKU_5_5, s.model)
+        assertTrue(s.noticeSeen(AiKind.MEAL_TEXT))
+        assertFalse(s.copy(provider = AiProviderId.GEMINI).noticeSeen(AiKind.MEAL_TEXT))
+        assertEquals(AiState.READY, ai.state())
+        // The other providers start on their defaults.
+        assertEquals(AiModel.GPT_6_1_SOL, s.models[AiProviderId.OPENAI])
+        assertEquals(AiModel.GEMINI_4_HYDROGEN, s.models[AiProviderId.GEMINI])
     }
 }

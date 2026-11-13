@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.ai.LocalNetwork
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.SecretCipher
 import app.recomp.data.backup.BackupManager
@@ -105,6 +106,12 @@ class FakeCipher : SecretCipher {
     }
 }
 
+/** The local-network permission, granted unless a test refuses it. */
+class FakeLocalNetwork : LocalNetwork {
+    override val allowed = MutableStateFlow(true)
+    override fun refresh() = Unit
+}
+
 class FakeConnectivity : Connectivity {
     override val online = MutableStateFlow(true)
 }
@@ -161,6 +168,7 @@ class TestApp(private val dir: File) {
     val cipher = FakeCipher()
     val keys = AiKeyStore(PreferenceDataStoreFactory.create { File(dir, "secrets.preferences_pb") }, cipher)
     val connectivity = FakeConnectivity()
+    val localNetwork = FakeLocalNetwork()
     val estimator = FakeEstimator()
     val clock = TestClock()
 
@@ -209,7 +217,7 @@ class TestApp(private val dir: File) {
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
-        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
+        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, estimator, foods, clock)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas, nutrition)
     }

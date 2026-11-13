@@ -1,6 +1,11 @@
 package app.recomp.data
 
-import app.recomp.data.ai.ClaudeMealEstimator
+import app.recomp.data.ai.AiProviders
+import app.recomp.data.ai.AnthropicProvider
+import app.recomp.data.ai.GeminiProvider
+import app.recomp.data.ai.OpenAiProvider
+import app.recomp.data.ai.ProviderMealEstimator
+import app.recomp.domain.ai.AiTarget
 import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Confidence
@@ -28,21 +33,22 @@ import org.junit.Test
  * The Claude client against a local server (TRD §6.2, §8): the request it builds, how each reply and error maps
  * to a status, the one retry and the timeout. No real key or network is involved; the values are invented.
  */
-class ClaudeMealEstimatorTest {
+class AnthropicProviderTest {
     private lateinit var server: MockWebServer
-    private val estimator = ClaudeMealEstimator()
+    private val anthropic = AnthropicProvider()
+    private val estimator = ProviderMealEstimator(AiProviders(anthropic, OpenAiProvider(), GeminiProvider()))
 
     @Before
     fun setUp() {
         server = MockWebServer().apply { start(java.net.InetAddress.getByName("127.0.0.1"), 0) }
-        estimator.baseUrl = "http://127.0.0.1:${server.port}"
-        estimator.timeout = Duration.ofSeconds(2)
+        anthropic.baseUrl = "http://127.0.0.1:${server.port}"
+        anthropic.timeout = Duration.ofSeconds(2)
     }
 
     @After
     fun tearDown() = server.shutdown()
 
-    private fun request(model: AiModel = AiModel.OPUS_5_5) = MealRequest("test-key", model, "SYSTEM PROMPT", "Origin: Home\nMeal: 2 phulka")
+    private fun request(model: AiModel = AiModel.OPUS_5_5) = MealRequest(AiTarget.anthropic("test-key", model), "SYSTEM PROMPT", "Origin: Home\nMeal: 2 phulka")
 
     private val reply = """
         {"items":[
@@ -96,11 +102,11 @@ class ClaudeMealEstimatorTest {
         val recorded = server.takeRequest(1, TimeUnit.SECONDS)!!
         assertEquals("/v1/messages", recorded.requestUrl!!.encodedPath)
         assertEquals("test-key", recorded.getHeader("x-api-key"))
-        assertTrue(recorded.getHeader("anthropic-beta")!!.contains(ClaudeMealEstimator.FALLBACK_BETA))
+        assertTrue(recorded.getHeader("anthropic-beta")!!.contains(AnthropicProvider.FALLBACK_BETA))
         val body = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
 
         assertEquals("claude-opus-5-5", body.getValue("model").jsonPrimitive.content)
-        assertEquals(ClaudeMealEstimator.MAX_TOKENS.toString(), body.getValue("max_tokens").jsonPrimitive.content)
+        assertEquals(AnthropicProvider.MAX_TOKENS.toString(), body.getValue("max_tokens").jsonPrimitive.content)
         assertNull("thinking is the model's adaptive default", body["thinking"])
         assertEquals("default", body.getValue("fallbacks").jsonPrimitive.content)
 
@@ -206,7 +212,7 @@ class ClaudeMealEstimatorTest {
 
     @Test
     fun `a timed-out request isn't sent again, and counts at its upper bound`() = runBlocking {
-        estimator.timeout = Duration.ofMillis(500)
+        anthropic.timeout = Duration.ofMillis(500)
         server.enqueue(message().setHeadersDelay(3, TimeUnit.SECONDS))
         val started = System.nanoTime()
         val r = estimator.estimate(request())
@@ -215,7 +221,7 @@ class ClaudeMealEstimatorTest {
         assertTrue("gave up well before the server answered", (System.nanoTime() - started) / 1_000_000 < 3_000)
         // The usage is unknown and may have been billed: the prompt and every allowed output token stand in for it.
         assertEquals(listOf(request().upperBound), r.attempts)
-        assertEquals(ClaudeMealEstimator.MAX_TOKENS, r.attempts.single().outputTokens)
+        assertEquals(AnthropicProvider.MAX_TOKENS, r.attempts.single().outputTokens)
     }
 
     @Test
@@ -237,16 +243,16 @@ class ClaudeMealEstimatorTest {
 
     @Test
     fun `only errors where nothing was processed are retried`() {
-        assertTrue(ClaudeMealEstimator.notSent(RuntimeException(java.net.ConnectException("refused"))))
-        assertTrue(ClaudeMealEstimator.notSent(RuntimeException(java.net.SocketTimeoutException("connect timed out"))))
-        assertFalse(ClaudeMealEstimator.notSent(RuntimeException(java.net.SocketTimeoutException("Read timed out"))))
-        assertFalse(ClaudeMealEstimator.unprocessed(IllegalStateException("anything else")))
+        assertTrue(AnthropicProvider.notSent(RuntimeException(java.net.ConnectException("refused"))))
+        assertTrue(AnthropicProvider.notSent(RuntimeException(java.net.SocketTimeoutException("connect timed out"))))
+        assertFalse(AnthropicProvider.notSent(RuntimeException(java.net.SocketTimeoutException("Read timed out"))))
+        assertFalse(AnthropicProvider.unprocessed(IllegalStateException("anything else")))
     }
 
     @Test
     fun `a key OkHttp can't put in a header fails quietly, without the key in what's kept`() = runBlocking {
         server.enqueue(message())
-        val r = estimator.estimate(MealRequest("test\u200Bkey", AiModel.OPUS_5_5, "SYSTEM PROMPT", "Meal: dal"))
+        val r = estimator.estimate(MealRequest(AiTarget.anthropic("test\u200Bkey", AiModel.OPUS_5_5), "SYSTEM PROMPT", "Meal: dal"))
         assertEquals(AiStatus.UNEXPECTED, r.status)
         assertEquals(0, server.requestCount)
         assertFalse(r.toString().contains("test"))
@@ -255,9 +261,9 @@ class ClaudeMealEstimatorTest {
 
     @Test
     fun `the default timeout is 20 seconds`() {
-        assertEquals(Duration.ofSeconds(20), ClaudeMealEstimator.TIMEOUT)
-        assertEquals(AiStatus.BILLING, ClaudeMealEstimator.statusFor(402))
-        assertEquals(AiStatus.SERVER, ClaudeMealEstimator.statusFor(529))
-        assertEquals(AiStatus.BAD_REQUEST, ClaudeMealEstimator.statusFor(413))
+        assertEquals(Duration.ofSeconds(20), AnthropicProvider.TIMEOUT)
+        assertEquals(AiStatus.BILLING, AnthropicProvider.statusFor(402))
+        assertEquals(AiStatus.SERVER, AnthropicProvider.statusFor(529))
+        assertEquals(AiStatus.BAD_REQUEST, AnthropicProvider.statusFor(413))
     }
 }

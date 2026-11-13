@@ -9,8 +9,15 @@ import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.di.SettingsStore
+import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
+import app.recomp.domain.ai.AiNotice
+import app.recomp.domain.ai.AiPricing
+import app.recomp.domain.ai.AiProviderId
+import app.recomp.domain.ai.AiUrl
+import app.recomp.domain.ai.Rates
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
@@ -208,10 +215,42 @@ data class StoredMealSlot(val key: String, val name: String, val removed: Boolea
  */
 data class AiSettings(
     val enabled: Boolean = false,
-    val model: AiModel = AiModel.DEFAULT,
+    /** AI-05: the one provider in use. */
+    val provider: AiProviderId = AiProviderId.DEFAULT,
+    /** The model picked for each provider that lists its models, kept when you switch away and back. */
+    val models: Map<AiProviderId, AiModel> = AiProviderId.entries.mapNotNull { p -> AiModel.default(p)?.let { p to it } }.toMap(),
+    /** The OpenAI-compatible provider: its base URL as typed, the model's name, and its prices per million tokens. */
+    val baseUrl: String = "",
+    val compatibleModel: String = "",
+    val compatibleInputUsd: Double = 0.0,
+    val compatibleOutputUsd: Double = 0.0,
     val monthlyCapUsd: Double? = null,
-    val noticeSeen: Boolean = false,
-)
+    /** The privacy notices already shown, as [AiNotice.key]s: one per provider and kind of request (TRD §6.2). */
+    val noticesSeen: Set<String> = emptySet(),
+) {
+    /** The listed model in use; null for the OpenAI-compatible provider, whose model is typed. */
+    val model: AiModel? get() = models[provider]
+
+    /** The model id requests are sent with. Blank until the OpenAI-compatible provider's model is typed. */
+    val modelId: String get() = model?.id ?: compatibleModel.trim()
+
+    /** The OpenAI-compatible provider's base URL, when it passes the URL rules. */
+    val url: AiUrl? get() = if (provider == AiProviderId.COMPATIBLE) AiUrl.ok(baseUrl) else null
+
+    /** Whether the provider has what it needs besides a key: a usable base URL and a model name. */
+    val configured: Boolean get() = provider != AiProviderId.COMPATIBLE || (url != null && compatibleModel.isNotBlank())
+
+    /** A server reached over plain http is never sent a key, so it needs none. */
+    val needsKey: Boolean get() = url?.sendsKey != false
+
+    /** The prices typed for the OpenAI-compatible model; null for a listed model, which the price table knows. */
+    val typedRates: Rates? get() = if (provider == AiProviderId.COMPATIBLE) AiPricing.typed(compatibleInputUsd, compatibleOutputUsd) else null
+
+    /** The notice a request of [kind] must have shown before it's sent to the provider in use. */
+    fun notice(kind: AiKind): AiNotice = AiNotice(provider, kind, url?.host)
+
+    fun noticeSeen(kind: AiKind): Boolean = notice(kind).key in noticesSeen
+}
 
 /** The usual scan slot (IB-02) as stored under `scan_slot`: an ISO weekday and minutes after midnight. */
 @Serializable
@@ -263,13 +302,40 @@ internal object SettingsKeys {
 
     /** AI-01: `ON` or `OFF`; absent is off. */
     val AI_MODE = stringPreferencesKey("ai_mode")
+
+    /** Anthropic's model (the name predates AI-05). */
     val AI_MODEL = stringPreferencesKey("ai_model")
+
+    /** AI-05: the provider in use, an `AiProviderId` name; absent is Anthropic. */
+    val AI_PROVIDER = stringPreferencesKey("ai_provider")
+    val AI_MODEL_OPENAI = stringPreferencesKey("ai_model_openai")
+    val AI_MODEL_GEMINI = stringPreferencesKey("ai_model_gemini")
+
+    /** The OpenAI-compatible provider: the model's name as typed, the base URL, and dollars per million tokens. */
+    val AI_MODEL_COMPATIBLE = stringPreferencesKey("ai_model_compatible")
+    val AI_BASE_URL = stringPreferencesKey("ai_base_url")
+    val AI_COMPATIBLE_INPUT_USD = doublePreferencesKey("ai_compatible_input_usd")
+    val AI_COMPATIBLE_OUTPUT_USD = doublePreferencesKey("ai_compatible_output_usd")
+
+    /** The key holding [provider]'s model: an id for a listed model, the typed name for the compatible provider. */
+    fun aiModel(provider: AiProviderId) = when (provider) {
+        AiProviderId.ANTHROPIC -> AI_MODEL
+        AiProviderId.OPENAI -> AI_MODEL_OPENAI
+        AiProviderId.GEMINI -> AI_MODEL_GEMINI
+        AiProviderId.COMPATIBLE -> AI_MODEL_COMPATIBLE
+    }
 
     /** AI-03's monthly cap in dollars; absent is no cap. */
     val AI_MONTHLY_CAP_USD = doublePreferencesKey("ai_monthly_cap_usd")
 
-    /** The one-time privacy notice before the first estimate (TRD §6.2). */
+    /**
+     * Before AI-05: the one privacy notice, for a meal description sent to Anthropic. Still read, as that
+     * notice, so an upgrade or an older backup doesn't show it again; never written.
+     */
     val AI_NOTICE_SEEN = booleanPreferencesKey("ai_notice_seen")
+
+    /** The privacy notices shown (TRD §6.2): `AiNotice.key`s, one per provider and kind of request. */
+    val AI_NOTICES_SEEN = stringSetPreferencesKey("ai_notices_seen")
 
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
@@ -420,6 +486,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
             SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
             SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL, SettingsKeys.CHECKIN_SEEN,
+            SettingsKeys.AI_PROVIDER, SettingsKeys.AI_MODEL_OPENAI, SettingsKeys.AI_MODEL_GEMINI, SettingsKeys.AI_MODEL_COMPATIBLE, SettingsKeys.AI_BASE_URL,
         )
         return buildList {
             strings.filter { wrongType(it, String::class) }.forEach { add(it.name) }
@@ -429,6 +496,9 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
             if (wrongType(SettingsKeys.AI_MONTHLY_CAP_USD, Double::class)) add(SettingsKeys.AI_MONTHLY_CAP_USD.name)
             if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
+            if (wrongType(SettingsKeys.AI_COMPATIBLE_INPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_INPUT_USD.name)
+            if (wrongType(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD.name)
+            if (values[SettingsKeys.AI_NOTICES_SEEN.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.AI_NOTICES_SEEN.name)
             // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
             if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
                 add(SettingsKeys.PERSONA.name)
@@ -491,23 +561,41 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     suspend fun setKeepScreenOn(on: Boolean) = store.edit { it[SettingsKeys.KEEP_SCREEN_ON] = on }
 
     val ai: Flow<AiSettings> = store.data.map { prefs ->
+        fun price(key: Preferences.Key<Double>) = prefs[key]?.takeIf { it >= 0 && it.isFinite() } ?: 0.0
         AiSettings(
             enabled = prefs[SettingsKeys.AI_MODE] == AI_ON,
-            model = AiModel.of(prefs[SettingsKeys.AI_MODEL]),
+            provider = AiProviderId.of(prefs[SettingsKeys.AI_PROVIDER]),
+            models = AiProviderId.entries.mapNotNull { p -> AiModel.of(p, prefs[SettingsKeys.aiModel(p)])?.let { p to it } }.toMap(),
+            baseUrl = prefs[SettingsKeys.AI_BASE_URL].orEmpty(),
+            compatibleModel = prefs[SettingsKeys.AI_MODEL_COMPATIBLE].orEmpty(),
+            compatibleInputUsd = price(SettingsKeys.AI_COMPATIBLE_INPUT_USD),
+            compatibleOutputUsd = price(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD),
             monthlyCapUsd = prefs[SettingsKeys.AI_MONTHLY_CAP_USD]?.takeIf { it >= 0 },
-            noticeSeen = prefs[SettingsKeys.AI_NOTICE_SEEN] ?: false,
+            noticesSeen = prefs[SettingsKeys.AI_NOTICES_SEEN].orEmpty() +
+                if (prefs[SettingsKeys.AI_NOTICE_SEEN] == true) setOf(AiNotice(AiProviderId.ANTHROPIC, AiKind.MEAL_TEXT).key) else emptySet(),
         )
     }.distinctUntilChanged()
 
     suspend fun setAiEnabled(on: Boolean) = store.edit { it[SettingsKeys.AI_MODE] = if (on) AI_ON else AI_OFF }
 
-    suspend fun setAiModel(model: AiModel) = store.edit { it[SettingsKeys.AI_MODEL] = model.id }
+    suspend fun setAiProvider(provider: AiProviderId) = store.edit { it[SettingsKeys.AI_PROVIDER] = provider.name }
+
+    /** A listed model, stored under its own provider, so each provider keeps its pick. */
+    suspend fun setAiModel(model: AiModel) = store.edit { it[SettingsKeys.aiModel(model.provider)] = model.id }
+
+    /** The OpenAI-compatible provider's server, model and prices. The URL is stored as typed; reads check it. */
+    suspend fun setAiCompatible(baseUrl: String, model: String, inputUsd: Double, outputUsd: Double) = store.edit {
+        it[SettingsKeys.AI_BASE_URL] = baseUrl.trim()
+        it[SettingsKeys.AI_MODEL_COMPATIBLE] = model.trim()
+        it[SettingsKeys.AI_COMPATIBLE_INPUT_USD] = inputUsd
+        it[SettingsKeys.AI_COMPATIBLE_OUTPUT_USD] = outputUsd
+    }
 
     suspend fun setAiMonthlyCap(usd: Double?) = store.edit { prefs ->
         if (usd == null) prefs.remove(SettingsKeys.AI_MONTHLY_CAP_USD) else prefs[SettingsKeys.AI_MONTHLY_CAP_USD] = usd
     }
 
-    suspend fun setAiNoticeSeen() = store.edit { it[SettingsKeys.AI_NOTICE_SEEN] = true }
+    suspend fun setAiNoticeSeen(notice: AiNotice) = store.edit { it[SettingsKeys.AI_NOTICES_SEEN] = it[SettingsKeys.AI_NOTICES_SEEN].orEmpty() + notice.key }
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

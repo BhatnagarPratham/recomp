@@ -72,7 +72,7 @@ class AiTest {
         assertEquals(1_000 + AiPricing.PROMPT_OVERHEAD_TOKENS, bound.inputTokens)
         assertEquals(8_000L, bound.outputTokens)
         assertEquals((2_500 * 4.0 + 8_000 * 20.0) / 1_000_000, AiPricing.cost(bound), 1e-12)
-        val request = MealRequest("dummy-key", AiModel.OPUS_5_5, "s".repeat(2_000), "u".repeat(1_000))
+        val request = MealRequest(AiTarget.anthropic("dummy-key", AiModel.OPUS_5_5), "s".repeat(2_000), "u".repeat(1_000))
         assertEquals(bound, request.upperBound)
         assertEquals(MealRequest.MAX_OUTPUT_TOKENS, request.upperBound.outputTokens)
     }
@@ -207,7 +207,7 @@ class AiTest {
 
     @Test
     fun `a request never prints its key`() {
-        val request = MealRequest("dummy-key", AiModel.OPUS_5_5, "system", "user")
+        val request = MealRequest(AiTarget.anthropic("dummy-key", AiModel.OPUS_5_5), "system", "user")
         assertFalse(request.toString().contains("dummy"))
     }
 }

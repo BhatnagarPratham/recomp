@@ -1,7 +1,10 @@
 package app.recomp.data
 
 import android.database.sqlite.SQLiteDatabase
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.backup.BackupException
 import app.recomp.data.backup.BackupManager
@@ -23,6 +26,9 @@ import app.recomp.data.repo.ScanInput
 import app.recomp.data.repo.SegmentalLean
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
 import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiModel
+import app.recomp.domain.ai.AiNotice
+import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.domain.food.Origin
@@ -124,12 +130,24 @@ class BackupTest {
         // AI (M3c): a draft, a logged request and the AI settings.
         app.prefs.setAiEnabled(true)
         app.prefs.setAiMonthlyCap(5.0)
-        app.prefs.setAiNoticeSeen()
+        app.prefs.setAiNoticeSeen(AiNotice(AiProviderId.ANTHROPIC, AiKind.MEAL_TEXT))
+        // AI providers (M7): another provider in use, with its own model, a compatible server and its notice.
+        app.prefs.setAiProvider(AiProviderId.OPENAI)
+        app.prefs.setAiModel(AiModel.GPT_6_LUNA)
+        app.prefs.setAiCompatible("http://192.168.1.20:11434/v1", "test-model", 0.5, 1.5)
+        app.prefs.setAiNoticeSeen(AiNotice(AiProviderId.COMPATIBLE, AiKind.MEAL_TEXT, "192.168.1.20"))
         app.db.aiDao().insertDraft(MealDraftEntity(createdAt = now, logDate = today, mealSlot = "dinner", text = "paneer wrap", origin = Origin.ORDERED, reason = AiStatus.TIMEOUT))
         app.db.aiDao().insertRequest(
             AiRequestLogEntity(
                 createdAt = now, kind = AiKind.MEAL_TEXT, model = "claude-opus-5-5", inputTokens = 2_000, outputTokens = 900, cacheReadTokens = 0,
                 cacheWriteTokens = 1_500, costUsd = 0.0261, status = AiStatus.OK, latencyMs = 4_200, responseJson = "{\"items\":[]}",
+            ),
+        )
+        app.db.aiDao().insertRequest(
+            AiRequestLogEntity(
+                createdAt = now, kind = AiKind.MEAL_TEXT, model = "gpt-6-luna", inputTokens = 1_800, outputTokens = 700, cacheReadTokens = 200,
+                cacheWriteTokens = 0, costUsd = 0.00053, status = AiStatus.OK, latencyMs = 2_100, responseJson = "{\"items\":[]}",
+                provider = AiProviderId.OPENAI,
             ),
         )
 
@@ -324,6 +342,38 @@ class BackupTest {
         assertNull(row.entry.supersetGroup)
         assertEquals(2461, app.db.checkinDao().week(LocalDate.of(2026, 10, 12))!!.tdeeNew)
         assertEquals(listOf(LocalDate.of(2026, 10, 15)), app.db.checkinDao().incompleteDays(LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 18)))
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+    }
+
+    @Test
+    fun `an M6 v9 backup imports into v10 with its AI log as Anthropic's and its settings as they were`() = runBlocking {
+        // The phone before M7: AI on with Sonnet, a cap, the one notice seen, and a logged request.
+        val data = backupAt(9) { db ->
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, response_json) " +
+                    "VALUES (1, 5, 'MEAL_TEXT', 'claude-sonnet-5-5', 2000, 900, 0, 0, 0.013, 'OK', 4200, '{}')",
+            )
+        }
+        val settings = mutablePreferencesOf(
+            stringPreferencesKey("ai_mode") to "ON",
+            stringPreferencesKey("ai_model") to "claude-sonnet-5-5",
+            doublePreferencesKey("ai_monthly_cap_usd") to 5.0,
+            booleanPreferencesKey("ai_notice_seen") to true,
+        )
+        val old = entries(data).toMutableMap().apply { put(BackupManager.SETTINGS, json.encodeToString(BackupManager.encodeSettings(settings))) }
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(zip(*old.map { it.key to it.value }.toTypedArray()))))
+
+        val row = app.db.aiDao().request(1)!!
+        assertEquals(AiProviderId.ANTHROPIC, row.provider)
+        assertEquals(0.013, app.db.aiDao().spendSince(0), 1e-12)
+        val s = app.prefs.ai.first()
+        assertTrue(s.enabled)
+        assertEquals(AiProviderId.ANTHROPIC, s.provider)
+        assertEquals(AiModel.SONNET_5_5, s.model)
+        assertEquals(5.0, s.monthlyCapUsd!!, 0.0)
+        // The old one-notice flag still counts for what it was shown for, and for nothing else.
+        assertTrue(s.noticeSeen(AiKind.MEAL_TEXT))
+        assertFalse(s.copy(provider = AiProviderId.OPENAI).noticeSeen(AiKind.MEAL_TEXT))
         assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
     }
 
@@ -542,14 +592,16 @@ class BackupTest {
     @Test
     fun `the AI key never leaves its own store`() = runBlocking {
         fill()
-        val planted = "planted-value-7310"
-        app.keys.save(planted)
+        // One key per provider (M7), each invented.
+        val planted = AiProviderId.entries.associateWith { "planted-value-7310-${it.ordinal}" }
+        planted.forEach { (provider, key) -> app.keys.save(provider, key) }
         val backup = export()
-        assertFalse(entries(backup).values.any { planted in it })
-        app.keys.clear()
+        planted.values.forEach { key -> assertFalse(entries(backup).values.any { key in it }) }
+        assertFalse(entries(backup).values.any { "planted-value" in it })
+        AiProviderId.entries.forEach { app.keys.clear(it) }
         app.backup.restore(app.backup.prepare(ByteArrayInputStream(backup)))
         // Import never touches the key store either way.
-        assertNull(app.keys.key())
+        AiProviderId.entries.forEach { assertNull(app.keys.key(it)) }
     }
 
     @Test

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SecretsStore
+import app.recomp.domain.ai.AiProviderId
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
@@ -60,40 +61,56 @@ class TinkSecretCipher @Inject constructor(@ApplicationContext private val conte
 }
 
 /**
- * The Claude API key (TRD §6.2): entered once in Settings → AI, stored only as ciphertext in the `secrets`
- * DataStore, apart from the settings so no export can include it. It's never logged or shown again. A
- * stored value that no longer decrypts (a restore onto another phone) reads as no key.
+ * The API keys (TRD §6.2, AI-05): one per provider, each entered once in Settings → AI and stored only as
+ * ciphertext in the `secrets` DataStore, apart from the settings so no export can include it. Switching provider
+ * keeps the other keys. A key is never logged or shown again. A stored value that no longer decrypts (a restore
+ * onto another phone) reads as no key.
  */
 @Singleton
 class AiKeyStore @Inject constructor(
     @SecretsStore private val store: DataStore<Preferences>,
     private val cipher: SecretCipher,
 ) {
-    val hasKey: Flow<Boolean> = store.data.map { prefs -> prefs[KEY]?.let(::decryptOrNull) != null }
+    /** The providers that have a usable key stored. */
+    val stored: Flow<Set<AiProviderId>> = store.data.map { prefs -> AiProviderId.entries.filter { read(prefs, it) != null }.toSet() }
         .distinctUntilChanged()
         .flowOn(Dispatchers.IO)
 
-    /** The key for one request. Null when none is stored or it can't be decrypted. */
-    suspend fun key(): String? = withContext(Dispatchers.IO) { store.data.first()[KEY]?.let(::decryptOrNull) }
+    fun hasKey(provider: AiProviderId): Flow<Boolean> = stored.map { provider in it }.distinctUntilChanged()
 
-    suspend fun save(apiKey: String) {
+    /** The key for one request. Null when none is stored or it can't be decrypted. */
+    suspend fun key(provider: AiProviderId): String? = withContext(Dispatchers.IO) { read(store.data.first(), provider) }
+
+    suspend fun save(provider: AiProviderId, apiKey: String) {
         val trimmed = apiKey.trim()
         require(looksLikeKey(trimmed)) { "Not an API key" }
-        val sealed = withContext(Dispatchers.IO) { cipher.encrypt(trimmed.toByteArray(Charsets.UTF_8), AD) }
-        store.edit { it[KEY] = Base64.encodeToString(sealed, Base64.NO_WRAP) }
+        val sealed = withContext(Dispatchers.IO) { cipher.encrypt(trimmed.toByteArray(Charsets.UTF_8), associatedData(provider)) }
+        store.edit { it[prefKey(provider)] = Base64.encodeToString(sealed, Base64.NO_WRAP) }
     }
 
-    suspend fun clear() {
-        store.edit { it.remove(KEY) }
+    suspend fun clear(provider: AiProviderId) {
+        store.edit { it.remove(prefKey(provider)) }
     }
 
-    /** A stored key that no longer decrypts, or that a build before this check let through, reads as no key. */
-    private fun decryptOrNull(stored: String): String? = runCatching {
-        String(cipher.decrypt(Base64.decode(stored, Base64.NO_WRAP), AD), Charsets.UTF_8)
-    }.getOrNull()?.takeIf(::looksLikeKey)
+    /** A stored key that no longer decrypts, or that a build before the character check let through, reads as no key. */
+    private fun read(prefs: Preferences, provider: AiProviderId): String? = prefs[prefKey(provider)]?.let { stored ->
+        runCatching { String(cipher.decrypt(Base64.decode(stored, Base64.NO_WRAP), associatedData(provider)), Charsets.UTF_8) }
+            .getOrNull()?.takeIf(::looksLikeKey)
+    }
 
     companion object {
-        private val KEY = stringPreferencesKey("anthropic_api_key")
+        /** The entry's name in the `secrets` store. Anthropic's is the one M3c wrote, so an upgrade keeps its key. */
+        fun name(provider: AiProviderId): String = when (provider) {
+            AiProviderId.ANTHROPIC -> "anthropic_api_key"
+            AiProviderId.OPENAI -> "openai_api_key"
+            AiProviderId.GEMINI -> "gemini_api_key"
+            AiProviderId.COMPATIBLE -> "compatible_api_key"
+        }
+
+        private fun prefKey(provider: AiProviderId) = stringPreferencesKey(name(provider))
+
+        /** Binds the ciphertext to the provider it is for, so one provider's key can't be swapped in for another's. */
+        private fun associatedData(provider: AiProviderId) = "recomp:${name(provider)}".toByteArray(Charsets.UTF_8)
 
         /**
          * Printable ASCII with no spaces, which is all an API key is made of. Anything else, such as a zero-width
@@ -101,9 +118,5 @@ class AiKeyStore @Inject constructor(
          * whole key in its error message.
          */
         fun looksLikeKey(key: String): Boolean = key.isNotEmpty() && key.all { it in '!'..'~' }
-
-
-        /** Binds the ciphertext to what it is, so it can't be swapped in for another secret. */
-        private val AD = "recomp:anthropic_api_key".toByteArray(Charsets.UTF_8)
     }
 }

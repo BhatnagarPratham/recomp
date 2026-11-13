@@ -230,4 +230,14 @@ object Migrations {
             db.execSQL("ALTER TABLE `session_exercise` ADD COLUMN `superset_group` INTEGER")
         }
     }
+
+    /**
+     * M7, AI providers (AI-05): which service each request went to, so spend and debugging can tell. Every
+     * row from before it was Anthropic's, which is the default. SQL from schemas/10.json.
+     */
+    val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `ai_request_log` ADD COLUMN `provider` TEXT NOT NULL DEFAULT 'ANTHROPIC'")
+        }
+    }
 }
