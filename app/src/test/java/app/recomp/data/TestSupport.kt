@@ -214,8 +214,8 @@ class TestApp(private val dir: File) {
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, estimator, foods, clock)
         backup = BackupManager(context, db, prefs)
-        checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas, nutrition)
-        reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.routineDao(), prefs, days, personas, nutrition)
+        checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
+        reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

@@ -27,8 +27,8 @@ private const val CHANGES_SHOWN = 4
 /**
  * IB-04's body-composition chart: three small charts on one time axis, over the last [weeks] weeks or everything:
  * muscle and fat mass from scans, the trend weight, and the waist. On-protocol scans are filled and make the lines;
- * off-protocol ones are hollow and left out. Each change between on-protocol scans is labelled with §5.6's noise
- * label, and from three of them the slope per 4 weeks shows.
+ * off-protocol ones are hollow and left out. Each change between on-protocol scans in the window is labelled with
+ * §5.6's noise label, and from three of them the window's slope per 4 weeks shows.
  */
 @Composable
 fun BodyCompositionChart(
@@ -46,7 +46,7 @@ fun BodyCompositionChart(
     val colors = MaterialTheme.colorScheme
     val muscle = colors.primary
     val fat = colors.tertiary
-    val shown = points.filter { !it.date.isBefore(from) }
+    val shown = ScanTrends.since(points, from)
     fun series(value: (ScanPoint) -> Double, color: Color) = listOf(
         ChartSeries(ScanTrends.onProtocol(shown).map { ChartPoint(it.date, value(it)) }, color, line = true),
         ChartSeries(shown.filter { !it.onProtocol }.map { ChartPoint(it.date, value(it)) }, color, dots = ChartDots.HOLLOW),
@@ -87,9 +87,11 @@ fun BodyCompositionChart(
             style = MaterialTheme.typography.bodySmall,
             color = colors.onSurfaceVariant,
         )
-        ScanTrends.changes(points).takeLast(CHANGES_SHOWN).asReversed().forEach { c ->
+        ScanTrends.changes(shown).takeLast(CHANGES_SHOWN).asReversed().forEach { c ->
             Text("${BodyText.shortDate(c.from.date)} → ${BodyText.shortDate(c.to.date)}: ${BodyText.scanChange(c)}", style = MaterialTheme.typography.bodyMedium)
         }
-        ScanTrends.slopes(points)?.let { Text(BodyText.scanSlopes(it) + ", from ${ScanTrends.onProtocol(points).size} on-protocol scans", style = MaterialTheme.typography.bodyMedium) }
+        ScanTrends.slopes(shown)?.let {
+            Text(BodyText.scanSlopes(it) + ", " + BodyText.slopeFrom(ScanTrends.onProtocol(shown).size, weeks), style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }

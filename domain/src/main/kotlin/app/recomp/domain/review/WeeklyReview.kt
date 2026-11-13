@@ -1,6 +1,7 @@
 package app.recomp.domain.review
 
 import app.recomp.domain.food.Origin
+import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.LoggedDay
 import app.recomp.domain.persona.FinishLine
 import app.recomp.domain.persona.GoalPlan
@@ -22,6 +23,9 @@ data class OriginShares(val totalKcal: Double, val orderedPct: Double, val packa
 sealed interface FinishOutlook {
     /** "At this rate: around mid-March (goal 78 kg)". [goal] is kg, or body fat % for a body-fat finish line. */
     data class Around(val date: LocalDate, val goal: Double, val bodyFat: Boolean = false) : FinishOutlook
+
+    /** The trend is at the goal or past it, the way the goal is going. M19 adds the Goal reached card. */
+    data class Reached(val goal: Double, val bodyFat: Boolean = false) : FinishOutlook
 
     /** The trend is going the other way. */
     data object MovingAway : FinishOutlook
@@ -90,6 +94,7 @@ object WeeklyReview {
             val goal = plan.goalWeightKg
             when {
                 goal == null -> null
+                trendKg != null && reached(trendKg, goal, plan.goal) -> FinishOutlook.Reached(goal)
                 trendKg == null || kgPerWeek == null -> FinishOutlook.NeedsData()
                 else -> towards(trendKg, goal, kgPerWeek, STEADY_KG_PER_WEEK, asOf, bodyFat = false)
             }
@@ -99,15 +104,27 @@ object WeeklyReview {
             kgPerWeek == null -> FinishOutlook.NeedsData()
             else -> FinishOutlook.ByDate(line.date, Projection.changeBy(asOf, line.date, kgPerWeek))
         }
-        is FinishLine.BodyFat -> if (bodyFatPct == null || bodyFatPctPerWeek == null) {
+        is FinishLine.BodyFat -> if (bodyFatPct != null && bodyFatPct <= line.pct) {
+            // A body-fat finish line is always a way down.
+            FinishOutlook.Reached(line.pct, bodyFat = true)
+        } else if (bodyFatPct == null || bodyFatPctPerWeek == null) {
             FinishOutlook.NeedsData(bodyFat = true)
         } else {
             towards(bodyFatPct, line.pct, bodyFatPctPerWeek, STEADY_BODY_FAT_PCT_PER_WEEK, asOf, bodyFat = true)
         }
     }
 
+    /**
+     * At the goal weight or past it, the way [kind] goes: down for fat loss and recomp, up for a lean bulk. Maintain has
+     * no way, so only the goal itself counts.
+     */
+    private fun reached(trendKg: Double, goalKg: Double, kind: Goal): Boolean = when (kind) {
+        Goal.LEAN_BULK -> trendKg >= goalKg
+        Goal.FAT_LOSS, Goal.RECOMP -> trendKg <= goalKg
+        Goal.MAINTAIN -> trendKg == goalKg
+    }
+
     private fun towards(current: Double, goal: Double, perWeek: Double, steady: Double, asOf: LocalDate, bodyFat: Boolean): FinishOutlook {
-        if (current == goal) return FinishOutlook.Around(asOf, goal, bodyFat)
         if (abs(perWeek) < steady) return FinishOutlook.Steady
         val weeks = Projection.weeksTo(current, goal, perWeek) ?: return FinishOutlook.MovingAway
         if (weeks > FAR_OFF_WEEKS) return FinishOutlook.FarOff

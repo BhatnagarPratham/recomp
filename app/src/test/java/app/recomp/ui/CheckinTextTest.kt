@@ -27,7 +27,7 @@ class CheckinTextTest {
 
     private fun view(goal: Goal, flagged: WeeklyCheckinEntity = row) = CheckinView(
         row = flagged, plan = GoalPlan.of(goal, Pace.STANDARD, null, null, week), notes = emptyList(), status = CheckinStatus.FLAGGED,
-        evaluation = evaluation, gap = null, week = null, formulaTdee = 2450, current = target, proposal = null, adjustRange = null,
+        evaluation = evaluation, gap = null, formulaTdee = 2450, current = target, proposal = null, adjustRange = null,
         kcalOverride = null, written = null, decidedOn = null,
     )
 

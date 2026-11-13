@@ -1,7 +1,5 @@
 package app.recomp.ui.checkin
 
-import android.os.SystemClock
-import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,8 +56,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * One week of the review: its check-in (null for the week in progress, which has none yet) and its sections. [weeks]
- * is the range ‹ and › move through.
+ * The review on screen. [week] is the week asked for, which ‹ and › move through [weeks]; [checkin] (null for the week
+ * in progress, which has none yet) and [review] are the week shown, which stays until the next one has loaded, so
+ * changing week never blanks the screen.
  */
 data class ReviewUi(
     val week: LocalDate,
@@ -68,8 +67,20 @@ data class ReviewUi(
     val review: WeekReview? = null,
 ) {
     val loaded: Boolean get() = review != null
+
+    /** Another week is on its way: what's shown is still the last one, so its answers wait. */
+    val loading: Boolean get() = review?.weekStart != week
+
     val hasPrevious: Boolean get() = weeks != null && week > weeks.start
     val hasNext: Boolean get() = weeks != null && week < weeks.endInclusive
+
+    /** The shown week's title, once the range says which week is this one; until then, none. */
+    val title: String?
+        get() {
+            val range = weeks ?: return null
+            val shown = review?.weekStart ?: week
+            return ReviewText.title(shown, inProgress = shown == range.endInclusive)
+        }
 }
 
 @HiltViewModel
@@ -92,42 +103,42 @@ class CheckinViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            _ui.update { it.copy(weeks = reviews.weeks()) }
-            load()
+            val weeks = reviews.weeks()
+            _ui.update { it.copy(weeks = weeks) }
+            load(week)
         }
     }
 
     /**
      * Opening recomputes a pending check-in, so food logged since the Monday counts, then reads the week's sections.
-     * The time it takes is logged: TRD §10 M8 asks that the review open well inside a second.
+     * They're shown only if [target] is still the week asked for.
      */
-    private suspend fun load(): CheckinView? {
-        val target = week
-        val started = SystemClock.elapsedRealtime()
+    private suspend fun load(target: LocalDate): CheckinView? {
         val checkin = checkins.open(target)
         val review = reviews.week(target)
-        Log.i(TAG, "Weekly review loaded in ${SystemClock.elapsedRealtime() - started} ms")
-        if (target == week) _ui.update { it.copy(checkin = checkin, review = review) }
+        _ui.update { if (it.week == target) it.copy(checkin = checkin, review = review) else it }
         return checkin
     }
 
-    /** ‹ and › move a week at a time, within the weeks there are. */
+    /** ‹ and › move a week at a time, within the weeks there are. The week shown stays until the next has loaded. */
     fun show(previous: Boolean) {
         val ui = _ui.value
         if (if (previous) !ui.hasPrevious else !ui.hasNext) return
-        _ui.update { ReviewUi(it.week.plusWeeks(if (previous) -1 else 1), it.weeks) }
+        val next = ui.week.plusWeeks(if (previous) -1 else 1)
+        _ui.update { it.copy(week = next) }
         _error.value = null
-        viewModelScope.launch { load() }
+        viewModelScope.launch { load(next) }
     }
 
     /**
-     * One answer at a time. A refusal says so only if the week is still open (a second tap finds it answered); a
-     * failure before the commit leaves the target as it was; one after it says the target was saved.
+     * One answer at a time, for the check-in on screen, whatever week is loading. A refusal says so only if that week is
+     * still the one asked for (a second tap finds it answered); a failure before the commit leaves the target as it
+     * was; one after it says the target was saved.
      */
     private fun answer(block: suspend (LocalDate) -> Boolean) {
         if (_busy.value) return
+        val target = _ui.value.checkin?.row?.weekStart ?: return
         _busy.value = true
-        val target = week
         viewModelScope.launch {
             var answered = true
             try {
@@ -139,8 +150,8 @@ class CheckinViewModel @Inject constructor(
             } catch (e: Exception) {
                 _error.value = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Your target is unchanged."
             } finally {
-                val view = load()
-                if (!answered) _error.value = CheckinText.refused(view?.row)
+                val view = load(target)
+                if (!answered && _ui.value.week == target) _error.value = CheckinText.refused(view?.row)
                 _busy.value = false
             }
         }
@@ -154,10 +165,6 @@ class CheckinViewModel @Inject constructor(
 
     fun dismissError() {
         _error.value = null
-    }
-
-    private companion object {
-        const val TAG = "Recomp"
     }
 }
 
@@ -177,7 +184,7 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(ReviewText.title(ui.week, review?.inProgress == true)) },
+                title = { ui.title?.let { Text(it) } },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
                     TextButton(onClick = { viewModel.show(previous = true) }, enabled = ui.hasPrevious, modifier = Modifier.semantics { contentDescription = "Previous week" }) {
@@ -197,7 +204,7 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
             if (review == null) return@Column
             val checkin = ui.checkin
             when {
-                checkin != null -> CheckinContent(checkin, busy, viewModel)
+                checkin != null -> CheckinContent(checkin, busy || ui.loading, viewModel)
                 review.inProgress -> Text(ReviewText.SO_FAR, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             error?.let { message ->

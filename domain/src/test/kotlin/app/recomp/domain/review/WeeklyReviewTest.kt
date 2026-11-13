@@ -54,8 +54,27 @@ class WeeklyReviewTest {
     fun `at this rate the goal weight is reached around a date`() {
         // 81 → 78 kg at 0.5 kg a week: 6 weeks.
         assertEquals(FinishOutlook.Around(asOf.plusDays(42), 78.0), WeeklyReview.outlook(cut(), asOf, 81.0, -0.5))
-        // Already there.
-        assertEquals(FinishOutlook.Around(asOf, 78.0), WeeklyReview.outlook(cut(), asOf, 78.0, -0.5))
+    }
+
+    @Test
+    fun `at the goal weight or past it, the goal is reached, whichever way it goes`() {
+        // A cut to 78 kg: at it, or under it, even with no rate yet and whatever the rate says.
+        assertEquals(FinishOutlook.Reached(78.0), WeeklyReview.outlook(cut(), asOf, 78.0, -0.5))
+        assertEquals(FinishOutlook.Reached(78.0), WeeklyReview.outlook(cut(), asOf, 75.0, -0.56))
+        assertEquals(FinishOutlook.Reached(78.0), WeeklyReview.outlook(cut(), asOf, 77.9, 0.2))
+        assertEquals(FinishOutlook.Reached(78.0), WeeklyReview.outlook(cut(), asOf, 77.9, null))
+        assertEquals(FinishOutlook.Around(asOf.plusDays(7), 78.0), WeeklyReview.outlook(cut(), asOf, 78.5, -0.5))
+        // A recomp's goal weight is a way down too.
+        val recomp = GoalPlan.of(Goal.RECOMP, Pace.STANDARD, 78.0, FinishLine.GoalWeight, asOf)
+        assertEquals(FinishOutlook.Reached(78.0), WeeklyReview.outlook(recomp, asOf, 77.5, -0.1))
+        // A lean bulk to 75 kg: at it, or over it.
+        val bulk = GoalPlan.of(Goal.LEAN_BULK, Pace.STANDARD, 75.0, FinishLine.GoalWeight, asOf)
+        assertEquals(FinishOutlook.Reached(75.0), WeeklyReview.outlook(bulk, asOf, 75.0, 0.25))
+        assertEquals(FinishOutlook.Reached(75.0), WeeklyReview.outlook(bulk, asOf, 75.4, 0.3))
+        assertEquals(FinishOutlook.Reached(75.0), WeeklyReview.outlook(bulk, asOf, 76.0, -0.1))
+        // Under it, a bulk is still on the way, and going down is moving away.
+        assertEquals(FinishOutlook.Around(asOf.plusDays(28), 75.0), WeeklyReview.outlook(bulk, asOf, 74.0, 0.25))
+        assertEquals(FinishOutlook.MovingAway, WeeklyReview.outlook(bulk, asOf, 74.0, -0.25))
     }
 
     @Test
@@ -92,6 +111,9 @@ class WeeklyReviewTest {
         assertEquals(FinishOutlook.Around(asOf.plusDays(42), 15.0, bodyFat = true), WeeklyReview.outlook(recomp, asOf, 81.0, -0.2, bodyFatPct = 18.0, bodyFatPctPerWeek = -0.5))
         assertEquals(FinishOutlook.MovingAway, WeeklyReview.outlook(recomp, asOf, 81.0, -0.2, bodyFatPct = 18.0, bodyFatPctPerWeek = 0.3))
         assertEquals(FinishOutlook.NeedsData(bodyFat = true), WeeklyReview.outlook(recomp, asOf, 81.0, -0.2))
+        // At the body-fat goal or under it, it's reached.
+        assertEquals(FinishOutlook.Reached(15.0, bodyFat = true), WeeklyReview.outlook(recomp, asOf, 81.0, -0.2, bodyFatPct = 15.0, bodyFatPctPerWeek = -0.5))
+        assertEquals(FinishOutlook.Reached(15.0, bodyFat = true), WeeklyReview.outlook(recomp, asOf, 81.0, -0.2, bodyFatPct = 14.2, bodyFatPctPerWeek = 0.1))
     }
 
     // The calendar
