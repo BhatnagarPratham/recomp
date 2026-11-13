@@ -2,6 +2,7 @@ package app.recomp.data.ai
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,6 +23,15 @@ interface LocalNetwork {
     companion object {
         /** `Manifest.permission.ACCESS_LOCAL_NETWORK` (API 37), by name. */
         const val PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+
+        /** Android 17, the first version that has the permission and blocks local-network traffic without it. */
+        const val FIRST_SDK = 37
+
+        /**
+         * Before Android 17 the permission doesn't exist: the local network comes with INTERNET, and asking for an
+         * unknown permission is always refused. So an older phone is always allowed.
+         */
+        fun allowed(sdkInt: Int, granted: Boolean): Boolean = sdkInt < FIRST_SDK || granted
     }
 }
 
@@ -34,5 +44,6 @@ class AndroidLocalNetwork @Inject constructor(@ApplicationContext private val co
         state.value = granted()
     }
 
-    private fun granted() = context.checkSelfPermission(LocalNetwork.PERMISSION) == PackageManager.PERMISSION_GRANTED
+    private fun granted() =
+        LocalNetwork.allowed(Build.VERSION.SDK_INT, context.checkSelfPermission(LocalNetwork.PERMISSION) == PackageManager.PERMISSION_GRANTED)
 }

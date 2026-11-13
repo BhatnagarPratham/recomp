@@ -85,6 +85,11 @@ class AiTextTest {
         val manifest = File("src/main/AndroidManifest.xml").readText()
         assertTrue(manifest.contains("android.permission.ACCESS_LOCAL_NETWORK"))
         assertEquals("android.permission.ACCESS_LOCAL_NETWORK", app.recomp.data.ai.LocalNetwork.PERMISSION)
+        // The permission only exists from Android 17: an older phone is never told it was refused.
+        assertTrue(app.recomp.data.ai.LocalNetwork.allowed(sdkInt = 35, granted = false))
+        assertTrue(app.recomp.data.ai.LocalNetwork.allowed(sdkInt = 36, granted = false))
+        assertFalse(app.recomp.data.ai.LocalNetwork.allowed(sdkInt = 37, granted = false))
+        assertTrue(app.recomp.data.ai.LocalNetwork.allowed(sdkInt = 37, granted = true))
         assertTrue(manifest.contains("android:networkSecurityConfig=\"@xml/network_security_config\""))
         assertTrue(File("src/main/res/xml/network_security_config.xml").readText().contains("cleartextTrafficPermitted=\"true\""))
         // Backups still list only the database and the settings: no key file is ever included.
