@@ -1,7 +1,9 @@
 package app.recomp.ui.body
 
 import app.recomp.domain.body.ProtocolIssue
+import app.recomp.domain.body.ScanChange
 import app.recomp.domain.body.ScanProtocol
+import app.recomp.domain.body.ScanSlopes
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.body.SinceMeal
 import app.recomp.domain.persona.WeightSource
@@ -96,6 +98,15 @@ object BodyText {
         val at = Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault())
         return at.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())) + ", " + time(at.toLocalTime())
     }
+
+    /** "+0.4 kg muscle · within noise; −0.8% body fat · within noise" (IB-04, TRD §5.6). */
+    fun scanChange(c: ScanChange): String =
+        "${signed(c.muscleKg, "kg")} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
+            "; ${signed(c.bodyFatPct, "%").replace(" %", "%")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
+
+    /** The slopes per 4 weeks of muscle, fat mass and body fat, signed. */
+    fun scanSlopes(s: ScanSlopes): String =
+        "Per 4 weeks: muscle ${signed(s.muscleKg, "kg")}, fat mass ${signed(s.fatKg, "kg")}, body fat ${signed(s.bodyFatPct, "%").replace(" %", "%")}"
 
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }

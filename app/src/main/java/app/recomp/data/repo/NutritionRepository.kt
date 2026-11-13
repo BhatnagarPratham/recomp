@@ -87,15 +87,23 @@ class NutritionRepository @Inject constructor(
      * The 7-day average for the week starting [weekStart] (PRD §12.1): its logged days against their own targets,
      * leaving out days marked incomplete. Null when none were logged.
      */
-    suspend fun weekAverage(weekStart: LocalDate): WeekAverage? {
-        val end = weekStart.plusDays(TodayNumbers.AVERAGE_DAYS - 1)
+    suspend fun weekAverage(weekStart: LocalDate): WeekAverage? =
+        TodayNumbers.weekAverage(weekStart.plusDays(TodayNumbers.AVERAGE_DAYS), weekDays(weekStart))
+
+    /**
+     * The week's logged days before [before] (all seven by default), each with its own targets and ramped protein,
+     * leaving out days marked incomplete (PRD §12.1). The weekly review (HM-03) and the check-in average these.
+     */
+    suspend fun weekDays(weekStart: LocalDate, before: LocalDate = weekStart.plusDays(TodayNumbers.AVERAGE_DAYS)): List<LoggedDay> {
+        val end = minOf(weekStart.plusDays(TodayNumbers.AVERAGE_DAYS - 1), before.minusDays(1))
+        if (end.isBefore(weekStart)) return emptyList()
         val ramp = prefs.ramp.first()
         val from = minOf(ramp?.countFrom ?: weekStart, weekStart)
         val intake = foodLogDao.intake(from, end).associate { it.logDate to Intake(it.kcal.roundToInt(), it.proteinG.roundToInt()) }
         val targets = nutritionDao.all()
-        val fallback = targets.lastOrNull { !it.effectiveFrom.isAfter(end) } ?: return null
-        val days = loggedDays(targets, fallback, prefs.currentPersona().rampEnabled(), ramp, intake, checkinDao.incompleteDays(weekStart, end).toSet(), before = end.plusDays(1))
-        return TodayNumbers.weekAverage(end.plusDays(1), days)
+        val fallback = targets.lastOrNull { !it.effectiveFrom.isAfter(end) } ?: return emptyList()
+        return loggedDays(targets, fallback, prefs.currentPersona().rampEnabled(), ramp, intake, checkinDao.incompleteDays(weekStart, end).toSet(), before = end.plusDays(1))
+            .filter { !it.date.isBefore(weekStart) }
     }
 
     /**

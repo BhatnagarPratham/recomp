@@ -342,7 +342,13 @@ fun TodayScreen(
             val names = (ui.dueExtras + ui.otherExtras).associate { it.id to it.name }
             val parts = listOf("Strength ${week.strengthDays} of ${week.strengthTarget} days") +
                 week.extras.mapNotNull { e -> names[e.routineId]?.let { if (e.planned > 0) "$it ${e.done} of ${e.planned}" else "$it ${e.done}" } }
-            Text("This week: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodyLarge)
+            // Today's weekly-plan card opens this week's review (PRD §12.4), the same screen as the check-in.
+            val openReview = app.recomp.ui.checkin.LocalOpenCheckin.current
+            Text(
+                "This week: " + parts.joinToString(" · ") + " ›",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.clickable(onClickLabel = "Open this week's review") { openReview(WeeklyPlan.weekStart(today)) }.padding(vertical = 8.dp),
+            )
         }
 
         ui.last?.let { last ->

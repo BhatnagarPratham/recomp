@@ -72,14 +72,7 @@ object CheckinText {
 
     private fun days(n: Int) = if (n == 1) "1 day" else "$n days"
 
-    /** The week's trend line: its rate against the pace. */
-    fun trend(v: CheckinView): String {
-        val e = v.evaluation
-        val kg = e.trendKg ?: return BodyText.NO_TREND
-        val rate = e.ratePct?.let { "${aWeek(it)}, ${BodyText.pace(WeightPace.of(v.plan.policy))}" } ?: BodyText.RATE_PENDING
-        return "${BodyText.kg(kg)} · $rate"
-    }
-
+    /** A recomp's 4-week waist change, which its flag judges (PRD §12.1). */
     fun waist(v: CheckinView): String =
         v.evaluation.waistChangeCm?.let { "Waist ${BodyText.signed(it, "cm")} over 4 weeks" } ?: "Waist: needs a reading near each end of the last 4 weeks"
 
