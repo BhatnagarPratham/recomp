@@ -745,6 +745,11 @@ These rules hold for every block:
 - **Every AI feature works with every provider,** with the same review screens, drafts and fallbacks (AI-02), and one monthly cap across all of them (AI-03). A model that can't read images says so when you send a photo.
 - **The privacy notice names the provider:** "The description goes to OpenAI". Changing provider shows it again, once.
 - Anthropic's refusal fallback (TRD §6.2) is Anthropic's alone. On other providers a refusal keeps a draft with the reason, as it does today.
+- *As built (M7):*
+  - The *OpenAI-compatible* row opens one sheet for the base URL, the model's name and the two prices. Plain `http` is accepted only for this phone or your own network, and such a server is never sent a key, so it needs none.
+  - A server on your network needs Android's local-network permission. It's asked for when you save the address; if it's refused, Describe it and Settings say so with *Allow*.
+  - The notice also shows again when you point the app at another compatible server.
+  - A compatible server's key is kept for that server alone: change the address and the key is asked for again, and going back finds the first one.
 
 ### 12.4 M8: Weekly review (HM-03, HM-04, IB-04)
 

@@ -20,6 +20,7 @@ import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.TargetReason
 import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.FoodSource
@@ -377,6 +378,84 @@ class MigrationTest {
             dao.setSupersetGroup(1, 2)
             assertEquals(2, dao.sessionExercise(1)!!.supersetGroup)
         }
+        room.close()
+    }
+
+    @Test
+    fun `9 to 10 keeps the AI log, marks its rows as Anthropic's and records other providers from then on`() {
+        val file = File(tmp.root, "v9.db")
+        createAt(9, file).use { db ->
+            // The phone's v9: requests made with Claude, one of them never answered.
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, response_json) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'claude-opus-5-5', 2000, 1000, 100, 50, 0.028, 'OK', 4000, '{\"items\":[]}')",
+            )
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, response_json) " +
+                    "VALUES (2, 20, 'MEAL_TEXT', 'claude-opus-5-5', 2500, 8000, 0, 0, 0.17, 'PENDING', 0, NULL)",
+            )
+            db.execSQL("INSERT INTO meal_draft (created_at, log_date, meal_slot, text, origin, reason) VALUES (1, '2026-10-18', 'dinner', 'paneer wrap', 'ORDERED', 'TIMEOUT')")
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete) VALUES ('2026-10-15', 1)")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val ai = room.aiDao()
+            val first = ai.request(1)!!
+            assertEquals(AiProviderId.ANTHROPIC, first.provider)
+            assertEquals(listOf(2000L, 1000L, 100L, 50L), listOf(first.inputTokens, first.outputTokens, first.cacheReadTokens, first.cacheWriteTokens))
+            assertEquals("{\"items\":[]}", first.responseJson)
+            assertEquals(AiProviderId.ANTHROPIC, ai.request(2)!!.provider)
+            assertEquals(AiStatus.PENDING, ai.request(2)!!.status)
+            // Spend is unchanged, and still one sum across providers.
+            assertEquals(0.028 + 0.17, ai.spendSince(0), 1e-12)
+            val id = ai.insertRequest(
+                AiRequestLogEntity(
+                    createdAt = 30, kind = AiKind.MEAL_TEXT, model = "gemini-4-hydrogen", inputTokens = 1_000, outputTokens = 500,
+                    cacheReadTokens = 0, cacheWriteTokens = 0, costUsd = 0.00525, status = AiStatus.OK, latencyMs = 900, responseJson = "{}",
+                    provider = AiProviderId.GEMINI,
+                ),
+            )
+            assertEquals(AiProviderId.GEMINI, ai.request(id)!!.provider)
+            assertEquals(0.028 + 0.17 + 0.00525, ai.spendSince(0), 1e-12)
+            assertEquals(3, ai.observeSpend(0).first().requests)
+            // The rest of the phone's data is where it was.
+            assertEquals(AiStatus.TIMEOUT, ai.observeDrafts(LocalDate.of(2026, 10, 18)).first().single().reason)
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            assertEquals(listOf(LocalDate.of(2026, 10, 15)), room.checkinDao().incompleteDays(LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 18)))
+        }
+        // A row written without naming a provider gets the column's default, as Room's schema says.
+        room.openHelper.writableDatabase.execSQL(
+            "INSERT INTO ai_request_log (created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms) " +
+                "VALUES (40, 'MEAL_TEXT', 'claude-haiku-5-5', 1, 1, 0, 0, 0, 'OK', 1)",
+        )
+        room.openHelper.readableDatabase.query("SELECT provider FROM ai_request_log WHERE created_at = 40").use {
+            it.moveToFirst()
+            assertEquals("ANTHROPIC", it.getString(0))
+        }
+        assertEquals(10, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `8 to 9 to 10 in one open keeps M5's check-ins and the AI log`() {
+        val file = File(tmp.root, "v8-chain.db")
+        createAt(8, file).use { db ->
+            db.execSQL(
+                "INSERT INTO weekly_checkin (week_start, computed_at, window_days, logged_days, weigh_ins, tdee_prev, tdee_new, decision) " +
+                    "VALUES ('2026-10-12', 2, 21, 18, 20, 2611, 2461, 'KEPT')",
+            )
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'claude-opus-5-5', 2000, 1000, 0, 0, 0.028, 'OK', 4000)",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(2461, room.checkinDao().week(LocalDate.of(2026, 10, 12))!!.tdeeNew)
+            assertEquals(AiProviderId.ANTHROPIC, room.aiDao().request(1)!!.provider)
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
     }
 

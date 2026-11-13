@@ -204,6 +204,8 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.health.connect)
     implementation(libs.anthropic.java)
+    // OpenAI, Gemini and OpenAI-compatible servers (AI-05): plain HTTP with kotlinx.serialization, no SDKs. The Anthropic SDK already brings OkHttp.
+    implementation(libs.okhttp)
     implementation(libs.tink.android)
 
     testImplementation(libs.junit)

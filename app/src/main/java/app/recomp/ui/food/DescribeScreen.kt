@@ -58,6 +58,9 @@ import app.recomp.data.repo.DraftPlan
 import app.recomp.data.repo.EstimateResult
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
+import app.recomp.domain.ai.AiKind
+import app.recomp.ui.settings.rememberLocalNetworkRequest
+import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Clarification
@@ -185,7 +188,13 @@ class DescribeViewModel @Inject constructor(
         _autoStart.value = false
     }
 
-    fun noticeSeen() = viewModelScope.launch { ai.markNoticeSeen() }
+    fun noticeSeen() = viewModelScope.launch { ai.markNoticeSeen(AiKind.MEAL_TEXT) }
+
+    /** The local-network permission's prompt was answered: the gate reads it again. */
+    fun localNetworkAnswered() = ai.localNetworkAnswered()
+
+    /** The provider in use, which every message names (AI-05). */
+    private fun provider() = settings.value?.provider ?: AiProviderId.DEFAULT
 
     suspend fun saveKey(key: String) = ai.saveKey(key)
 
@@ -221,11 +230,11 @@ class DescribeViewModel @Inject constructor(
                 is EstimateResult.NotReady -> _phase.value = earlier?.copy(notice = "AI isn't ready right now, so this is the earlier estimate.")
                     ?: DescribePhase.Input
                 is EstimateResult.Failed -> if (earlier != null) {
-                    _phase.value = earlier.copy(notice = "${AiText.reason(result.status)}, so this is the earlier estimate.")
+                    _phase.value = earlier.copy(notice = "${AiText.reason(result.status, provider())}, so this is the earlier estimate.")
                 } else {
                     // Whatever went wrong, the description is kept: by the repository, or here if it never got that far.
                     draftId = result.draftId ?: ai.keepDraft(date, slot, draftId, description, origin.value, result.status)
-                    _outcome.value = DescribeOutcome("${AiText.reason(result.status)}. Kept as a draft in ${slotName()}; log it now with search or quick add.")
+                    _outcome.value = DescribeOutcome("${AiText.reason(result.status, provider())}. Kept as a draft in ${slotName()}; log it now with search or quick add.")
                 }
             }
         }
@@ -331,11 +340,14 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     val slotName = slots.firstOrNull { it.key == viewModel.slot }?.name ?: viewModel.slot
     val ready = gate?.state == AiState.READY
 
+    // Android's local-network permission, for a server on your own network (AI-05). The gate reads the answer.
+    val askLocalNetwork = rememberLocalNetworkRequest(viewModel::localNetworkAnswered)
+
     LaunchedEffect(outcome) { outcome?.let(onDone) }
 
     /** The first estimate shows the privacy notice once (TRD §6.2). */
     fun requestEstimate() {
-        if (settings?.noticeSeen == true) viewModel.estimate() else notice = true
+        if (settings?.noticeSeen(AiKind.MEAL_TEXT) == true) viewModel.estimate() else notice = true
     }
 
     // Estimate now on a draft: start once the gate is known, and only if it's READY then. A gate that becomes
@@ -375,12 +387,13 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 region = region,
                 gate = gate,
                 estimating = p == DescribePhase.Estimating,
-                modelLabel = settings?.model?.label,
+                modelLabel = settings?.let { it.model?.label ?: it.compatibleModel.ifBlank { null } },
                 onText = viewModel::setText,
                 onOrigin = viewModel::setOrigin,
                 onEstimate = ::requestEstimate,
                 onSaveDraft = viewModel::saveDraft,
                 onAddKey = { addingKey = true },
+                onAllowLocalNetwork = askLocalNetwork,
                 onCancel = viewModel::cancel,
                 busy = busy,
             )
@@ -400,8 +413,8 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     if (notice) {
         AlertDialog(
             onDismissRequest = { notice = false },
-            title = { Text("Before your first estimate") },
-            text = { Text(AiText.PRIVACY) },
+            title = { Text("Before your first estimate with ${settings?.provider?.label ?: "AI"}") },
+            text = { Text(settings?.let(AiText::privacy).orEmpty()) },
             confirmButton = {
                 TextButton(onClick = {
                     notice = false
@@ -413,7 +426,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
         )
     }
     if (addingKey) {
-        ApiKeyDialog(hasKey = hasKey, onDismiss = { addingKey = false }, onSave = { key -> viewModel.saveKey(key); addingKey = false }, onRemove = null)
+        ApiKeyDialog(provider = settings?.provider ?: AiProviderId.DEFAULT, hasKey = hasKey, onDismiss = { addingKey = false }, onSave = { key -> viewModel.saveKey(key); addingKey = false }, onRemove = null)
     }
     val review = phase as? DescribePhase.Review
     editing?.let { index ->
@@ -465,6 +478,7 @@ private fun InputStep(
     onEstimate: () -> Unit,
     onSaveDraft: () -> Unit,
     onAddKey: () -> Unit,
+    onAllowLocalNetwork: () -> Unit,
     onCancel: () -> Unit,
     busy: Boolean,
 ) {
@@ -478,6 +492,7 @@ private fun InputStep(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(reason, style = MaterialTheme.typography.bodyMedium)
                     if (gate?.state == AiState.NO_KEY) OutlinedButton(onClick = onAddKey) { Text("Add key") }
+                    if (gate?.state == AiState.NO_LOCAL_NETWORK) OutlinedButton(onClick = onAllowLocalNetwork) { Text("Allow") }
                 }
             }
         }
@@ -501,12 +516,12 @@ private fun InputStep(
         Text("Origin", style = MaterialTheme.typography.labelLarge)
         ChoiceChips(Origin.entries, origin, FoodText::origin, { if (!estimating) onOrigin(it) })
         if (origin == Origin.ORDERED) {
-            Text("Claude assumes restaurant levels of oil, ghee and cream.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("The estimate assumes restaurant levels of oil, ghee and cream.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (estimating) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(Modifier.padding(4.dp))
-                Text("Estimating with ${modelLabel ?: "Claude"}… usually a few seconds.", Modifier.weight(1f))
+                Text("Estimating with ${modelLabel ?: "AI"}… usually a few seconds.", Modifier.weight(1f))
             }
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel") }
         } else if (ready) {
@@ -551,7 +566,7 @@ private fun ReviewStep(
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Claude asks: $q", style = MaterialTheme.typography.bodyLarge)
+                            Text("Question: $q", style = MaterialTheme.typography.bodyLarge)
                             OutlinedTextField(value = answer, onValueChange = { answer = it }, label = { Text("Your answer") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                             OutlinedButton(onClick = { onReestimate(answer) }, enabled = answer.isNotBlank()) { Text("Re-estimate") }
                         }
@@ -561,7 +576,7 @@ private fun ReviewStep(
             if (review.rejected.isNotEmpty()) {
                 item {
                     Text(
-                        "Left out, because Claude gave no usable weight or amount: ${review.rejected.joinToString()}. Add them with search or quick add.",
+                        "Left out, because the estimate gave no usable weight or amount: ${review.rejected.joinToString()}. Add them with search or quick add.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )

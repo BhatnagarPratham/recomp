@@ -9,6 +9,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
 import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.food.Origin
 import java.time.LocalDate
@@ -34,7 +35,8 @@ data class MealDraftEntity(
  * One AI request (AI-03 spend, and debugging). It's written as PENDING at the request's upper-bound cost before
  * sending, then settled. Tokens are summed over every attempt (a refused one and its fallback); [costUsd] prices
  * each attempt at its own model, or stays the upper bound for a request that was sent but never answered.
- * [model] is the model that served the reply. [responseJson] is the reply's text, never the prompt or the key.
+ * [model] is the model that served the reply, and [provider] the service it was sent to. [responseJson] is the
+ * reply's text, never the prompt or the key. One monthly cap counts every provider's rows together.
  */
 @Entity(tableName = "ai_request_log", indices = [Index("created_at")])
 data class AiRequestLogEntity(
@@ -50,6 +52,8 @@ data class AiRequestLogEntity(
     val status: AiStatus,
     @ColumnInfo(name = "latency_ms") val latencyMs: Long,
     @ColumnInfo(name = "response_json") val responseJson: String?,
+    /** AI-05 (v10): the service the request went to. Rows from before it are Anthropic's. */
+    @ColumnInfo(defaultValue = "ANTHROPIC") val provider: AiProviderId = AiProviderId.ANTHROPIC,
 )
 
 /** This month's spend for Settings (AI-03). */

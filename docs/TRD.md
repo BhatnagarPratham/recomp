@@ -149,8 +149,11 @@ daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sl
                                           -- food_incomplete from the Food tab's day menu (M5); steps from HC, sleep typed in
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
-                    status (§6.2), latency_ms, response_json?   -- AI-03 spend + debugging; tokens summed over every attempt;
-                                          -- written PENDING at an upper-bound cost before sending, then settled
+                    status (§6.2), latency_ms, response_json?,
+                    provider(ANTHROPIC|OPENAI|GEMINI|COMPATIBLE, default ANTHROPIC)
+                                          -- AI-03 spend + debugging; tokens summed over every attempt;
+                                          -- written PENDING at an upper-bound cost before sending, then settled;
+                                          -- provider (M7, v10) is the service it went to; one cap sums every provider's rows
 ```
 
 **Seed data.** The ~80-exercise library and the split templates are JSON assets, parsed with kotlinx.serialization. Seeding runs on every launch and inserts only exercises whose `seed_key` is missing, so a fork can add exercises and existing installs pick them up. Each seed entry has a rep class (`COMPOUND | ISOLATION | HIGH_REP`, PRD §4.3) that sets its default rep range from the experience policy. Templates reference exercises by seed key and list the walkthrough's alternatives.
@@ -160,7 +163,12 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
 - `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
-- `ai_mode` (`OFF|ON`), `ai_model`, `ai_monthly_cap_usd` (absent = no cap) and `ai_notice_seen` (§6.2). The API key is not here: it lives encrypted in its own `secrets` DataStore file.
+- `ai_mode` (`OFF|ON`), `ai_monthly_cap_usd` (absent = no cap), and from M7 (AI-05, §6.2):
+  - `ai_provider` (an `AiProviderId` name; absent = Anthropic);
+  - a model per provider: `ai_model` (Anthropic's; the name predates M7), `ai_model_openai`, `ai_model_gemini`, and `ai_model_compatible` (the typed name);
+  - the OpenAI-compatible server: `ai_base_url`, `ai_compatible_input_usd` and `ai_compatible_output_usd` (dollars per million tokens);
+  - `ai_notices_seen`, a string set with one entry per provider and kind (`OPENAI:MEAL_TEXT`), and per server for the compatible provider (`COMPATIBLE/openrouter.ai:MEAL_TEXT`). The older boolean `ai_notice_seen` is still read as Anthropic's meal notice and never written.
+  - The API keys are not here: one per provider, encrypted, in their own `secrets` DataStore file (`anthropic_api_key`, `openai_api_key`, `gemini_api_key`, `compatible_api_key`).
 - `scan_slot` (IB-02): the usual scan weekday and time of day.
 - From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh.
 
@@ -172,7 +180,7 @@ A stored JSON value that no longer decodes (for example one saved by a newer bui
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
 - New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
-- New columns: `ai_request_log.provider` (M7), `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13).
+- New columns: `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13). (`ai_request_log.provider` landed with M7, above.)
 - New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
@@ -524,7 +532,7 @@ Otherwise it shows the next routine. On a rest day the next routine still shows,
 
 ### 6.2 AI features (optional; PRD §7.12)
 
-*From M7 (AI-05) the provider is a setting: Anthropic, OpenAI, Google Gemini or an OpenAI-compatible endpoint. This section describes Anthropic, the default, as built in M3c; M7 adds the others behind the same gate, statuses, pricing rules and validation.*
+*From M7 (AI-05) the provider is a setting: Anthropic, OpenAI, Google Gemini or an OpenAI-compatible endpoint. This section describes Anthropic, the default, as built in M3c. **Providers (M7)**, at the end of this section, says what the others share with it and where each differs.*
 
 **Access: an API key, not a subscription login.**
 
@@ -649,6 +657,73 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   - Encrypted with Tink AEAD (AES-256-GCM, associated data naming the key) whose keyset is wrapped by an Android Keystore master key (`AndroidKeysetManager`; the keyset lives in its own shared-preferences file). The ciphertext is stored in the `secrets` DataStore, apart from the settings, so a settings export can never include it.
   - Never logged: the app never prints it, and the SDK client is built in memory per request. Excluded from export, and from cloud backup and device-to-device transfer: `data_extraction_rules.xml` includes only the database and the `settings` DataStore, so the `secrets` DataStore and the keyset file are left out (§6.5). A restore onto another phone couldn't decrypt it anyway, since the Keystore key never leaves the phone; it then reads as `NO_KEY`.
   - Each person enters their own key into their own install, so no key ever ships inside an APK. A build distributed with a shared key would need a proxy, because a key inside an APK can be extracted.
+
+**Providers (M7, AI-05).** One provider is in use at a time (`ai_provider`). Everything above holds for each: the gate, the 20 s timeout and the one retry, the status table, the reservation, the drafts, the same hand-written schema, and the same decoding and `MealCheck`.
+
+- **The interface.** `AiProvider.send(AiCall)` in `data/ai` takes a system prompt, a user message, optional images and an `AiSchema`, and returns an `AiResult`: the parsed JSON object, the raw reply text, the usage, the model that answered and an `AiStatus`. It never throws. `ProviderMealEstimator` implements `MealEstimator` on top of it, and later AI uses (M11, M18, M19) call the same interface with their own schemas.
+- **Adapters.**
+
+  | Provider | Transport | Structured output | Effort for meals | Output limit |
+  |----------|-----------|-------------------|------------------|--------------|
+  | Anthropic | The Java SDK, as above | `output_config.format` | `effort: low` | `max_tokens` 8,000 |
+  | OpenAI | OkHttp, `POST /v1/chat/completions`, `Authorization: Bearer` | `response_format` with a strict `json_schema`; the system prompt is a `developer` message | `reasoning_effort: low`, the lowest every listed model takes | `max_completion_tokens` 8,000, reasoning included |
+  | Gemini | OkHttp, `POST /v1beta/models/{model}:generateContent`, the key in `x-goog-api-key`, never in the URL | `generationConfig.responseFormat.text` with `mimeType: APPLICATION_JSON` and the schema | `thinkingConfig.thinkingLevel: LOW` (Gemini 4 can't switch thinking off) | `maxOutputTokens` 8,000, thinking included |
+  | OpenAI-compatible | OkHttp, `{base URL}/chat/completions` | The same `json_schema`; see the fallback below | None sent: servers differ | `max_tokens` 8,000 |
+
+  OkHttp and kotlinx.serialization are the only libraries: no new SDK. The HTTP adapters share `HttpProvider`. Redirects aren't followed, so a key can't be carried to another address. Nothing is sent again behind the adapter's back, so its one retry is the only one: OkHttp's connection-failure recovery is off (it re-sends a POST when a reused connection drops after the request went out, and that first send may have been billed), no connection is kept for reuse, and its own re-send of a 503 with `Retry-After: 0` is switched off. A reply is read up to 1 MB; more than that is `INVALID` at the upper bound.
+- **Schemas.** `AiSchema` is the hand-written schema with a name. It carries no array-length or number-range constraints (Anthropic rejects them; code checks those), every property is required and `additionalProperties` is false, which all three providers' strict modes accept.
+- **Schema fallback.** An OpenAI-compatible server that answers 400, 404, 415, 422 or 501 to the `json_schema` request is asked again with `response_format: {type: json_object}` and the schema written into the system prompt. That second request isn't the retry. The server and model are remembered for as long as the app runs, so later requests go straight to JSON mode. A reply wrapped in a code fence or a sentence is read from its outermost braces. The reply is then decoded and validated exactly as any other.
+- **Models and prices** (`AiModel`, `AiPricing`; read from each provider's pricing page on 2026-11-13, standard paid tier, $ per MTok):
+
+  | Model | Input | Output | Cached input |
+  |-------|-------|--------|--------------|
+  | `gpt-6.1-sol` (OpenAI's default here) | 2.00 | 10.00 | 0.10 |
+  | `gpt-6.1-terra` | 1.00 | 5.00 | 0.05 |
+  | `gpt-6-luna` | 0.10 | 0.50 | 0.01 |
+  | `gemini-4-hydrogen` (Gemini's default here) | 1.50 | 7.50 | 0.075 |
+  | `gemini-3.8-flash` until 2026-12-30 | 0.75 | 3.75 | 0.075 |
+  | `gemini-3.8-flash` from 2026-12-31 (the announced 2027-01-01 change, dated a day early so no time zone under-counts) | 1.50 | 7.50 | 0.15 |
+  | `gemini-3.5-flash-lite` | 0.30 | 2.50 | 0.03 |
+
+  The OpenAI-compatible model is typed, with its input and output prices; cached input is charged at the input price. Prices of 0 mean a free local server, which the cap can't count, and Settings says so. A usage is priced at the model that was asked for, since a provider may answer with a dated snapshot's name. An unknown model still costs the table's highest rates. An announced price change is a dated row (`AiPricing.changes`): a request is priced at the rates of the day it's made, so the cap stays right with no new build.
+- **Usage mapping.** `TokenUsage` means the same for every provider: input without cached input, cached input, and output with reasoning or thinking included.
+
+  | Provider | Input | Cached input | Output |
+  |----------|-------|--------------|--------|
+  | Anthropic | `input_tokens` | `cache_read_input_tokens` (writes: `cache_creation_input_tokens`) | `output_tokens` |
+  | OpenAI and compatible | `prompt_tokens` − `cached_tokens` − `cache_write_tokens` | `prompt_tokens_details.cached_tokens` (writes: `cache_write_tokens`, at 1.25 × input) | `completion_tokens` (reasoning is already inside) |
+  | Gemini | `promptTokenCount` − `cachedContentTokenCount` | `cachedContentTokenCount` | `candidatesTokenCount` + `thoughtsTokenCount` |
+
+  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers.
+- **Upper bound.** The reservation is the same shape for each provider: the prompt at 3 characters a token, 1,500 tokens of overhead, 5,000 tokens a photo, and the provider's whole output limit (`AiProviderId.outputBound`, 8,000 for each, since each limit includes reasoning or thinking), at the model's own rates or the typed ones.
+- **Statuses.** Each provider's replies map onto the table above:
+
+  | Status | OpenAI and compatible | Gemini |
+  |--------|-----------------------|--------|
+  | `REFUSAL` | `message.refusal`, or `finish_reason: content_filter` | `promptFeedback.blockReason`, or a finish reason of `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII` or an image block |
+  | `MAX_TOKENS` | `finish_reason: length` | `finishReason: MAX_TOKENS` |
+  | `INVALID` | Another finish reason, no content, or not a JSON object | The same; an unknown finish reason is never a success |
+  | `AUTH` | 401, 403 | 400 with reason `API_KEY_INVALID`, 401, 403 |
+  | `BILLING` | 402; a 429 whose code or type is `credit_balance_exhausted`, `insufficient_quota` or a spend-limit code (not retried) | 402 (prepaid credit used up); 400 `FAILED_PRECONDITION` (no free tier here and billing isn't on) |
+  | `RATE_LIMIT`, `SERVER` | 429; 5xx (each after the retry). OpenRouter's error inside a 200 maps by its code | 429; 5xx except 504 |
+  | `TIMEOUT` | — | 504 `DEADLINE_EXCEEDED`: the work was started, so it isn't retried and counts at the upper bound |
+  | `BAD_REQUEST` | Any other 4xx, a redirect, a 403 for an unsupported country or region | Any other 4xx |
+
+  The messages name the provider in use: "OpenAI is busy right now", "Your Google account is out of credit", "Couldn't reach the AI server". Only an error's code or type is kept, cut to a short token, never its message.
+- **Refusal fallback** is Anthropic's alone. On the others a refusal keeps a draft with the reason.
+- **Keys.** `AiKeyStore` holds one encrypted key per provider, each bound to its provider by the associated data, so switching keeps the others. Anthropic's entry keeps its M3c name, so an upgrade keeps its key.
+  - **The OpenAI-compatible key belongs to one server.** It's stored with the server it was entered for (scheme, host and port; `compatible_api_key_server` in the `secrets` store) and bound to it in the associated data. For any other server it reads as no key, and the gate shows `NO_KEY` until one is entered. So editing the base URL, or importing a backup whose settings name another server, never sends a key somewhere it wasn't entered for. Going back to the first server finds its key again.
+  - An https server that needs no key still has to be given some value, which is then sent as a bearer token; the key dialog says so.
+- **URL rules** for the OpenAI-compatible base URL (`AiUrl` in `:domain`, checked when it's saved and again on every read):
+  - `https` anywhere.
+  - Plain `http` only to this phone (`localhost`, 127.0.0.0/8, `::1`), a private-range or link-local address (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, IPv6 unique-local and link-local) or a `.local` name. This is decided from the text, with no lookup, so shorthand such as `127.1` is refused, and so is an address with a leading zero (`010.0.0.1`), which a resolver may read as octal.
+  - A pasted full endpoint is cut back to its base: a trailing `/chat/completions` is dropped.
+  - A key is never sent over `http`: such a server needs none, and the gate doesn't ask for one.
+  - No user name, password, query or fragment, so nothing secret is stored or exported with the settings.
+  - `network_security_config.xml` allows cleartext in its base config, because it can't name a LAN range. Anthropic, OpenAI and Gemini are fixed `https` addresses.
+- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
+- **Gate.** `OFF` → `NO_URL` (the compatible provider without a usable URL and model) → `NO_KEY` → `OVER_CAP` → `OFFLINE` → `NO_LOCAL_NETWORK` → `READY`.
+- **Privacy notice.** Shown before a kind's first send to each provider, naming it, and again for another compatible server (by host). Gemini's adds that Google may use free-tier prompts to improve its products and that reviewers may read them; OpenAI's API and Gemini's paid tier don't train on them.
 
 **Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
 
@@ -1143,6 +1218,77 @@ Tests cover:
   - Anthropic code loads the `claude-api` skill first. The other adapters are written against each provider's current API docs, cited in the results note.
 - **Parallel:** with M8.
 
+**M7 results (2026-11-13; Room v10, after M6's v9).** Built to PRD §12.3 and the block above; §6.2's **Providers** describes what was built. Where the spec was silent:
+- **Models listed:** three per provider, the default first. OpenAI: GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Luna. Gemini: Gemini 4 Hydrogen, 3.8 Flash, 3.5 Flash-Lite. GPT-6 Astra and Gemini 4 Carbon and Argon are left out: Astra costs five times Sol, and Carbon and Argon double in price on 2026-12-01 and have no free tier.
+- **A server over plain http needs no key,** since it is never sent one; Settings shows "Not sent over http".
+- **A local server needs no internet,** so the offline check is skipped for it. This phone itself needs no local-network permission.
+- **100.64.0.0/10** (carrier NAT, Tailscale) counts as local for both rules, as Android counts it.
+- **The notice is per server** for the compatible provider, so pointing the app at another server shows it again.
+- **A model that can't read images:** no screen sends a photo until M18, so the message is ready (`AiText.reason(..., photo = true)`: "…couldn't take this request. The model may not read photos") and M18 passes the flag.
+- **Two new gate states** (`NO_URL`, `NO_LOCAL_NETWORK`) rather than new statuses: both are known before anything is sent.
+- **A draft's line names no provider.** The message at the moment of failure does ("Your OpenAI API key was rejected"). A draft stores the status but not where the request went, and may be read later with another provider in use, so the Food tab's draft line reads "The API key was rejected", "The AI service was busy" and so on. The phone check found it saying "Claude" for an OpenAI failure.
+- **Gemini's `generateContent`** is what's used. Google's docs now call it a legacy API beside the newer Interactions API; it's still supported, and its request and error shapes are the documented ones.
+
+Docs the adapters were written against (read 2026-11-13):
+- OpenAI: [Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create), [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs), [images](https://developers.openai.com/api/docs/guides/images-vision), [reasoning](https://developers.openai.com/api/docs/guides/reasoning), [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), [error codes](https://developers.openai.com/api/docs/guides/error-codes), [models](https://developers.openai.com/api/docs/models), [pricing](https://developers.openai.com/api/docs/pricing), [your data](https://developers.openai.com/api/docs/guides/your-data).
+- Gemini: [generateContent reference](https://aistudio.google.com/api-reference/generate-content/generate-content), [structured output](https://aistudio.google.com/docs/structured-output?generate-content=true), [thinking](https://aistudio.google.com/docs/thinking?generate-content=true), [errors](https://aistudio.google.com/docs/api-errors?generate-content=true), [models](https://aistudio.google.com/docs/models), [pricing](https://aistudio.google.com/docs/pricing), [terms](https://aistudio.google.com/docs/terms).
+- OpenAI-compatible: [OpenRouter structured outputs](https://openrouter.ai/docs/features/structured-outputs) and [errors](https://openrouter.ai/docs/api-reference/errors), [Ollama's OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility).
+- Android: [local network permission](https://developer.android.com/privacy-and-security/local-network-permission) and [what counts as local](https://developer.android.com/privacy-and-security/local-network-definition).
+- Anthropic: the `claude-api` skill's Java reference; the SDK code is M3c's, moved.
+
+Not confirmed by the docs, and handled on the safe side:
+- OpenAI's Chat Completions page doesn't say outright that cached tokens are inside `prompt_tokens`; its caching and reasoning guides say so for the same fields, and the caching guide gives cache writes as part of the input too.
+- No compatible server documents its answer to an unsupported `response_format`, hence the list of statuses that trigger the fallback.
+- Android's docs don't state that loopback is exempt from the permission; it isn't in their list of local-network ranges.
+
+After a fresh-session review (pr12-review.md: 0 blockers, 4 should-fix, 9 nits, all fixed):
+- **No silent re-send.** OkHttp re-sent a POST when a reused connection dropped after the request went out, and only one send was costed. Its recovery is now off and connections aren't reused.
+- **Zero usage isn't free.** A usage that is empty, all zeros or not numbers counts at the upper bound.
+- **The compatible key is its server's.** Changing the base URL, or importing settings that name another server, no longer carries the old server's key along.
+- **Local by name.** A name that resolves to a local address needs the permission too, instead of timing out on Android 17.
+- **Smaller ones:** OpenAI cache writes charged once, not 2.25 ×; Gemini 3.8 Flash's 2027 price as a dated row; a leading-zero address refused; a 1 MB limit on replies; *Allow* opening system settings once the prompt is gone for good; a 403 for an unsupported region, Gemini's `FAILED_PRECONDITION` and its 504 given fitting statuses; a pasted `/chat/completions` cut off; and a line in the key dialog for servers that need no key.
+
+Tests cover (no real API call and no real key anywhere; every adapter runs against a mock server):
+- `:domain`:
+  - the URL rules: `https` anywhere, `http` only to local addresses and names, look-alike names, shorthand and leading-zero addresses refused, credentials and queries refused, a pasted endpoint cut back, and a server's origin;
+  - which addresses are on the local network, and the dated price change;
+  - a price, an owner and a default for every listed model, and the new prices;
+  - typed prices, the free case, and each provider's upper bound with photos;
+  - the gate's order with the two new states, and the notice keys.
+- Adapters (`HttpProvidersTest`, `AnthropicProviderTest`):
+  - each request's shape: schema, images, effort, output limit, and the key only in its header;
+  - each provider's usage mapping, with cached and reasoning or thinking tokens;
+  - errors onto the status table: rejected key, no credit, rate limit and overload with the one retry, timeouts and dropped connections at the upper bound, refusals and safety blocks, cut-off replies, unreadable replies;
+  - the schema fallback, remembered per server and model, and a server that rejects both shapes;
+  - never a key over `http`, and one over `https`; redirects not followed;
+  - a request dropped on a connection used before: one send, the upper bound, and no connection reused;
+  - empty, zero and non-numeric usage at the upper bound; cache writes charged once; a reply over 1 MB;
+  - a 403 for an unsupported region, Gemini's `FAILED_PRECONDITION`, and its 504 not retried;
+  - the key absent from every result, request description and kept error;
+  - the same decoding and `MealCheck` for every provider's reply.
+- Repositories (`AiFlowTest`):
+  - switching provider keeps both keys, and each request carries its own provider's key and model;
+  - one cap across providers, and the reservation at each provider's own bound, logged against it;
+  - the compatible provider's setup, typed prices, the no-key rule over `http`, and a stored URL that fails the rules;
+  - the refused local-network permission as its own state, with nothing sent;
+  - the compatible key used only for the server it was entered for: after a URL change, after imported settings naming another server, and after the stored server name is edited;
+  - a name that leads to a local address needing the permission, with a stand-in resolver, and no lookup while the permission is held;
+  - a request priced at the rates of the day it's made;
+  - the notice once per provider and again per server;
+  - an install from before M7 keeping its key, model and seen notice.
+- Wording (`AiTextTest`): messages name the provider; the refused permission's own message; the manifest's permission and network config; no AI setting's name looks like a secret.
+- Migration 9→10 from the phone's v9 with settled and pending requests, and the 8→9→10 chain, from the exported schemas.
+- Backups: the round trip with two providers' rows and settings; an M6 v9 backup importing into v10 with its AI log as Anthropic's and its old notice flag still counting; no provider's key in an export.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M6 (release over the real data, 2026-11-13, reference phone on Android 15) | ✅ After a fresh export (Settings → Data, 23:20, schema 9), the release build installed over M6's v9 and migration 9→10 ran with no crash. Today, Train, Body, Food and Settings matched what they showed before. Settings → AI shows *Provider: Anthropic* with Opus 5.5, no key, "$0.00 · 0 requests" and no cap, as before the install; the picker lists the four providers and the model list the three Claude models. A second export after the upgrade is schema 10 with the same row count in all 21 tables, and both logged requests read `ANTHROPIC`. Nothing was logged or changed in the real app. |
+| OpenAI and Gemini with dummy keys (dev install `app.recomp.m7dev`, invented data, uninstalled afterwards) | ✅ Each provider showed its own models with rough costs and its own key dialog. The first estimate with each showed the notice naming it ("Before your first estimate with OpenAI"; Gemini's with the free-tier line), once. Each real endpoint refused the dummy key, and the app said "Your OpenAI API key was rejected" and "Your Gemini API key was rejected" and kept the description as a draft. The log rows read `OPENAI` and `GEMINI` with no cost. Switching back and forth kept both keys and models. The key store held ciphertext only, and the keys weren't in logcat. |
+| OpenAI-compatible (dev install; a stand-in server on the Mac) | ✅ `http://example.com/v1` was refused with the reason. `http://localhost:18080/v1` (through `adb reverse`) and the Mac's LAN address both saved; Settings showed "Not sent over http" for the key and the free-prices note. The notice named "the server at localhost", and showed again for the LAN address. The server saw no `Authorization` header, refused the `json_schema` request with a 400 and answered the JSON-mode one in a code fence; the app showed the review screen and saved the meal. Plain http to this phone and to a private address both work under the network security config. |
+| Found on the phone | The Food tab's draft line said "Your Claude API key was rejected" for an OpenAI failure. Fixed (a draft's line names no provider) and checked in the dev install: "The API key was rejected. Check it in Settings → AI". |
+| After the review | Not installed: the fixes change no schema and no layout in Settings → AI (the key row's text for a server not yet set, and the key dialog's help, changed). The real app runs d86d6c2, from before them. |
+| Not run on the phone | A successful estimate from Anthropic, OpenAI or Gemini: no real key was used, so their request bodies were only ever accepted by the mock servers in the tests (a rejected key is refused before the body is read). The local-network permission prompt and its refusal: the phone runs Android 15, where the permission doesn't exist, so only the tests cover `NO_LOCAL_NETWORK` and the older-phone rule. Photos (no screen sends one until M18). A real OpenRouter or Ollama server. `https` to a compatible server with a key (tests check the header). |
+
 #### M8: Weekly review
 
 *HM-03, HM-04, IB-04; PRD §12.4; no Room change.*
@@ -1426,4 +1572,4 @@ Tests cover:
 4. **Package name and app name:** "Recomp" is a placeholder.
 5. **Charts:** stay hand-drawn on Compose `Canvas` as a shared component (M8). Adopt Vico only if a chart needs pan and zoom.
 6. ~~**Text and barcode recognition**~~ *Settled 2026-10-18:* open source, not ML Kit: ZXing for barcodes, and an on-device text recogniser such as Tesseract, picked after a trial in M18 (PRD §12.14).
-7. **AI providers' structured outputs:** each provider's schema support is confirmed in M7 against its current docs (Gemini's field changed in October 2026). Shared schemas leave out array-length and number-range constraints. An OpenAI-compatible server without schema support falls back to JSON mode plus validation.
+7. ~~**AI providers' structured outputs**~~ *Settled in M7 (§6.2, Providers):* each provider's schema support was confirmed against its current docs (Gemini's REST field is now `generationConfig.responseFormat.text.schema`). Shared schemas leave out array-length and number-range constraints. An OpenAI-compatible server without schema support falls back to JSON mode plus validation.

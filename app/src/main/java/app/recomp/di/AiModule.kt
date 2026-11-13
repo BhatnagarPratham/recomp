@@ -6,7 +6,11 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.recomp.data.ai.AndroidConnectivity
-import app.recomp.data.ai.ClaudeMealEstimator
+import app.recomp.data.ai.AndroidLocalNetwork
+import app.recomp.data.ai.DnsHostResolver
+import app.recomp.data.ai.HostResolver
+import app.recomp.data.ai.LocalNetwork
+import app.recomp.data.ai.ProviderMealEstimator
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.SecretCipher
 import app.recomp.data.ai.TinkSecretCipher
@@ -22,7 +26,7 @@ import javax.inject.Qualifier
 import javax.inject.Singleton
 
 /**
- * The encrypted API key's own store (TRD §6.2), apart from the settings so no export can include it, and
+ * The encrypted API keys' own store (TRD §6.2), apart from the settings so no export can include it, and
  * excluded from backups by res/xml/data_extraction_rules.xml.
  */
 @Qualifier
@@ -33,7 +37,13 @@ annotation class SecretsStore
 @InstallIn(SingletonComponent::class)
 abstract class AiModule {
     @Binds
-    abstract fun bindEstimator(estimator: ClaudeMealEstimator): MealEstimator
+    abstract fun bindEstimator(estimator: ProviderMealEstimator): MealEstimator
+
+    @Binds
+    abstract fun bindLocalNetwork(localNetwork: AndroidLocalNetwork): LocalNetwork
+
+    @Binds
+    abstract fun bindHostResolver(resolver: DnsHostResolver): HostResolver
 
     @Binds
     abstract fun bindCipher(cipher: TinkSecretCipher): SecretCipher

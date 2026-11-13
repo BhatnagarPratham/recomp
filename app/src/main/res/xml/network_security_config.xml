@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain http is allowed here only so an OpenAI-compatible AI server on this phone or your own network can be
+  reached (AI-05, TRD §6.2): a server such as Ollama on a LAN address has no certificate, and this file can't
+  name a private IP range. The rule is enforced in code instead (AiUrl): http only to localhost, a private-range
+  address or a .local name, never with an API key, and Anthropic, OpenAI and Gemini are always https.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
+</network-security-config>
