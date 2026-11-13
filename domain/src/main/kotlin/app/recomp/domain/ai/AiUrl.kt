@@ -19,6 +19,13 @@ data class AiUrl(
     /** On the local network: a private-range or link-local address, or a `.local` name. Android asks for a permission first. */
     val localNetwork: Boolean,
 ) {
+    /** The server itself, without the path: `https://openrouter.ai`, `http://192.168.1.20:11434`. A key is kept for one of these. */
+    val origin: String
+        get() {
+            val slash = base.indexOf('/', base.indexOf("://") + 3)
+            return if (slash < 0) base else base.substring(0, slash)
+        }
+
     /** Whether a request to this URL may carry the key: never over plain http. */
     val sendsKey: Boolean get() = https
 
@@ -58,15 +65,35 @@ data class AiUrl(
             if (uri.rawUserInfo != null) return Check.Bad(Problem.CREDENTIALS)
             if (uri.rawQuery != null || uri.rawFragment != null) return Check.Bad(Problem.QUERY)
 
+            // `010.0.0.1` is 10.0.0.1 read as decimal but 8.0.0.1 where a resolver reads it as octal: refuse the spelling.
+            if (IPV4.matches(host) && host.split('.').any { it.length > 1 && it.startsWith('0') }) return Check.Bad(Problem.NOT_A_URL)
             val kind = kind(host)
             val https = scheme == "https"
             if (!https && kind == Kind.PUBLIC) return Check.Bad(Problem.HTTP_NOT_LOCAL)
             val port = if (uri.port >= 0) ":${uri.port}" else ""
-            val path = uri.rawPath.orEmpty().trimEnd('/')
+            // The base is where `/chat/completions` is added, so a pasted full endpoint is cut back to it.
+            val path = uri.rawPath.orEmpty().trimEnd('/').removeSuffix(ENDPOINT).trimEnd('/')
             return Check.Ok(AiUrl("$scheme://${uri.host.lowercase()}$port$path", host, https, kind == Kind.LOOPBACK, kind == Kind.LOCAL_NETWORK))
         }
 
         fun ok(text: String?): AiUrl? = (check(text) as? Check.Ok)?.url
+
+        /** What an OpenAI-compatible request adds to the base. */
+        const val ENDPOINT = "/chat/completions"
+
+        /**
+         * Whether [address] is on the local network as Android counts it (private-range, link-local, 100.64.0.0/10,
+         * IPv6 unique-local). For a server reached by a name that only a lookup can place, such as a Tailscale name
+         * or a home reverse proxy over https: the text rule can't see it, and without the permission Android 17
+         * would only let the connection time out.
+         */
+        fun onLocalNetwork(address: InetAddress): Boolean {
+            if (address.isLoopbackAddress || address.isAnyLocalAddress) return false
+            val bytes = address.address
+            val shared = bytes.size == 4 && (bytes[0].toInt() and 0xff) == 100 && (bytes[1].toInt() and 0xc0) == 64
+            val unique = address is Inet6Address && (bytes[0].toInt() and 0xfe) == 0xfc
+            return address.isSiteLocalAddress || address.isLinkLocalAddress || shared || unique
+        }
 
         private enum class Kind { LOOPBACK, LOCAL_NETWORK, PUBLIC }
 

@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.SecretCipher
@@ -112,6 +113,17 @@ class FakeLocalNetwork : LocalNetwork {
     override fun refresh() = Unit
 }
 
+/** Where names lead, scripted: a host not listed resolves to nothing. [lookups] counts the names asked for. */
+class FakeHostResolver : HostResolver {
+    val hosts = mutableMapOf<String, List<String>>()
+    val lookups = mutableListOf<String>()
+
+    override suspend fun addresses(host: String): List<java.net.InetAddress> {
+        lookups += host
+        return hosts[host].orEmpty().map { java.net.InetAddress.getByName(it) }
+    }
+}
+
 class FakeConnectivity : Connectivity {
     override val online = MutableStateFlow(true)
 }
@@ -166,9 +178,12 @@ class TestApp(private val dir: File) {
     val days = DayBoundary(prefs)
     val foodFiles = TestFoodFiles()
     val cipher = FakeCipher()
-    val keys = AiKeyStore(PreferenceDataStoreFactory.create { File(dir, "secrets.preferences_pb") }, cipher)
+    /** The key store's own file, so a test can tamper with it. */
+    val secrets = PreferenceDataStoreFactory.create { File(dir, "secrets.preferences_pb") }
+    val keys = AiKeyStore(secrets, cipher)
     val connectivity = FakeConnectivity()
     val localNetwork = FakeLocalNetwork()
+    val resolver = FakeHostResolver()
     val estimator = FakeEstimator()
     val clock = TestClock()
 
@@ -217,7 +232,7 @@ class TestApp(private val dir: File) {
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
-        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, estimator, foods, clock)
+        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, foods, clock)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas, nutrition)
     }

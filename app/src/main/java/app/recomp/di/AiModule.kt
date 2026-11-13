@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.recomp.data.ai.AndroidConnectivity
 import app.recomp.data.ai.AndroidLocalNetwork
+import app.recomp.data.ai.DnsHostResolver
+import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
 import app.recomp.data.ai.ProviderMealEstimator
 import app.recomp.data.ai.Connectivity
@@ -39,6 +41,9 @@ abstract class AiModule {
 
     @Binds
     abstract fun bindLocalNetwork(localNetwork: AndroidLocalNetwork): LocalNetwork
+
+    @Binds
+    abstract fun bindHostResolver(resolver: DnsHostResolver): HostResolver
 
     @Binds
     abstract fun bindCipher(cipher: TinkSecretCipher): SecretCipher

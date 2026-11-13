@@ -1,5 +1,7 @@
 package app.recomp.domain.ai
 
+import java.time.LocalDate
+
 /**
  * Dollars per million tokens. Cache writes (Anthropic's, 5-minute TTL) cost 1.25 × the input rate; the other
  * providers cache on their own and report no cache writes.
@@ -45,7 +47,7 @@ object AiPricing {
         "gpt-6.1-terra" to Rates(input = 1.00, output = 5.00, cacheRead = 0.05),
         "gpt-6-luna" to Rates(input = 0.10, output = 0.50, cacheRead = 0.01),
         // Gemini, paid tier; output includes thinking (aistudio.google.com/docs/pricing, read 2026-11-13).
-        // 3.8 Flash's prices are due to double on 2027-01-01: update this row then.
+        // 3.8 Flash's prices double on 2027-01-01: see [changes].
         "gemini-4-hydrogen" to Rates(input = 1.50, output = 7.50, cacheRead = 0.075),
         "gemini-3.8-flash" to Rates(input = 0.75, output = 3.75, cacheRead = 0.075),
         "gemini-3.5-flash-lite" to Rates(input = 0.30, output = 2.50, cacheRead = 0.03),
@@ -57,16 +59,31 @@ object AiPricing {
         cacheRead = table.values.maxOf { it.cacheRead },
     )
 
-    fun rates(model: String): Rates = table[model] ?: highest
+    /**
+     * Price changes the providers have announced, each from the day it applies. Dated a day early, so no time
+     * zone lets a request be counted at the old price after the change.
+     */
+    val changes: Map<String, List<Pair<LocalDate, Rates>>> = mapOf(
+        // aistudio.google.com/docs/pricing, read 2026-11-13: "From Jan 1, 2027".
+        "gemini-3.8-flash" to listOf(LocalDate.of(2026, 12, 31) to Rates(input = 1.50, output = 7.50, cacheRead = 0.15)),
+    )
 
-    fun cost(usage: TokenUsage): Double {
-        val r = usage.rates ?: rates(usage.model)
+    /** [model]'s rates on [on]: the table's, or a later announced price once its day has come. Without a date, the table's. */
+    fun rates(model: String, on: LocalDate? = null): Rates {
+        val base = table[model] ?: return highest
+        if (on == null) return base
+        return changes[model]?.lastOrNull { !on.isBefore(it.first) }?.second ?: base
+    }
+
+    /** One attempt's cost on [on], the day the request was made. */
+    fun cost(usage: TokenUsage, on: LocalDate? = null): Double {
+        val r = usage.rates ?: rates(usage.model, on)
         return (usage.inputTokens * r.input + usage.outputTokens * r.output +
             usage.cacheReadTokens * r.cacheRead + usage.cacheWriteTokens * r.cacheWrite) / 1_000_000.0
     }
 
     /** Every attempt of one request, each at its own model's rates: a declined attempt and its fallback both count. */
-    fun cost(attempts: List<TokenUsage>): Double = attempts.sumOf(::cost)
+    fun cost(attempts: List<TokenUsage>, on: LocalDate? = null): Double = attempts.sumOf { cost(it, on) }
 
     /** Prompt tokens beyond the text itself: the output schema and the API's own framing. */
     const val PROMPT_OVERHEAD_TOKENS = 1_500L

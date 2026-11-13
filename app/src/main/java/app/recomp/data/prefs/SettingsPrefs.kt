@@ -234,8 +234,11 @@ data class AiSettings(
     /** The model id requests are sent with. Blank until the OpenAI-compatible provider's model is typed. */
     val modelId: String get() = model?.id ?: compatibleModel.trim()
 
-    /** The OpenAI-compatible provider's base URL, when it passes the URL rules. */
-    val url: AiUrl? get() = if (provider == AiProviderId.COMPATIBLE) AiUrl.ok(baseUrl) else null
+    /** The OpenAI-compatible server as set, when its URL passes the rules, whichever provider is in use. */
+    val compatibleUrl: AiUrl? get() = AiUrl.ok(baseUrl)
+
+    /** The OpenAI-compatible provider's base URL, when that provider is in use and the URL passes the rules. */
+    val url: AiUrl? get() = if (provider == AiProviderId.COMPATIBLE) compatibleUrl else null
 
     /** Whether the provider has what it needs besides a key: a usable base URL and a model name. */
     val configured: Boolean get() = provider != AiProviderId.COMPATIBLE || (url != null && compatibleModel.isNotBlank())

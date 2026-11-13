@@ -176,9 +176,15 @@ class HttpProvidersTest {
 
     @Test
     fun `OpenAI's cache writes are charged, and a reply with no usage counts at the upper bound`() = runBlocking {
-        server.enqueue(chat(usage = """{"prompt_tokens":1200,"completion_tokens":300,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":1100}}"""))
-        val written = openAi.send(call(openAiTarget())).attempts.single()
-        assertEquals(listOf(1_200L, 0L, 300L, 1_100L), listOf(written.inputTokens, written.cacheReadTokens, written.outputTokens, written.cacheWriteTokens))
+        // Ordinary input is the prompt less what was read from the cache and what was written to it: a write isn't charged twice.
+        server.enqueue(chat(usage = """{"prompt_tokens":3000,"completion_tokens":500,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":2800}}"""))
+        val wrote = openAi.send(call(openAiTarget()))
+        val written = wrote.attempts.single()
+        assertEquals(listOf(200L, 0L, 500L, 2_800L), listOf(written.inputTokens, written.cacheReadTokens, written.outputTokens, written.cacheWriteTokens))
+        assertEquals((200 * 2.00 + 2_800 * 2.50 + 500 * 10.00) / 1_000_000, AiPricing.cost(wrote.attempts), 1e-12)
+        server.enqueue(chat(usage = """{"prompt_tokens":3000,"completion_tokens":500,"prompt_tokens_details":{"cached_tokens":1000,"cache_write_tokens":1500}}"""))
+        val both = openAi.send(call(openAiTarget())).attempts.single()
+        assertEquals(listOf(500L, 1_000L, 500L, 1_500L), listOf(both.inputTokens, both.cacheReadTokens, both.outputTokens, both.cacheWriteTokens))
 
         server.enqueue(chat(usage = null))
         val call = call(openAiTarget())
@@ -231,13 +237,16 @@ class HttpProvidersTest {
         server.enqueue(openAiError(429, "project_spend_limit_exceeded"))
         assertEquals(AiStatus.BILLING, openAi.send(call(openAiTarget())).status)
 
+        // A 403 for where you are isn't a rejected key; any other 403 is.
         server.enqueue(openAiError(403, "unsupported_country_region_territory"))
+        assertEquals(AiStatus.BAD_REQUEST, openAi.send(call(openAiTarget())).status)
+        server.enqueue(openAiError(403, null, type = "permission_error"))
         assertEquals(AiStatus.AUTH, openAi.send(call(openAiTarget())).status)
 
         // OpenAI itself is never asked again in JSON mode.
         server.enqueue(openAiError(400, "invalid_json_schema"))
         assertEquals(AiStatus.BAD_REQUEST, openAi.send(call(openAiTarget())).status)
-        assertEquals(6, server.requestCount)
+        assertEquals(7, server.requestCount)
     }
 
     @Test
@@ -289,12 +298,85 @@ class HttpProvidersTest {
         val dropped = openAi.send(call)
         assertEquals(AiStatus.NETWORK, dropped.status)
         assertEquals(listOf(call.upperBound), dropped.attempts)
+        assertEquals(1, server.requestCount)
 
         server.shutdown()
         val none = openAi.send(call)
         assertEquals(AiStatus.NETWORK, none.status)
         assertTrue(none.attempts.isEmpty())
         assertEquals(AiStatus.NETWORK, gemini.send(call(geminiTarget())).status)
+    }
+
+    @Test
+    fun `a request dropped on a connection that was used before is never sent again behind the adapter's back`() = runBlocking {
+        // A first request, which would leave a connection to reuse. OkHttp re-sends a POST by itself when a reused
+        // connection drops after the request went out, and the first send may have been billed in full.
+        server.enqueue(chat())
+        assertEquals(AiStatus.OK, openAi.send(call(openAiTarget())).status)
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        server.enqueue(chat())
+        val call = call(openAiTarget())
+        val dropped = openAi.send(call)
+        assertEquals(AiStatus.NETWORK, dropped.status)
+        assertEquals("one send for the dropped request, not two", 2, server.requestCount)
+        assertEquals(listOf(call.upperBound), dropped.attempts)
+        // And no connection is kept between requests: each of the three so far arrived on its own.
+        assertEquals(AiStatus.OK, openAi.send(call(openAiTarget())).status)
+        assertEquals(listOf(0, 0, 0), (1..3).map { server.takeRequest(1, TimeUnit.SECONDS)!!.sequenceNumber })
+
+        // The same for Gemini, which shares the client.
+        server.enqueue(generated())
+        gemini.send(call(geminiTarget()))
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        server.enqueue(generated())
+        val g = call(geminiTarget())
+        val lost = gemini.send(g)
+        assertEquals(AiStatus.NETWORK, lost.status)
+        assertEquals(listOf(g.upperBound), lost.attempts)
+        assertEquals(5, server.requestCount)
+    }
+
+    @Test
+    fun `a usage that is empty, all zeros or not numbers counts at the upper bound, not as free`() = runBlocking {
+        val priced = AiPricing.typed(1.0, 2.0)
+        for (usage in listOf("{}", """{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}""", """{"prompt_tokens":"n/a","completion_tokens":null}""")) {
+            server.enqueue(chat(usage = usage, model = "test-model"))
+            val call = call(localTarget(rates = priced))
+            val r = openAi.send(call)
+            assertEquals(usage, AiStatus.OK, r.status)
+            assertEquals(usage, listOf(call.upperBound), r.attempts)
+            assertTrue(usage, AiPricing.cost(r.attempts) > 0.01)
+        }
+        for (usage in listOf("{}", """{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}""")) {
+            server.enqueue(generated(usage = usage))
+            val call = call(geminiTarget())
+            val r = gemini.send(call)
+            assertEquals(usage, AiStatus.OK, r.status)
+            assertEquals(usage, listOf(call.upperBound), r.attempts)
+        }
+        // A real count with one side zero is still a count: a blocked prompt has no output.
+        server.enqueue(chat(usage = """{"prompt_tokens":900,"completion_tokens":0}""", content = null, refusal = "No."))
+        assertEquals(900L, openAi.send(call(openAiTarget())).attempts.single().inputTokens)
+    }
+
+    @Test
+    fun `a reply far too long to be one is refused without being read whole`() = runBlocking {
+        val huge = "x".repeat(2 * 1024 * 1024)
+        server.enqueue(json("""{"choices":[{"message":{"content":"$huge"},"finish_reason":"stop"}]}"""))
+        val call = call(localTarget())
+        val r = openAi.send(call)
+        assertEquals(AiStatus.INVALID, r.status)
+        assertEquals("too long", r.detail)
+        // It was answered, so it may have been billed.
+        assertEquals(listOf(call.upperBound), r.attempts)
+        assertNull(r.text)
+
+        // An oversized error body is still just its status.
+        server.enqueue(json(huge).setResponseCode(400))
+        assertEquals(AiStatus.BAD_REQUEST, openAi.send(call(openAiTarget())).status)
+        // A reply just under the limit is read as usual.
+        server.enqueue(chat(content = """{"items":[],"clarifying_question":"${"y".repeat(900_000)}"}"""))
+        assertEquals(AiStatus.OK, openAi.send(call(openAiTarget())).status)
     }
 
     @Test
@@ -519,6 +601,19 @@ class HttpProvidersTest {
         assertEquals(AiStatus.BAD_REQUEST, gemini.send(call(geminiTarget())).status)
         assertEquals(5, server.requestCount)
 
+        // The free tier isn't available and billing isn't on: a billing problem, not a bad request.
+        server.enqueue(geminiError(400, "FAILED_PRECONDITION"))
+        assertEquals(AiStatus.BILLING, gemini.send(call(geminiTarget())).status)
+        // Google ran out of time on work it had started: like a timeout, not retried and counted at the upper bound.
+        server.enqueue(geminiError(504, "DEADLINE_EXCEEDED"))
+        server.enqueue(generated())
+        val late = call(geminiTarget())
+        val deadline = gemini.send(late)
+        assertEquals(AiStatus.TIMEOUT, deadline.status)
+        assertEquals(listOf(late.upperBound), deadline.attempts)
+        assertEquals("not sent again", 7, server.requestCount)
+        assertEquals(AiStatus.OK, gemini.send(call(geminiTarget())).status)
+
         server.enqueue(geminiError(429, "RESOURCE_EXHAUSTED"))
         server.enqueue(geminiError(429, "RESOURCE_EXHAUSTED"))
         assertEquals(AiStatus.RATE_LIMIT, gemini.send(call(geminiTarget())).status)
@@ -528,7 +623,7 @@ class HttpProvidersTest {
         server.enqueue(geminiError(503, "UNAVAILABLE"))
         server.enqueue(generated())
         assertEquals(AiStatus.OK, gemini.send(call(geminiTarget())).status)
-        assertEquals(11, server.requestCount)
+        assertEquals(14, server.requestCount)
     }
 
     // Shared

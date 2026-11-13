@@ -102,4 +102,18 @@ class AiTextTest {
         val rules = File("src/main/res/xml/data_extraction_rules.xml").readText()
         assertFalse(Regex("<include[^>]*secrets").containsMatchIn(rules))
     }
+
+    @Test
+    fun `Allow opens system settings once Android has stopped showing the prompt`() {
+        val open = app.recomp.data.ai.LocalNetwork::openSettings
+        // Refused at once with no rationale to show: Android didn't ask, so the button would otherwise do nothing.
+        assertTrue(open(false, false, 30))
+        // Refused by the person, who saw the prompt: leave it there.
+        assertFalse(open(false, false, 2_500))
+        assertFalse(open(false, true, 30))
+        assertFalse(open(true, false, 30))
+        // The compatible key's help says it's for one server, and what to do when the server needs none.
+        val help = AiText.keyHelp(AiProviderId.COMPATIBLE)
+        assertTrue(help.contains("only to this server") && help.contains("needs no key"))
+    }
 }

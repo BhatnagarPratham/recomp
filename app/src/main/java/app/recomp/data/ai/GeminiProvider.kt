@@ -82,6 +82,10 @@ class GeminiProvider @Inject constructor() : HttpProvider() {
     override fun errorStatus(code: Int, body: JsonObject?): AiStatus = when {
         // A wrong key is a 400 here (INVALID_ARGUMENT with this reason), not a 401.
         reasons(body).any { it in BAD_KEY } -> AiStatus.AUTH
+        // The free tier isn't available where you are and billing isn't enabled.
+        code == 400 && body?.obj("error")?.string("status") == "FAILED_PRECONDITION" -> AiStatus.BILLING
+        // Processing ran out of time on Google's side: the work was started, so it isn't sent again.
+        code == 504 -> AiStatus.TIMEOUT
         // 402 is prepaid credit used up; 429 is a rate or quota limit, which may lift.
         else -> AiWire.statusFor(code)
     }

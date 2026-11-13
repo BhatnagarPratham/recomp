@@ -29,6 +29,7 @@ import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiNotice
 import app.recomp.domain.ai.AiProviderId
+import app.recomp.domain.ai.AiUrl
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.domain.food.Origin
@@ -594,7 +595,7 @@ class BackupTest {
         fill()
         // One key per provider (M7), each invented.
         val planted = AiProviderId.entries.associateWith { "planted-value-7310-${it.ordinal}" }
-        planted.forEach { (provider, key) -> app.keys.save(provider, key) }
+        planted.forEach { (provider, key) -> app.keys.save(provider, key, AiUrl.ok("https://ai.example.com/v1")) }
         val backup = export()
         planted.values.forEach { key -> assertFalse(entries(backup).values.any { key in it }) }
         assertFalse(entries(backup).values.any { "planted-value" in it })

@@ -167,7 +167,8 @@ object AiText {
         AiProviderId.ANTHROPIC -> "In the Claude Console (platform.claude.com), create a workspace for this app with a spend limit, then an API key in it, and paste it here."
         AiProviderId.OPENAI -> "In the OpenAI platform (platform.openai.com), create a project for this app with a budget, then an API key in it, and paste it here."
         AiProviderId.GEMINI -> "In Google AI Studio (aistudio.google.com), create an API key and paste it here."
-        AiProviderId.COMPATIBLE -> "Paste the key your server or service gave you (OpenRouter: openrouter.ai/keys). It's only ever sent over https."
+        AiProviderId.COMPATIBLE -> "Paste the key your server or service gave you (OpenRouter: openrouter.ai/keys). It's only ever sent over https, " +
+            "and only to this server: change the address and it's asked for again. If your server needs no key, type any value."
     } + " It's stored encrypted on this phone, never shown again, and never exported or backed up. Your other providers' keys are kept."
 
     /** The second guard's note under the cap, naming where the hard stop is. */

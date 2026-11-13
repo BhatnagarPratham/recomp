@@ -30,7 +30,17 @@ import app.recomp.data.prefs.AiSettings
 import app.recomp.data.repo.AiGateView
 import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.AiSpend
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.SystemClock
+import android.provider.Settings
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.activity.result.contract.ActivityResultContracts
 import app.recomp.data.ai.LocalNetwork
 import app.recomp.domain.ai.AiModel
@@ -62,7 +72,8 @@ class AiSettingsViewModel @Inject constructor(private val ai: AiRepository) : Vi
     fun setProvider(provider: AiProviderId) = viewModelScope.launch { ai.setProvider(provider) }
     fun setModel(model: AiModel) = viewModelScope.launch { ai.setModel(model) }
     fun setCap(usd: Double?) = viewModelScope.launch { ai.setMonthlyCap(usd) }
-    suspend fun setCompatible(baseUrl: String, model: String, inputUsd: Double, outputUsd: Double) = ai.setCompatible(baseUrl, model, inputUsd, outputUsd)
+    /** Saves the server; true when it's on the local network, which needs Android's permission. */
+    suspend fun setCompatible(baseUrl: String, model: String, inputUsd: Double, outputUsd: Double): Boolean = ai.setCompatible(baseUrl, model, inputUsd, outputUsd)
     suspend fun saveKey(provider: AiProviderId, key: String) = ai.saveKey(key, provider)
     fun removeKey(provider: AiProviderId) = viewModelScope.launch { runCatching { ai.removeKey(provider) } }
     fun localNetworkAnswered() = ai.localNetworkAnswered()
@@ -82,7 +93,7 @@ fun AiSettingsSection(viewModel: AiSettingsViewModel = hiltViewModel()) {
     val gate by viewModel.gate.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<AiEditing?>(null) }
     // Android's local-network permission, asked for when the server is on your own network.
-    val localNetwork = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.localNetworkAnswered() }
+    val askLocalNetwork = rememberLocalNetworkRequest(viewModel::localNetworkAnswered)
     val s = settings ?: return
     val provider = s.provider
     val hasKey = provider in storedKeys
@@ -101,7 +112,10 @@ fun AiSettingsSection(viewModel: AiSettingsViewModel = hiltViewModel()) {
         } else {
             SettingRow("Model", s.model?.label.orEmpty()) { editing = AiEditing.MODEL }
         }
-        if (s.needsKey) {
+        if (provider == AiProviderId.COMPATIBLE && s.url == null) {
+            // The key is kept for one server, so there has to be one first.
+            SettingRow("API key", "Set the server first", onClick = null)
+        } else if (s.needsKey) {
             SettingRow("API key", if (hasKey) "Saved · Replace" else "Not set") { editing = AiEditing.KEY }
         } else {
             // A server reached over plain http is never sent a key.
@@ -113,7 +127,7 @@ fun AiSettingsSection(viewModel: AiSettingsViewModel = hiltViewModel()) {
             AiState.OVER_CAP -> Text(AiText.notReady(gate).orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
             AiState.NO_LOCAL_NETWORK -> {
                 Text(AiText.LOCAL_NETWORK_REFUSED, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-                TextButton(onClick = { localNetwork.launch(LocalNetwork.PERMISSION) }) { Text("Allow") }
+                TextButton(onClick = askLocalNetwork) { Text("Allow") }
             }
             else -> Unit
         }
@@ -155,9 +169,9 @@ fun AiSettingsSection(viewModel: AiSettingsViewModel = hiltViewModel()) {
             settings = s,
             onDismiss = { editing = null },
             onSave = { url, model, input, output ->
-                viewModel.setCompatible(url.base, model, input, output)
+                val local = viewModel.setCompatible(url.base, model, input, output)
                 editing = null
-                if (url.localNetwork) localNetwork.launch(LocalNetwork.PERMISSION)
+                if (local) askLocalNetwork()
             },
         )
         AiEditing.CAP -> NumberEntryDialog(
@@ -169,6 +183,40 @@ fun AiSettingsSection(viewModel: AiSettingsViewModel = hiltViewModel()) {
         ) { text ->
             editing = null
             if (text.isBlank()) viewModel.setCap(null) else parseNumber(text)?.takeIf { it in 0.0..10_000.0 }?.let(viewModel::setCap)
+        }
+    }
+}
+
+/**
+ * Asks for Android's local-network permission (AI-05), and tells [onAnswered] so the gate reads it again. Once
+ * the prompt has been refused for good, Android answers at once without showing it; the app's page in system
+ * settings opens instead, and the permission is read again when you come back. Before Android 17, or with the
+ * permission already granted, there's nothing to ask.
+ */
+@Composable
+fun rememberLocalNetworkRequest(onAnswered: () -> Unit): () -> Unit {
+    val context = LocalContext.current
+    val activity = LocalActivity.current
+    var askedAt by remember { mutableLongStateOf(0L) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        onAnswered()
+        val rationale = activity?.shouldShowRequestPermissionRationale(LocalNetwork.PERMISSION) ?: true
+        if (LocalNetwork.openSettings(granted, rationale, SystemClock.elapsedRealtime() - askedAt)) {
+            runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
+        }
+    }
+    // Back from system settings, or from anywhere: the permission may have changed.
+    LifecycleResumeEffect(Unit) {
+        onAnswered()
+        onPauseOrDispose { }
+    }
+    return {
+        val granted = context.checkSelfPermission(LocalNetwork.PERMISSION) == PackageManager.PERMISSION_GRANTED
+        if (LocalNetwork.allowed(Build.VERSION.SDK_INT, granted)) {
+            onAnswered()
+        } else {
+            askedAt = SystemClock.elapsedRealtime()
+            launcher.launch(LocalNetwork.PERMISSION)
         }
     }
 }

@@ -30,9 +30,9 @@ import kotlinx.serialization.json.putJsonObject
  * server and model while the app runs. Either way the reply goes through the same validation. The key goes only
  * over https: a server reached over plain http is never sent one.
  *
- * **Usage.** OpenAI counts cached tokens inside `prompt_tokens` and reasoning tokens inside `completion_tokens`,
- * so cached input is taken out of the input and the output is used as it is. A compatible server that reports no
- * usage is costed at the request's upper bound.
+ * **Usage.** OpenAI counts cached tokens and cache writes inside `prompt_tokens` and reasoning tokens inside
+ * `completion_tokens`, so both are taken out of the input and the output is used as it is. A reply with no usage,
+ * or an empty or all-zero one, is costed at the request's upper bound.
  */
 @Singleton
 class OpenAiProvider @Inject constructor() : HttpProvider() {
@@ -114,6 +114,8 @@ class OpenAiProvider @Inject constructor() : HttpProvider() {
         return when {
             // Out of credit or over a spend limit arrives as a 429 that waiting won't fix.
             reasons.any { it in OUT_OF_CREDIT } -> AiStatus.BILLING
+            // A 403 for where you are isn't about the key.
+            code == 403 && reasons.any { it in NOT_THE_KEY } -> AiStatus.BAD_REQUEST
             else -> AiWire.statusFor(code)
         }
     }
@@ -128,7 +130,7 @@ class OpenAiProvider @Inject constructor() : HttpProvider() {
                 call.upperBound
             } else {
                 val details = usage.obj("prompt_tokens_details")
-                // A cache write is charged on top of the input it is part of, which over-counts a little and never under-counts.
+                // Ordinary input is the prompt less what was read from the cache and what was written to it.
                 usage(call, usage.long("prompt_tokens"), details?.long("cached_tokens") ?: 0, usage.long("completion_tokens"), details?.long("cache_write_tokens") ?: 0)
             },
         )
@@ -168,6 +170,9 @@ class OpenAiProvider @Inject constructor() : HttpProvider() {
 
         /** How servers that can't take `response_format: json_schema` answer: a bad request, no such route, or not implemented. */
         val SCHEMA_REFUSED = setOf(400, 404, 415, 422, 501)
+
+        /** OpenAI's 403 codes that aren't a rejected key: the country, region or territory isn't supported. */
+        val NOT_THE_KEY = setOf("unsupported_country_region_territory")
 
         /** OpenAI's codes and types for an account that can't pay (developers.openai.com/api/docs/guides/error-codes). */
         val OUT_OF_CREDIT = setOf(

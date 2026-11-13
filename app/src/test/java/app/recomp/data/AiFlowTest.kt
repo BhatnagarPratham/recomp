@@ -11,6 +11,7 @@ import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
+import app.recomp.domain.ai.AiUrl
 import app.recomp.domain.ai.Clarification
 import app.recomp.domain.ai.Confidence
 import app.recomp.domain.ai.EstimatedItem
@@ -643,6 +644,7 @@ class AiFlowTest {
         ai.setEnabled(true)
         ai.setProvider(AiProviderId.COMPATIBLE)
         // A key saved earlier, for another server.
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
         ai.saveKey("router-test-key")
         ai.setCompatible("http://localhost:11434/v1", "local-model", 0.0, 0.0)
         assertEquals(AiState.READY, ai.state())
@@ -694,6 +696,8 @@ class AiFlowTest {
         // An https address on the local network still needs it.
         ai.setProvider(AiProviderId.COMPATIBLE)
         ai.setCompatible("https://10.0.0.5/v1", "m", 0.0, 0.0)
+        assertEquals("a new server has no key yet", AiState.NO_KEY, ai.state())
+        ai.saveKey("lan-test-key")
         assertEquals(AiState.NO_LOCAL_NETWORK, ai.state())
     }
 
@@ -740,5 +744,140 @@ class AiFlowTest {
         // The other providers start on their defaults.
         assertEquals(AiModel.GPT_6_1_SOL, s.models[AiProviderId.OPENAI])
         assertEquals(AiModel.GEMINI_4_HYDROGEN, s.models[AiProviderId.GEMINI])
+    }
+
+    @Test
+    fun `a compatible server's key is only ever sent to the server it was entered for`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        // No server yet: there is nothing to keep a key for.
+        assertTrue(runCatching { ai.saveKey("router-test-key") }.isFailure)
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
+        ai.saveKey("router-test-key")
+        ai.markNoticeSeen()
+        assertEquals(AiState.READY, ai.state())
+        assertTrue(ai.hasKey.first())
+
+        // You edit the address to try another service: the first server's key doesn't go with it.
+        ai.setCompatible("https://another-host.example/v1", "m", 0.0, 0.0)
+        assertEquals(AiState.NO_KEY, ai.state())
+        assertEquals(AiState.NO_KEY, ai.gate.first().state)
+        assertFalse(ai.hasKey.first())
+        assertFalse(AiProviderId.COMPATIBLE in ai.storedKeys.first())
+        assertEquals(EstimateResult.NotReady(AiState.NO_KEY), ai.estimate("dal", Origin.HOME))
+        assertTrue(app.estimator.requests.isEmpty())
+        assertNull(app.keys.key(AiProviderId.COMPATIBLE, AiUrl.ok("https://another-host.example/v1")))
+        // The same host on another port or scheme is another server too.
+        for (other in listOf("https://openrouter.ai:8443/api/v1", "http://openrouter.ai.local/v1")) assertNull(other, app.keys.key(AiProviderId.COMPATIBLE, AiUrl.ok(other)))
+        assertNull("never without saying which server", app.keys.key(AiProviderId.COMPATIBLE))
+
+        // Back on the first server (any path on it), the key is there again.
+        ai.setCompatible("https://openrouter.ai/api/v2/", "other", 0.0, 0.0)
+        assertEquals(AiState.READY, ai.state())
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item())) }
+        ai.estimate("dal", Origin.HOME)
+        assertEquals("router-test-key", app.estimator.requests.single().target.apiKey)
+
+        // A key entered for the new server replaces the old one, and is then that server's alone.
+        ai.setCompatible("https://another-host.example/v1", "m", 0.0, 0.0)
+        ai.saveKey("another-test-key")
+        assertEquals(AiState.READY, ai.state())
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
+        assertEquals(AiState.NO_KEY, ai.state())
+
+        // Editing the stored server name doesn't move the key: the ciphertext is bound to the server it was entered for.
+        app.secrets.edit { it[androidx.datastore.preferences.core.stringPreferencesKey("compatible_api_key_server")] = "https://openrouter.ai" }
+        assertNull(app.keys.key(AiProviderId.COMPATIBLE, AiUrl.ok("https://openrouter.ai/api/v1")))
+        assertEquals(AiState.NO_KEY, ai.state())
+        // Removing the key removes what it was for.
+        ai.removeKey()
+        assertEquals(null, app.keys.stored.first().compatibleServer)
+    }
+
+    @Test
+    fun `imported settings that name another server don't get this phone's key`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0)
+        ai.saveKey("router-test-key")
+        assertEquals(AiState.READY, ai.state())
+
+        // A backup from another install, or an edited one: the provider, another https host, and its notice already seen.
+        app.prefs.replaceAll(
+            androidx.datastore.preferences.core.mutablePreferencesOf(
+                androidx.datastore.preferences.core.stringPreferencesKey("ai_mode") to "ON",
+                androidx.datastore.preferences.core.stringPreferencesKey("ai_provider") to "COMPATIBLE",
+                androidx.datastore.preferences.core.stringPreferencesKey("ai_base_url") to "https://elsewhere.example/v1",
+                androidx.datastore.preferences.core.stringPreferencesKey("ai_model_compatible") to "m",
+                androidx.datastore.preferences.core.stringSetPreferencesKey("ai_notices_seen") to setOf("COMPATIBLE/elsewhere.example:MEAL_TEXT"),
+            ),
+        )
+        val s = ai.settings.first()
+        assertEquals("elsewhere.example", s.url!!.host)
+        assertTrue("its notice reads as seen, so nothing else would stop a send", s.noticeSeen(AiKind.MEAL_TEXT))
+        assertEquals(AiState.NO_KEY, ai.state())
+        assertEquals(EstimateResult.NotReady(AiState.NO_KEY), ai.estimate("dal", Origin.HOME))
+        assertTrue(app.estimator.requests.isEmpty())
+        assertEquals(0, requests())
+        // The key itself is untouched, for the server it belongs to.
+        assertEquals("router-test-key", app.keys.key(AiProviderId.COMPATIBLE, AiUrl.ok("https://openrouter.ai/api/v1")))
+    }
+
+    @Test
+    fun `a server whose name leads to the local network needs the permission too`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        app.resolver.hosts["box.tailnet.example"] = listOf("100.101.102.103")
+        app.resolver.hosts["ai.home.example"] = listOf("2001:db8::1", "192.168.1.20")
+        app.resolver.hosts["openrouter.ai"] = listOf("104.18.2.115")
+
+        // With the permission in hand (or before Android 17) nothing is looked up.
+        assertFalse(ai.setCompatible("https://box.tailnet.example/v1", "m", 0.0, 0.0))
+        ai.saveKey("tailnet-test-key")
+        assertEquals(AiState.READY, ai.state())
+        assertTrue(app.resolver.lookups.isEmpty())
+
+        // Refused: the name is looked up, found on the local network, and the gate says so instead of timing out.
+        app.localNetwork.allowed.value = false
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.state())
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.gate.first().state)
+        assertEquals(EstimateResult.NotReady(AiState.NO_LOCAL_NETWORK), ai.estimate("dal", Origin.HOME))
+        assertTrue(app.estimator.requests.isEmpty())
+        assertEquals(listOf("box.tailnet.example"), app.resolver.lookups.distinct())
+
+        // Saving such a server says it's local, so Settings can ask for the permission. Any local address counts.
+        assertTrue(ai.setCompatible("https://ai.home.example/v1", "m", 0.0, 0.0))
+        ai.saveKey("home-test-key")
+        assertEquals(AiState.NO_LOCAL_NETWORK, ai.state())
+        app.localNetwork.allowed.value = true
+        assertEquals(AiState.READY, ai.state())
+
+        // A public name, and one that doesn't resolve, aren't held back; an address or a .local name isn't looked up.
+        app.localNetwork.allowed.value = false
+        app.resolver.lookups.clear()
+        assertFalse(ai.setCompatible("https://openrouter.ai/api/v1", "m", 0.0, 0.0))
+        ai.saveKey("router-test-key")
+        assertEquals(AiState.READY, ai.state())
+        assertFalse(ai.setCompatible("https://unknown.example/v1", "m", 0.0, 0.0))
+        assertTrue(ai.setCompatible("http://desktop.local:11434/v1", "m", 0.0, 0.0))
+        assertTrue(ai.setCompatible("http://192.168.1.20:11434/v1", "m", 0.0, 0.0))
+        assertFalse(ai.setCompatible("http://localhost:11434/v1", "m", 0.0, 0.0))
+        assertEquals(listOf("openrouter.ai", "unknown.example"), app.resolver.lookups.distinct())
+    }
+
+    @Test
+    fun `a request is priced at the rates of the day it's made`() = runBlocking {
+        ready()
+        ai.saveKey("gemini-test-key", AiProviderId.GEMINI)
+        ai.setProvider(AiProviderId.GEMINI)
+        ai.setModel(AiModel.GEMINI_3_8_FLASH)
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, estimate(item()), attempts = listOf(TokenUsage("gemini-3.8-flash", 1_000_000, 1_000_000))) }
+        // 18 October 2026: the price before the announced change.
+        val before = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        assertEquals(0.75 + 3.75, ai.request(before.requestId)!!.costUsd, 1e-9)
+        // 2 January 2027: doubled, with no new build.
+        app.clock.instant = Instant.parse("2027-01-02T06:30:00Z")
+        val after = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
+        assertEquals(1.50 + 7.50, ai.request(after.requestId)!!.costUsd, 1e-9)
     }
 }

@@ -58,12 +58,10 @@ import app.recomp.data.repo.DraftPlan
 import app.recomp.data.repo.EstimateResult
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
-import app.recomp.data.ai.LocalNetwork
 import app.recomp.domain.ai.AiKind
+import app.recomp.ui.settings.rememberLocalNetworkRequest
 import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiState
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Clarification
 import app.recomp.domain.ai.EstimatedItem
@@ -343,7 +341,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     val ready = gate?.state == AiState.READY
 
     // Android's local-network permission, for a server on your own network (AI-05). The gate reads the answer.
-    val localNetwork = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.localNetworkAnswered() }
+    val askLocalNetwork = rememberLocalNetworkRequest(viewModel::localNetworkAnswered)
 
     LaunchedEffect(outcome) { outcome?.let(onDone) }
 
@@ -395,7 +393,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 onEstimate = ::requestEstimate,
                 onSaveDraft = viewModel::saveDraft,
                 onAddKey = { addingKey = true },
-                onAllowLocalNetwork = { localNetwork.launch(LocalNetwork.PERMISSION) },
+                onAllowLocalNetwork = askLocalNetwork,
                 onCancel = viewModel::cancel,
                 busy = busy,
             )

@@ -167,4 +167,66 @@ class AiProvidersTest {
         assertEquals("ANTHROPIC:MEAL_TEXT", keys[0])
         assertEquals("COMPATIBLE/openrouter.ai:MEAL_TEXT", keys[3])
     }
+
+    @Test
+    fun `an address spelt with a leading zero is refused, since a resolver may read it as octal`() {
+        // 010.0.0.1 is 10.0.0.1 in decimal and 8.0.0.1 in octal: plain http could leave the network.
+        for (url in listOf("http://010.0.0.1/v1", "http://192.168.01.5/v1", "http://127.0.0.01:11434/v1", "https://010.0.0.1/v1", "http://00.0.0.0/v1")) {
+            assertEquals(url, AiUrl.Problem.NOT_A_URL, bad(url))
+        }
+        // A plain zero octet is fine.
+        assertTrue(ok("http://10.0.0.1/v1").localNetwork)
+        assertTrue(ok("http://192.168.0.105/v1").localNetwork)
+    }
+
+    @Test
+    fun `a pasted endpoint is cut back to the base it is added to`() {
+        assertEquals("http://192.168.1.5:11434/v1", ok("http://192.168.1.5:11434/v1/chat/completions").base)
+        assertEquals("https://openrouter.ai/api/v1", ok("https://openrouter.ai/api/v1/chat/completions/").base)
+        assertEquals("https://example.com", ok("https://example.com/chat/completions").base)
+        // Only as the last part of the path.
+        assertEquals("https://example.com/chat/completions/v1", ok("https://example.com/chat/completions/v1").base)
+    }
+
+    @Test
+    fun `a server is its scheme, host and port, whatever the path`() {
+        assertEquals("https://openrouter.ai", ok("https://openrouter.ai/api/v1").origin)
+        assertEquals("https://openrouter.ai", ok("https://OpenRouter.ai").origin)
+        assertEquals("https://openrouter.ai:8443", ok("https://openrouter.ai:8443/api/v1").origin)
+        assertEquals("http://192.168.1.20:11434", ok("http://192.168.1.20:11434/v1").origin)
+        assertEquals("http://[::1]:8080", ok("http://[::1]:8080/v1").origin)
+        assertFalse(ok("https://openrouter.ai/v1").origin == ok("https://openrouter.ai.example/v1").origin)
+    }
+
+    @Test
+    fun `an address is on the local network by its range`() {
+        fun local(address: String) = AiUrl.onLocalNetwork(java.net.InetAddress.getByName(address))
+        for (address in listOf("10.1.2.3", "172.16.0.1", "172.31.255.254", "192.168.1.20", "169.254.10.10", "100.64.0.1", "100.101.102.103", "100.127.255.254", "fd12:3456:789a::1", "fe80::1")) {
+            assertTrue(address, local(address))
+        }
+        for (address in listOf("8.8.8.8", "104.18.2.115", "100.63.255.255", "100.128.0.1", "172.32.0.1", "127.0.0.1", "::1", "0.0.0.0", "2001:db8::1")) {
+            assertFalse(address, local(address))
+        }
+    }
+
+    @Test
+    fun `an announced price change applies from its day, a day early, with no new build`() {
+        val before = Rates(0.75, 3.75, 0.075)
+        val after = Rates(1.50, 7.50, 0.15)
+        assertEquals(before, AiPricing.rates("gemini-3.8-flash", java.time.LocalDate.of(2026, 11, 13)))
+        assertEquals(before, AiPricing.rates("gemini-3.8-flash", java.time.LocalDate.of(2026, 12, 30)))
+        assertEquals("a day early, so no time zone under-counts", after, AiPricing.rates("gemini-3.8-flash", java.time.LocalDate.of(2026, 12, 31)))
+        assertEquals(after, AiPricing.rates("gemini-3.8-flash", java.time.LocalDate.of(2027, 1, 1)))
+        assertEquals(after, AiPricing.rates("gemini-3.8-flash", java.time.LocalDate.of(2028, 6, 1)))
+        val usage = TokenUsage("gemini-3.8-flash", 1_000_000, 1_000_000)
+        assertEquals(4.50, AiPricing.cost(usage, java.time.LocalDate.of(2026, 12, 30)), 1e-12)
+        assertEquals(9.00, AiPricing.cost(listOf(usage), java.time.LocalDate.of(2027, 1, 1)), 1e-12)
+        // Other models, typed prices and unknown models don't change with the date.
+        val day = java.time.LocalDate.of(2027, 6, 1)
+        assertEquals(AiPricing.rates("gpt-6.1-sol"), AiPricing.rates("gpt-6.1-sol", day))
+        assertEquals(AiPricing.rates("some-new-model"), AiPricing.rates("some-new-model", day))
+        assertEquals(3.0, AiPricing.cost(usage.copy(rates = AiPricing.typed(1.0, 2.0)), day), 1e-12)
+        // Every dated price belongs to a model in the table.
+        AiPricing.changes.keys.forEach { assertNotNull(it, AiPricing.table[it]) }
+    }
 }

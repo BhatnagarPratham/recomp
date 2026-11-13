@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.di.SecretsStore
 import app.recomp.domain.ai.AiProviderId
+import app.recomp.domain.ai.AiUrl
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
@@ -61,40 +62,70 @@ class TinkSecretCipher @Inject constructor(@ApplicationContext private val conte
 }
 
 /**
+ * Which keys are stored. [compatibleServer] is the server (`AiUrl.origin`) the OpenAI-compatible key was entered
+ * for: that key is usable for no other.
+ */
+data class StoredKeys(val providers: Set<AiProviderId> = emptySet(), val compatibleServer: String? = null) {
+    /** Whether [provider]'s key may be used now. [server] is the OpenAI-compatible provider's current URL. */
+    fun usable(provider: AiProviderId, server: AiUrl?): Boolean =
+        provider in providers && (provider != AiProviderId.COMPATIBLE || (server != null && server.origin == compatibleServer))
+}
+
+/**
  * The API keys (TRD §6.2, AI-05): one per provider, each entered once in Settings → AI and stored only as
  * ciphertext in the `secrets` DataStore, apart from the settings so no export can include it. Switching provider
  * keeps the other keys. A key is never logged or shown again. A stored value that no longer decrypts (a restore
  * onto another phone) reads as no key.
+ *
+ * The OpenAI-compatible key belongs to one server, not to the provider: it's stored with the server it was
+ * entered for, and reads as no key for any other. So editing the base URL, or importing settings that name
+ * another server, can never send it somewhere it wasn't entered for.
  */
 @Singleton
 class AiKeyStore @Inject constructor(
     @SecretsStore private val store: DataStore<Preferences>,
     private val cipher: SecretCipher,
 ) {
-    /** The providers that have a usable key stored. */
-    val stored: Flow<Set<AiProviderId>> = store.data.map { prefs -> AiProviderId.entries.filter { read(prefs, it) != null }.toSet() }
-        .distinctUntilChanged()
-        .flowOn(Dispatchers.IO)
+    /** The providers that have a usable key stored, and the server the compatible one is for. */
+    val stored: Flow<StoredKeys> = store.data.map { prefs ->
+        val providers = AiProviderId.entries.filter { read(prefs, it) != null }.toSet()
+        StoredKeys(providers, prefs[COMPATIBLE_SERVER]?.takeIf { AiProviderId.COMPATIBLE in providers })
+    }.distinctUntilChanged().flowOn(Dispatchers.IO)
 
-    fun hasKey(provider: AiProviderId): Flow<Boolean> = stored.map { provider in it }.distinctUntilChanged()
+    fun hasKey(provider: AiProviderId): Flow<Boolean> = stored.map { provider in it.providers }.distinctUntilChanged()
 
-    /** The key for one request. Null when none is stored or it can't be decrypted. */
-    suspend fun key(provider: AiProviderId): String? = withContext(Dispatchers.IO) { read(store.data.first(), provider) }
+    /**
+     * The key for one request. Null when none is stored or it can't be decrypted, and for the OpenAI-compatible
+     * provider unless [server] is the one the key was entered for.
+     */
+    suspend fun key(provider: AiProviderId, server: AiUrl? = null): String? = withContext(Dispatchers.IO) {
+        val prefs = store.data.first()
+        if (provider == AiProviderId.COMPATIBLE && (server == null || server.origin != prefs[COMPATIBLE_SERVER])) null else read(prefs, provider)
+    }
 
-    suspend fun save(provider: AiProviderId, apiKey: String) {
+    /** Saves [provider]'s key. The OpenAI-compatible provider's is saved for [server], which must be https. */
+    suspend fun save(provider: AiProviderId, apiKey: String, server: AiUrl? = null) {
         val trimmed = apiKey.trim()
         require(looksLikeKey(trimmed)) { "Not an API key" }
-        val sealed = withContext(Dispatchers.IO) { cipher.encrypt(trimmed.toByteArray(Charsets.UTF_8), associatedData(provider)) }
-        store.edit { it[prefKey(provider)] = Base64.encodeToString(sealed, Base64.NO_WRAP) }
+        val origin = if (provider == AiProviderId.COMPATIBLE) checkNotNull(server?.takeIf { it.sendsKey }) { "No https server to keep a key for" }.origin else null
+        val sealed = withContext(Dispatchers.IO) { cipher.encrypt(trimmed.toByteArray(Charsets.UTF_8), associatedData(provider, origin)) }
+        store.edit {
+            it[prefKey(provider)] = Base64.encodeToString(sealed, Base64.NO_WRAP)
+            if (origin != null) it[COMPATIBLE_SERVER] = origin
+        }
     }
 
     suspend fun clear(provider: AiProviderId) {
-        store.edit { it.remove(prefKey(provider)) }
+        store.edit {
+            it.remove(prefKey(provider))
+            if (provider == AiProviderId.COMPATIBLE) it.remove(COMPATIBLE_SERVER)
+        }
     }
 
     /** A stored key that no longer decrypts, or that a build before the character check let through, reads as no key. */
     private fun read(prefs: Preferences, provider: AiProviderId): String? = prefs[prefKey(provider)]?.let { stored ->
-        runCatching { String(cipher.decrypt(Base64.decode(stored, Base64.NO_WRAP), associatedData(provider)), Charsets.UTF_8) }
+        val origin = if (provider == AiProviderId.COMPATIBLE) prefs[COMPATIBLE_SERVER] ?: return null else null
+        runCatching { String(cipher.decrypt(Base64.decode(stored, Base64.NO_WRAP), associatedData(provider, origin)), Charsets.UTF_8) }
             .getOrNull()?.takeIf(::looksLikeKey)
     }
 
@@ -109,8 +140,15 @@ class AiKeyStore @Inject constructor(
 
         private fun prefKey(provider: AiProviderId) = stringPreferencesKey(name(provider))
 
-        /** Binds the ciphertext to the provider it is for, so one provider's key can't be swapped in for another's. */
-        private fun associatedData(provider: AiProviderId) = "recomp:${name(provider)}".toByteArray(Charsets.UTF_8)
+        /** The server the OpenAI-compatible key was entered for. Not a secret, but it lives with the key it guards. */
+        private val COMPATIBLE_SERVER = stringPreferencesKey("compatible_api_key_server")
+
+        /**
+         * Binds the ciphertext to the provider it is for, and the OpenAI-compatible key to its server as well, so a
+         * key can't be swapped in for another's and the stored server can't be edited to point the key elsewhere.
+         */
+        private fun associatedData(provider: AiProviderId, origin: String?) =
+            (if (origin == null) "recomp:${name(provider)}" else "recomp:${name(provider)}:$origin").toByteArray(Charsets.UTF_8)
 
         /**
          * Printable ASCII with no spaces, which is all an API key is made of. Anything else, such as a zero-width

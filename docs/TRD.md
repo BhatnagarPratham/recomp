@@ -670,7 +670,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   | Gemini | OkHttp, `POST /v1beta/models/{model}:generateContent`, the key in `x-goog-api-key`, never in the URL | `generationConfig.responseFormat.text` with `mimeType: APPLICATION_JSON` and the schema | `thinkingConfig.thinkingLevel: LOW` (Gemini 4 can't switch thinking off) | `maxOutputTokens` 8,000, thinking included |
   | OpenAI-compatible | OkHttp, `{base URL}/chat/completions` | The same `json_schema`; see the fallback below | None sent: servers differ | `max_tokens` 8,000 |
 
-  OkHttp and kotlinx.serialization are the only libraries: no new SDK. The HTTP adapters share `HttpProvider`. Redirects aren't followed, so a key can't be carried to another address. OkHttp's own re-send of a 503 with `Retry-After: 0` is switched off, so the adapter's one retry is the only one.
+  OkHttp and kotlinx.serialization are the only libraries: no new SDK. The HTTP adapters share `HttpProvider`. Redirects aren't followed, so a key can't be carried to another address. Nothing is sent again behind the adapter's back, so its one retry is the only one: OkHttp's connection-failure recovery is off (it re-sends a POST when a reused connection drops after the request went out, and that first send may have been billed), no connection is kept for reuse, and its own re-send of a 503 with `Retry-After: 0` is switched off. A reply is read up to 1 MB; more than that is `INVALID` at the upper bound.
 - **Schemas.** `AiSchema` is the hand-written schema with a name. It carries no array-length or number-range constraints (Anthropic rejects them; code checks those), every property is required and `additionalProperties` is false, which all three providers' strict modes accept.
 - **Schema fallback.** An OpenAI-compatible server that answers 400, 404, 415, 422 or 501 to the `json_schema` request is asked again with `response_format: {type: json_object}` and the schema written into the system prompt. That second request isn't the retry. The server and model are remembered for as long as the app runs, so later requests go straight to JSON mode. A reply wrapped in a code fence or a sentence is read from its outermost braces. The reply is then decoded and validated exactly as any other.
 - **Models and prices** (`AiModel`, `AiPricing`; read from each provider's pricing page on 2026-11-13, standard paid tier, $ per MTok):
@@ -681,19 +681,20 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   | `gpt-6.1-terra` | 1.00 | 5.00 | 0.05 |
   | `gpt-6-luna` | 0.10 | 0.50 | 0.01 |
   | `gemini-4-hydrogen` (Gemini's default here) | 1.50 | 7.50 | 0.075 |
-  | `gemini-3.8-flash` (due to double on 2027-01-01) | 0.75 | 3.75 | 0.075 |
+  | `gemini-3.8-flash` until 2026-12-30 | 0.75 | 3.75 | 0.075 |
+  | `gemini-3.8-flash` from 2026-12-31 (the announced 2027-01-01 change, dated a day early so no time zone under-counts) | 1.50 | 7.50 | 0.15 |
   | `gemini-3.5-flash-lite` | 0.30 | 2.50 | 0.03 |
 
-  The OpenAI-compatible model is typed, with its input and output prices; cached input is charged at the input price. Prices of 0 mean a free local server, which the cap can't count, and Settings says so. A usage is priced at the model that was asked for, since a provider may answer with a dated snapshot's name. An unknown model still costs the table's highest rates.
+  The OpenAI-compatible model is typed, with its input and output prices; cached input is charged at the input price. Prices of 0 mean a free local server, which the cap can't count, and Settings says so. A usage is priced at the model that was asked for, since a provider may answer with a dated snapshot's name. An unknown model still costs the table's highest rates. An announced price change is a dated row (`AiPricing.changes`): a request is priced at the rates of the day it's made, so the cap stays right with no new build.
 - **Usage mapping.** `TokenUsage` means the same for every provider: input without cached input, cached input, and output with reasoning or thinking included.
 
   | Provider | Input | Cached input | Output |
   |----------|-------|--------------|--------|
   | Anthropic | `input_tokens` | `cache_read_input_tokens` (writes: `cache_creation_input_tokens`) | `output_tokens` |
-  | OpenAI and compatible | `prompt_tokens` − `cached_tokens` | `prompt_tokens_details.cached_tokens` | `completion_tokens` (reasoning is already inside) |
+  | OpenAI and compatible | `prompt_tokens` − `cached_tokens` − `cache_write_tokens` | `prompt_tokens_details.cached_tokens` (writes: `cache_write_tokens`, at 1.25 × input) | `completion_tokens` (reasoning is already inside) |
   | Gemini | `promptTokenCount` − `cachedContentTokenCount` | `cachedContentTokenCount` | `candidatesTokenCount` + `thoughtsTokenCount` |
 
-  OpenAI's `cache_write_tokens`, where reported, are charged at 1.25 × input on top of the input they may be part of, which can over-count a little and never under-counts. A reply with no usage (some local servers) is costed at the request's upper bound.
+  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers.
 - **Upper bound.** The reservation is the same shape for each provider: the prompt at 3 characters a token, 1,500 tokens of overhead, 5,000 tokens a photo, and the provider's whole output limit (`AiProviderId.outputBound`, 8,000 for each, since each limit includes reasoning or thinking), at the model's own rates or the typed ones.
 - **Statuses.** Each provider's replies map onto the table above:
 
@@ -703,20 +704,24 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   | `MAX_TOKENS` | `finish_reason: length` | `finishReason: MAX_TOKENS` |
   | `INVALID` | Another finish reason, no content, or not a JSON object | The same; an unknown finish reason is never a success |
   | `AUTH` | 401, 403 | 400 with reason `API_KEY_INVALID`, 401, 403 |
-  | `BILLING` | 402; a 429 whose code or type is `credit_balance_exhausted`, `insufficient_quota` or a spend-limit code (not retried) | 402 (prepaid credit used up) |
-  | `RATE_LIMIT`, `SERVER` | 429; 5xx (each after the retry). OpenRouter's error inside a 200 maps by its code | 429; 5xx |
-  | `BAD_REQUEST` | Any other 4xx, a redirect | Any other 4xx |
+  | `BILLING` | 402; a 429 whose code or type is `credit_balance_exhausted`, `insufficient_quota` or a spend-limit code (not retried) | 402 (prepaid credit used up); 400 `FAILED_PRECONDITION` (no free tier here and billing isn't on) |
+  | `RATE_LIMIT`, `SERVER` | 429; 5xx (each after the retry). OpenRouter's error inside a 200 maps by its code | 429; 5xx except 504 |
+  | `TIMEOUT` | — | 504 `DEADLINE_EXCEEDED`: the work was started, so it isn't retried and counts at the upper bound |
+  | `BAD_REQUEST` | Any other 4xx, a redirect, a 403 for an unsupported country or region | Any other 4xx |
 
   The messages name the provider in use: "OpenAI is busy right now", "Your Google account is out of credit", "Couldn't reach the AI server". Only an error's code or type is kept, cut to a short token, never its message.
 - **Refusal fallback** is Anthropic's alone. On the others a refusal keeps a draft with the reason.
 - **Keys.** `AiKeyStore` holds one encrypted key per provider, each bound to its provider by the associated data, so switching keeps the others. Anthropic's entry keeps its M3c name, so an upgrade keeps its key.
+  - **The OpenAI-compatible key belongs to one server.** It's stored with the server it was entered for (scheme, host and port; `compatible_api_key_server` in the `secrets` store) and bound to it in the associated data. For any other server it reads as no key, and the gate shows `NO_KEY` until one is entered. So editing the base URL, or importing a backup whose settings name another server, never sends a key somewhere it wasn't entered for. Going back to the first server finds its key again.
+  - An https server that needs no key still has to be given some value, which is then sent as a bearer token; the key dialog says so.
 - **URL rules** for the OpenAI-compatible base URL (`AiUrl` in `:domain`, checked when it's saved and again on every read):
   - `https` anywhere.
-  - Plain `http` only to this phone (`localhost`, 127.0.0.0/8, `::1`), a private-range or link-local address (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, IPv6 unique-local and link-local) or a `.local` name. This is decided from the text, with no lookup, so shorthand such as `127.1` is refused.
+  - Plain `http` only to this phone (`localhost`, 127.0.0.0/8, `::1`), a private-range or link-local address (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, IPv6 unique-local and link-local) or a `.local` name. This is decided from the text, with no lookup, so shorthand such as `127.1` is refused, and so is an address with a leading zero (`010.0.0.1`), which a resolver may read as octal.
+  - A pasted full endpoint is cut back to its base: a trailing `/chat/completions` is dropped.
   - A key is never sent over `http`: such a server needs none, and the gate doesn't ask for one.
   - No user name, password, query or fragment, so nothing secret is stored or exported with the settings.
   - `network_security_config.xml` allows cleartext in its base config, because it can't name a LAN range. Anthropic, OpenAI and Gemini are fixed `https` addresses.
-- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
+- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
 - **Gate.** `OFF` → `NO_URL` (the compatible provider without a usable URL and model) → `NO_KEY` → `OVER_CAP` → `OFFLINE` → `NO_LOCAL_NETWORK` → `READY`.
 - **Privacy notice.** Shown before a kind's first send to each provider, naming it, and again for another compatible server (by host). Gemini's adds that Google may use free-tier prompts to improve its products and that reviewers may read them; OpenAI's API and Gemini's paid tier don't train on them.
 
@@ -1232,13 +1237,21 @@ Docs the adapters were written against (read 2026-11-13):
 - Anthropic: the `claude-api` skill's Java reference; the SDK code is M3c's, moved.
 
 Not confirmed by the docs, and handled on the safe side:
-- OpenAI's Chat Completions page doesn't say outright that cached tokens are inside `prompt_tokens`; its caching and reasoning guides say so for the same fields. Whether `cache_write_tokens` are inside `prompt_tokens` isn't stated, so they're charged on top.
+- OpenAI's Chat Completions page doesn't say outright that cached tokens are inside `prompt_tokens`; its caching and reasoning guides say so for the same fields, and the caching guide gives cache writes as part of the input too.
 - No compatible server documents its answer to an unsupported `response_format`, hence the list of statuses that trigger the fallback.
 - Android's docs don't state that loopback is exempt from the permission; it isn't in their list of local-network ranges.
 
+After a fresh-session review (pr12-review.md: 0 blockers, 4 should-fix, 9 nits, all fixed):
+- **No silent re-send.** OkHttp re-sent a POST when a reused connection dropped after the request went out, and only one send was costed. Its recovery is now off and connections aren't reused.
+- **Zero usage isn't free.** A usage that is empty, all zeros or not numbers counts at the upper bound.
+- **The compatible key is its server's.** Changing the base URL, or importing settings that name another server, no longer carries the old server's key along.
+- **Local by name.** A name that resolves to a local address needs the permission too, instead of timing out on Android 17.
+- **Smaller ones:** OpenAI cache writes charged once, not 2.25 ×; Gemini 3.8 Flash's 2027 price as a dated row; a leading-zero address refused; a 1 MB limit on replies; *Allow* opening system settings once the prompt is gone for good; a 403 for an unsupported region, Gemini's `FAILED_PRECONDITION` and its 504 given fitting statuses; a pasted `/chat/completions` cut off; and a line in the key dialog for servers that need no key.
+
 Tests cover (no real API call and no real key anywhere; every adapter runs against a mock server):
 - `:domain`:
-  - the URL rules: `https` anywhere, `http` only to local addresses and names, look-alike names and shorthand refused, credentials and queries refused;
+  - the URL rules: `https` anywhere, `http` only to local addresses and names, look-alike names, shorthand and leading-zero addresses refused, credentials and queries refused, a pasted endpoint cut back, and a server's origin;
+  - which addresses are on the local network, and the dated price change;
   - a price, an owner and a default for every listed model, and the new prices;
   - typed prices, the free case, and each provider's upper bound with photos;
   - the gate's order with the two new states, and the notice keys.
@@ -1248,6 +1261,9 @@ Tests cover (no real API call and no real key anywhere; every adapter runs again
   - errors onto the status table: rejected key, no credit, rate limit and overload with the one retry, timeouts and dropped connections at the upper bound, refusals and safety blocks, cut-off replies, unreadable replies;
   - the schema fallback, remembered per server and model, and a server that rejects both shapes;
   - never a key over `http`, and one over `https`; redirects not followed;
+  - a request dropped on a connection used before: one send, the upper bound, and no connection reused;
+  - empty, zero and non-numeric usage at the upper bound; cache writes charged once; a reply over 1 MB;
+  - a 403 for an unsupported region, Gemini's `FAILED_PRECONDITION`, and its 504 not retried;
   - the key absent from every result, request description and kept error;
   - the same decoding and `MealCheck` for every provider's reply.
 - Repositories (`AiFlowTest`):
@@ -1255,6 +1271,9 @@ Tests cover (no real API call and no real key anywhere; every adapter runs again
   - one cap across providers, and the reservation at each provider's own bound, logged against it;
   - the compatible provider's setup, typed prices, the no-key rule over `http`, and a stored URL that fails the rules;
   - the refused local-network permission as its own state, with nothing sent;
+  - the compatible key used only for the server it was entered for: after a URL change, after imported settings naming another server, and after the stored server name is edited;
+  - a name that leads to a local address needing the permission, with a stand-in resolver, and no lookup while the permission is held;
+  - a request priced at the rates of the day it's made;
   - the notice once per provider and again per server;
   - an install from before M7 keeping its key, model and seen notice.
 - Wording (`AiTextTest`): messages name the provider; the refused permission's own message; the manifest's permission and network config; no AI setting's name looks like a secret.
@@ -1267,6 +1286,7 @@ Tests cover (no real API call and no real key anywhere; every adapter runs again
 | OpenAI and Gemini with dummy keys (dev install `app.recomp.m7dev`, invented data, uninstalled afterwards) | ✅ Each provider showed its own models with rough costs and its own key dialog. The first estimate with each showed the notice naming it ("Before your first estimate with OpenAI"; Gemini's with the free-tier line), once. Each real endpoint refused the dummy key, and the app said "Your OpenAI API key was rejected" and "Your Gemini API key was rejected" and kept the description as a draft. The log rows read `OPENAI` and `GEMINI` with no cost. Switching back and forth kept both keys and models. The key store held ciphertext only, and the keys weren't in logcat. |
 | OpenAI-compatible (dev install; a stand-in server on the Mac) | ✅ `http://example.com/v1` was refused with the reason. `http://localhost:18080/v1` (through `adb reverse`) and the Mac's LAN address both saved; Settings showed "Not sent over http" for the key and the free-prices note. The notice named "the server at localhost", and showed again for the LAN address. The server saw no `Authorization` header, refused the `json_schema` request with a 400 and answered the JSON-mode one in a code fence; the app showed the review screen and saved the meal. Plain http to this phone and to a private address both work under the network security config. |
 | Found on the phone | The Food tab's draft line said "Your Claude API key was rejected" for an OpenAI failure. Fixed (a draft's line names no provider) and checked in the dev install: "The API key was rejected. Check it in Settings → AI". |
+| After the review | Not installed: the fixes change no schema and no layout in Settings → AI (the key row's text for a server not yet set, and the key dialog's help, changed). The real app runs d86d6c2, from before them. |
 | Not run on the phone | A successful estimate from Anthropic, OpenAI or Gemini: no real key was used, so their request bodies were only ever accepted by the mock servers in the tests (a rejected key is refused before the body is read). The local-network permission prompt and its refusal: the phone runs Android 15, where the permission doesn't exist, so only the tests cover `NO_LOCAL_NETWORK` and the older-phone rule. Photos (no screen sends one until M18). A real OpenRouter or Ollama server. `https` to a compatible server with a key (tests check the header). |
 
 #### M8: Weekly review

@@ -2,7 +2,9 @@ package app.recomp.data.repo
 
 import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.Connectivity
+import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
+import app.recomp.data.ai.StoredKeys
 import app.recomp.data.db.AiDao
 import androidx.room.withTransaction
 import app.recomp.data.db.AiRequestLogEntity
@@ -39,6 +41,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -87,6 +91,7 @@ class AiRepository @Inject constructor(
     private val keys: AiKeyStore,
     private val connectivity: Connectivity,
     private val localNetwork: LocalNetwork,
+    private val resolver: HostResolver,
     private val estimator: MealEstimator,
     private val foods: FoodRepository,
     /** Spend counts toward this clock's local calendar month. */
@@ -94,11 +99,36 @@ class AiRepository @Inject constructor(
 ) {
     val settings: Flow<AiSettings> = prefs.ai
 
-    /** The providers with a key stored (AI-05): switching provider keeps the others' keys. */
-    val storedKeys: Flow<Set<AiProviderId>> = keys.stored
+    /**
+     * The providers whose key can be used now (AI-05): switching provider keeps the others' keys. The
+     * OpenAI-compatible key counts only for the server it was entered for.
+     */
+    val storedKeys: Flow<Set<AiProviderId>> = combine(prefs.ai, keys.stored) { s, stored ->
+        AiProviderId.entries.filter { stored.usable(it, s.compatibleUrl) }.toSet()
+    }.distinctUntilChanged()
 
     /** Whether the provider in use has its key. */
-    val hasKey: Flow<Boolean> = combine(prefs.ai, keys.stored) { s, stored -> s.provider in stored }.distinctUntilChanged()
+    val hasKey: Flow<Boolean> = combine(prefs.ai, storedKeys) { s, stored -> s.provider in stored }.distinctUntilChanged()
+
+    /**
+     * Servers reached by a name whose text doesn't place it, looked up: host to whether it's on the local network.
+     * Only filled in while the local-network permission is missing, which is the only time it matters.
+     */
+    private val lookedUp = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    /** Whether [url] needs the local-network permission: by its text, or by where its name was found to lead. */
+    private fun onLocalNetwork(url: AiUrl?, lookedUp: Map<String, Boolean>): Boolean = url != null && (url.localNetwork || lookedUp[url.host] == true)
+
+    /**
+     * Looks up where [url]'s name leads when the text doesn't say and the permission is missing. A Tailscale name
+     * or a home reverse proxy over https resolves to a local address, and without the permission Android 17 only
+     * lets the connection time out; this lets the gate say so instead.
+     */
+    private suspend fun place(url: AiUrl?) {
+        if (url == null || url.local || localNetwork.allowed.value) return
+        val local = resolver.addresses(url.host).any(AiUrl::onLocalNetwork)
+        lookedUp.update { it + (url.host to local) }
+    }
 
     /** The 1st of the current month, again when the month turns while the app is open. */
     private val month: Flow<LocalDate> = DayBoundary.ticks(LocalTime.MIDNIGHT, clock.zone) { clock.millis() }
@@ -113,18 +143,18 @@ class AiRepository @Inject constructor(
      * AI-05's part of the gate, the same for the live flow and the check before sending. A server reached over
      * plain http needs no key, a local one no internet, and one on the local network Android's permission.
      */
-    private fun state(s: AiSettings, stored: Set<AiProviderId>, spendUsd: Double, online: Boolean, localAllowed: Boolean): AiState = AiGate.state(
+    private fun state(s: AiSettings, stored: StoredKeys, spendUsd: Double, online: Boolean, localAllowed: Boolean, lookedUp: Map<String, Boolean>): AiState = AiGate.state(
         enabled = s.enabled,
-        hasKey = !s.needsKey || s.provider in stored,
+        hasKey = !s.needsKey || stored.usable(s.provider, s.url),
         monthSpendUsd = spendUsd,
         monthlyCapUsd = s.monthlyCapUsd,
         online = online || s.url?.local == true,
         configured = s.configured,
-        localNetworkAllowed = localAllowed || s.url?.localNetwork != true,
+        localNetworkAllowed = localAllowed || !onLocalNetwork(s.url, lookedUp),
     )
 
-    val gate: Flow<AiGateView> = combine(prefs.ai, keys.stored, spend, connectivity.online, localNetwork.allowed) { s, stored, spend, online, local ->
-        AiGateView(state(s, stored, spend.costUsd, online, local), s.monthlyCapUsd, spend.month.plusMonths(1), s.provider)
+    val gate: Flow<AiGateView> = combine(prefs.ai, keys.stored, spend, combine(connectivity.online, lookedUp, ::Pair), localNetwork.allowed) { s, stored, spend, net, local ->
+        AiGateView(state(s, stored, spend.costUsd, net.first, local, net.second), s.monthlyCapUsd, spend.month.plusMonths(1), s.provider)
     }.distinctUntilChanged()
 
     /** The gate right now, read fresh, for the check just before sending. */
@@ -132,7 +162,8 @@ class AiRepository @Inject constructor(
         val s = prefs.ai.first()
         val month = AiGate.monthStart(LocalDate.now(clock))
         localNetwork.refresh()
-        return state(s, keys.stored.first(), aiDao.spendSince(startMs(month)), connectivity.online.first(), localNetwork.allowed.value)
+        place(s.url)
+        return state(s, keys.stored.first(), aiDao.spendSince(startMs(month)), connectivity.online.first(), localNetwork.allowed.value, lookedUp.value)
     }
 
     /**
@@ -147,7 +178,8 @@ class AiRepository @Inject constructor(
             if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
             val s = prefs.ai.first()
             // The key of the provider in use, and only over https: a server reached over plain http is never sent one.
-            val key = if (s.needsKey) keys.key(s.provider) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
+            // A compatible server gets its key only if it's the server the key was entered for.
+            val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
             val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
             val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification))
             request to reserve(request)
@@ -167,7 +199,7 @@ class AiRepository @Inject constructor(
                 outputTokens = reply.attempts.sumOf { it.outputTokens },
                 cacheReadTokens = reply.attempts.sumOf { it.cacheReadTokens },
                 cacheWriteTokens = reply.attempts.sumOf { it.cacheWriteTokens },
-                costUsd = AiPricing.cost(reply.attempts),
+                costUsd = AiPricing.cost(reply.attempts, LocalDate.now(clock)),
                 status = status,
                 latencyMs = reply.latencyMs,
                 responseJson = reply.responseText,
@@ -199,7 +231,7 @@ class AiRepository @Inject constructor(
             outputTokens = bound.outputTokens,
             cacheReadTokens = 0,
             cacheWriteTokens = 0,
-            costUsd = AiPricing.cost(bound),
+            costUsd = AiPricing.cost(bound, LocalDate.now(clock)),
             status = AiStatus.PENDING,
             latencyMs = 0,
             responseJson = null,
@@ -265,13 +297,18 @@ class AiRepository @Inject constructor(
 
     /**
      * The OpenAI-compatible provider's server, model and prices per million tokens (AI-05). The URL must pass
-     * [AiUrl.check]: https anywhere, plain http only to this phone or the local network.
+     * [AiUrl.check]: https anywhere, plain http only to this phone or the local network. Returns whether the server
+     * is on the local network, by its address or by where its name leads, so the caller can ask for the permission.
+     * A key saved for another server stays stored but isn't used for this one.
      */
-    suspend fun setCompatible(baseUrl: String, model: String, inputUsd: Double, outputUsd: Double) {
-        require(AiUrl.check(baseUrl) is AiUrl.Check.Ok) { "Not a usable URL" }
+    suspend fun setCompatible(baseUrl: String, model: String, inputUsd: Double, outputUsd: Double): Boolean {
+        val url = requireNotNull(AiUrl.ok(baseUrl)) { "Not a usable URL" }
         require(model.isNotBlank()) { "No model" }
         require(inputUsd >= 0 && inputUsd.isFinite() && outputUsd >= 0 && outputUsd.isFinite()) { "A price can't be negative" }
-        prefs.setAiCompatible(baseUrl, model, inputUsd, outputUsd)
+        prefs.setAiCompatible(url.base, model, inputUsd, outputUsd)
+        localNetwork.refresh()
+        place(url)
+        return onLocalNetwork(url, lookedUp.value)
     }
 
     /** Reads the local-network permission again, after its prompt is answered. */
@@ -283,7 +320,10 @@ class AiRepository @Inject constructor(
     }
 
     /** Saves the key of the provider in use, or of [provider]. The other providers' keys stay. */
-    suspend fun saveKey(apiKey: String, provider: AiProviderId? = null) = keys.save(provider ?: prefs.ai.first().provider, apiKey)
+    suspend fun saveKey(apiKey: String, provider: AiProviderId? = null) {
+        val s = prefs.ai.first()
+        keys.save(provider ?: s.provider, apiKey, s.compatibleUrl)
+    }
 
     suspend fun removeKey(provider: AiProviderId? = null) = keys.clear(provider ?: prefs.ai.first().provider)
 

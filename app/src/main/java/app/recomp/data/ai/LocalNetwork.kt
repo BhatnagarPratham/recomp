@@ -4,10 +4,15 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.net.InetAddress
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Android's local-network permission (TRD §6.2, AI-05). From Android 17, an app targeting API 37 can't reach an
@@ -32,6 +37,33 @@ interface LocalNetwork {
          * unknown permission is always refused. So an older phone is always allowed.
          */
         fun allowed(sdkInt: Int, granted: Boolean): Boolean = sdkInt < FIRST_SDK || granted
+
+        /**
+         * Whether *Allow* should open the app's page in system settings instead: the request came back refused at
+         * once with no rationale to show, which is how Android answers once the prompt has been refused for good.
+         */
+        fun openSettings(granted: Boolean, showRationale: Boolean, answeredAfterMs: Long): Boolean =
+            !granted && !showRationale && answeredAfterMs < PROMPT_MS
+
+        /** Quicker than anyone can answer a prompt. */
+        const val PROMPT_MS = 400L
+    }
+}
+
+/** Where a server's name leads, for a name whose text doesn't say (TRD §6.2). Tests use a stand-in. */
+interface HostResolver {
+    /** The addresses [host] resolves to; empty when it can't be resolved in time. */
+    suspend fun addresses(host: String): List<InetAddress>
+}
+
+@Singleton
+class DnsHostResolver @Inject constructor() : HostResolver {
+    override suspend fun addresses(host: String): List<InetAddress> = withContext(Dispatchers.IO) {
+        withTimeoutOrNull(LOOKUP_MS) { runInterruptible { runCatching { InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList()) } }.orEmpty()
+    }
+
+    private companion object {
+        const val LOOKUP_MS = 3_000L
     }
 }
 
