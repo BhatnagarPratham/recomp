@@ -233,7 +233,7 @@ private fun CompatibleServerDialog(settings: AiSettings, onDismiss: () -> Unit, 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text("Leave the prices empty for a free local server. " + AiText.FREE_NOTE, style = MaterialTheme.typography.bodySmall)
+                Text("Leave the prices empty for a free local server. The monthly cap then can't count its requests.", style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {

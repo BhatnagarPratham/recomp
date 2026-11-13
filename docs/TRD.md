@@ -1221,6 +1221,7 @@ Tests cover:
 - **The notice is per server** for the compatible provider, so pointing the app at another server shows it again.
 - **A model that can't read images:** no screen sends a photo until M18, so the message is ready (`AiText.reason(..., photo = true)`: "…couldn't take this request. The model may not read photos") and M18 passes the flag.
 - **Two new gate states** (`NO_URL`, `NO_LOCAL_NETWORK`) rather than new statuses: both are known before anything is sent.
+- **A draft's line names no provider.** The message at the moment of failure does ("Your OpenAI API key was rejected"). A draft stores the status but not where the request went, and may be read later with another provider in use, so the Food tab's draft line reads "The API key was rejected", "The AI service was busy" and so on. The phone check found it saying "Claude" for an OpenAI failure.
 - **Gemini's `generateContent`** is what's used. Google's docs now call it a legacy API beside the newer Interactions API; it's still supported, and its request and error shapes are the documented ones.
 
 Docs the adapters were written against (read 2026-11-13):

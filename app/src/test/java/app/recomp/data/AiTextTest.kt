@@ -36,6 +36,12 @@ class AiTextTest {
                 assertFalse("$provider $status: $text", text.contains("Claude") || text.contains("Anthropic"))
             }
         }
+        // A draft's line is read later, perhaps under another provider, so it names none.
+        for (status in AiStatus.entries) {
+            val text = AiText.draftReason(status)
+            assertFalse("$status: $text", listOf("Claude", "Anthropic", "OpenAI", "Gemini", "Google").any { text.contains(it) })
+        }
+        assertEquals("The API key was rejected. Check it in Settings → AI", AiText.draftReason(AiStatus.AUTH))
         // A model that can't read images says so when you send a photo.
         assertTrue(AiText.reason(AiStatus.BAD_REQUEST, AiProviderId.COMPATIBLE, photo = true).contains("may not read photos"))
         assertFalse(AiText.reason(AiStatus.BAD_REQUEST, AiProviderId.COMPATIBLE).contains("photos"))

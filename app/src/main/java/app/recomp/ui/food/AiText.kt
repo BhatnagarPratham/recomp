@@ -40,6 +40,27 @@ object AiText {
         }
     }
 
+    /**
+     * Why a draft is a draft, on the Food tab. A draft keeps its failed request's status but not which provider
+     * it went to, and it may be read days later with another provider in use, so this names none and is in the
+     * past tense.
+     */
+    fun draftReason(status: AiStatus): String = when (status) {
+        AiStatus.OK -> "Estimated"
+        AiStatus.PENDING -> "The estimate never finished"
+        AiStatus.REFUSAL -> "The AI declined to estimate this"
+        AiStatus.MAX_TOKENS -> "The estimate was cut off"
+        AiStatus.INVALID -> "The AI's reply couldn't be read"
+        AiStatus.AUTH -> "The API key was rejected. Check it in Settings → AI"
+        AiStatus.BILLING -> "The AI account was out of credit"
+        AiStatus.RATE_LIMIT -> "The AI service was busy"
+        AiStatus.SERVER -> "The AI service was unavailable"
+        AiStatus.BAD_REQUEST -> "The AI service couldn't take the request"
+        AiStatus.TIMEOUT -> "The AI service didn't answer in time"
+        AiStatus.NETWORK -> "The AI service couldn't be reached"
+        AiStatus.UNEXPECTED -> "Something went wrong sending it"
+    }
+
     /** "The AI server" mid-sentence. */
     private fun lower(name: String) = if (name.startsWith("The ")) "the" + name.drop(3) else name
 
