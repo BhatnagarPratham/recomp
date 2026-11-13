@@ -14,6 +14,7 @@ import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.NutritionDao
+import app.recomp.data.db.ReviewDao
 import app.recomp.data.db.RoutineDao
 import app.recomp.data.db.SavedMealDao
 import app.recomp.data.db.WorkoutDao
@@ -75,6 +76,9 @@ object DatabaseModule {
 
     @Provides
     fun provideCheckinDao(db: AppDatabase): CheckinDao = db.checkinDao()
+
+    @Provides
+    fun provideReviewDao(db: AppDatabase): ReviewDao = db.reviewDao()
 
     @Provides
     @Singleton

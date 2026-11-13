@@ -51,6 +51,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiDao(): AiDao
     abstract fun bodyDao(): BodyDao
     abstract fun checkinDao(): CheckinDao
+    abstract fun reviewDao(): ReviewDao
     abstract fun backupCheckDao(): BackupCheckDao
 
     companion object {

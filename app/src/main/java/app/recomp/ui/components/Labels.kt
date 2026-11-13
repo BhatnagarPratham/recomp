@@ -127,6 +127,17 @@ object Labels {
         PrType.SESSION_VOLUME -> "best session volume"
     }
 
+    /** A PR's value. An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
+    fun recordValue(type: PrType, value: Long, loadG: Int?, assisted: Boolean): String = when (type) {
+        PrType.MAX_LOAD -> if (assisted) assist(loadG ?: 0) else "${Loads.formatKg(value.toInt())} kg"
+        PrType.REPS_AT_LOAD -> "$value reps" + when {
+            assisted -> if ((loadG ?: 0) == 0) " with no assistance" else " at ${assist(loadG!!)}"
+            else -> loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
+        }
+        PrType.E1RM -> "about ${(value + 500) / 1000} kg"
+        PrType.SESSION_VOLUME -> "${(value + 500) / 1000} kg"
+    }
+
     /** "2.5 kg". */
     fun kg(grams: Int) = "${Loads.formatKg(grams)} kg"
 

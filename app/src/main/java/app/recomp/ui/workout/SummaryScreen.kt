@@ -25,14 +25,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
-import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.data.repo.toLogged
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
 import app.recomp.domain.progression.Action
-import app.recomp.domain.progression.PrType
 import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.Loads
 import app.recomp.ui.components.Labels
@@ -142,7 +140,7 @@ class SummaryViewModel @Inject constructor(
             records = records.map { pr ->
                 val exercise = exercises.firstOrNull { it.exercise.id == pr.exerciseId }?.exercise
                 val assisted = exercise?.loadType == LoadType.ASSISTED
-                "${exercise?.name ?: "Exercise"}: ${Labels.record(pr.type, assisted)}, ${recordValue(pr, assisted)}"
+                "${exercise?.name ?: "Exercise"}: ${Labels.record(pr.type, assisted)}, ${Labels.recordValue(pr.type, pr.value, pr.loadG, assisted)}"
             },
             nextTime = nextTime,
         )
@@ -200,17 +198,6 @@ fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewMode
         }
         Button(onClick = onDone, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Done") }
     }
-}
-
-/** An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
-private fun recordValue(pr: PersonalRecordEntity, assisted: Boolean): String = when (pr.type) {
-    PrType.MAX_LOAD -> if (assisted) Labels.assist(pr.loadG ?: 0) else "${Loads.formatKg(pr.value.toInt())} kg"
-    PrType.REPS_AT_LOAD -> "${pr.value} reps" + when {
-        assisted -> if ((pr.loadG ?: 0) == 0) " with no assistance" else " at ${Labels.assist(pr.loadG!!)}"
-        else -> pr.loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
-    }
-    PrType.E1RM -> "about ${(pr.value + 500) / 1000} kg"
-    PrType.SESSION_VOLUME -> "${(pr.value + 500) / 1000} kg"
 }
 
 @Composable
