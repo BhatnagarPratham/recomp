@@ -29,6 +29,7 @@ import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.data.repo.toLogged
+import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.PrType
@@ -75,9 +76,12 @@ class SummaryViewModel @Inject constructor(
     private val routineName = MutableStateFlow<String?>(null)
     private val differs = MutableStateFlow(false)
     private val nextTime = MutableStateFlow<List<String>>(emptyList())
+    /** For assisted lifts' volume (WL-09); loaded once. */
+    private val trendWeightG = MutableStateFlow<Int?>(null)
 
     init {
         viewModelScope.launch {
+            trendWeightG.value = progression.trendWeightG()
             val session = workouts.observeSession(sessionId).first()
             routineName.value = session?.routineId?.let { workouts.routine(it)?.name }
             differs.value = workouts.differsFromTemplate(sessionId)
@@ -96,7 +100,8 @@ class SummaryViewModel @Inject constructor(
                         repMax = row?.repMax ?: ex.entry.repMax,
                         asOf = asOf,
                     )
-                    val top = ex.sets.filter { it.completedAt != null && it.setType == SetType.WORKING }.maxOfOrNull { it.loadG ?: 0 }
+                    val loads = ex.sets.filter { it.completedAt != null && it.setType == SetType.WORKING }.map { it.loadG ?: 0 }
+                    val top = if (ex.exercise.loadType == LoadType.ASSISTED) loads.minOrNull() else loads.maxOrNull()
                     rec to Targets.nextTime(ex.exercise.name, rec, top)
                 }
                 .sortedBy { (rec, _) -> if (rec.action == Action.INCREASE) 0 else 1 }
@@ -107,12 +112,15 @@ class SummaryViewModel @Inject constructor(
     val ui: StateFlow<SummaryUi> = combine(
         workouts.observeSession(sessionId),
         workouts.observeSessionExercises(sessionId),
-        combine(routineName, differs, ::Pair),
+        combine(routineName, differs, trendWeightG, ::Triple),
         progression.observeSessionRecords(sessionId),
         nextTime,
-    ) { session, exercises, (routine, differs), records, nextTime ->
+    ) { session, exercises, (routine, differs, trendWeight), records, nextTime ->
         if (session == null) return@combine SummaryUi()
-        val sets = exercises.flatMap { ex -> ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() } }
+        // Volume counts what each set lifted, so an assisted set adds body weight minus the assistance.
+        val sets = exercises.flatMap { ex ->
+            Loads.lifted(ex.sets.filter { it.completedAt != null }.sortedBy { it.setIndex }.map { it.toLogged() }, ex.exercise.loadType, trendWeight)
+        }
         SummaryUi(
             title = routine ?: "Workout",
             date = session.logDate.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)),
@@ -123,7 +131,7 @@ class SummaryViewModel @Inject constructor(
                 val hit = rec != null && done.isNotEmpty() && Targets.hit(rec, done)
                 SummaryExercise(
                     name = ex.exercise.name,
-                    sets = if (done.isEmpty()) "Skipped" else Loads.describe(done).ifEmpty { "Warm-ups only" },
+                    sets = if (done.isEmpty()) "Skipped" else Loads.describe(done, ex.exercise.loadType).ifEmpty { "Warm-ups only" },
                     target = rec?.takeIf { done.isNotEmpty() }?.let { "Target ${Targets.describe(it)} · ${if (hit) "hit" else "missed"}" },
                     hit = hit,
                 )
@@ -132,8 +140,9 @@ class SummaryViewModel @Inject constructor(
             canSaveToRoutine = differs,
             routineName = routine,
             records = records.map { pr ->
-                val name = exercises.firstOrNull { it.exercise.id == pr.exerciseId }?.exercise?.name ?: "Exercise"
-                "$name: ${Labels.record(pr.type)}, ${recordValue(pr)}"
+                val exercise = exercises.firstOrNull { it.exercise.id == pr.exerciseId }?.exercise
+                val assisted = exercise?.loadType == LoadType.ASSISTED
+                "${exercise?.name ?: "Exercise"}: ${Labels.record(pr.type, assisted)}, ${recordValue(pr, assisted)}"
             },
             nextTime = nextTime,
         )
@@ -193,9 +202,13 @@ fun SummaryScreen(onDone: () -> Unit, viewModel: SummaryViewModel = hiltViewMode
     }
 }
 
-private fun recordValue(pr: PersonalRecordEntity): String = when (pr.type) {
-    PrType.MAX_LOAD -> "${Loads.formatKg(pr.value.toInt())} kg"
-    PrType.REPS_AT_LOAD -> "${pr.value} reps" + (pr.loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: "")
+/** An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
+private fun recordValue(pr: PersonalRecordEntity, assisted: Boolean): String = when (pr.type) {
+    PrType.MAX_LOAD -> if (assisted) Labels.assist(pr.loadG ?: 0) else "${Loads.formatKg(pr.value.toInt())} kg"
+    PrType.REPS_AT_LOAD -> "${pr.value} reps" + when {
+        assisted -> if ((pr.loadG ?: 0) == 0) " with no assistance" else " at ${Labels.assist(pr.loadG!!)}"
+        else -> pr.loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
+    }
     PrType.E1RM -> "about ${(pr.value + 500) / 1000} kg"
     PrType.SESSION_VOLUME -> "${(pr.value + 500) / 1000} kg"
 }

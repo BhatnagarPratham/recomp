@@ -8,7 +8,7 @@ enum class Mechanic { COMPOUND, ISOLATION }
 
 /**
  * How load is counted (WL-09). [BODYWEIGHT] is reps only; [BODYWEIGHT_PLUS] logs added load such as a
- * plate held during back extensions; [ASSISTED] (P1) logs the assistance taken off.
+ * plate held during back extensions; [ASSISTED] logs the assistance taken off, so less is harder.
  */
 enum class LoadType { WEIGHTED, BODYWEIGHT, BODYWEIGHT_PLUS, ASSISTED }
 

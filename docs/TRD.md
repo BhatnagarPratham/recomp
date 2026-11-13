@@ -96,6 +96,8 @@ session_exercise    id, session_id, exercise_id, position,
                     notes?,
                     recommendation_json?  -- engine output frozen at workout start (M2)
                     user_overrode         -- PO-07
+                    superset_group?       -- RT-05: copied from the routine at start, so grouping mid-workout
+                                          -- leaves the template alone (M6); consecutive rows with one number
 set_entry           id, session_exercise_id, set_index, set_type(WARMUP|WORKING|DROP|FAILURE),
                     load_g?, reps?, rir?, completed_at?
                                           -- rows exist from the start; null load/reps = not entered (ghost)
@@ -170,7 +172,7 @@ A stored JSON value that no longer decodes (for example one saved by a newer bui
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
 - New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
-- New columns: `session_exercise.superset_group` (M6), `ai_request_log.provider` (M7), `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13).
+- New columns: `ai_request_log.provider` (M7), `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13).
 - New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
@@ -244,7 +246,8 @@ data class ExperiencePolicy(
 fun recommend(cfg: ExerciseConfig, history: List<Exposure> /* newest first */, ctx: Context): Recommendation
 
 // cfg: repMin, repMax, targetSets, incrementG, loadType, scheme
-// ctx: inDeficit (true when the current target is below estimated TDEE), experience (ExperiencePolicy, §5.0)
+// ctx: inDeficit (true when the current target is below estimated TDEE), experience (ExperiencePolicy, §5.0),
+//      bodyWeightG (today's trend weight, read for assisted lifts only; null before the first weigh-in)
 
 if (history.isEmpty())           -> BASELINE   "Pick a weight you could do for ${repMax} with ~2 reps left"
 val last = history[0]
@@ -255,7 +258,7 @@ val missedBottom = last.workingSets.any { it.reps < cfg.repMin }
 
 when {
   allAtTop -> INCREASE   load = roundToStep(last.topLoadG + inc), reps = repMin × targetSets
-              // P1 (PO-08): inc = 2 × incrementG if ctx.experience.allowsDoubleJump, every set had RIR ≥ 3 and jumpRatio ≤ 0.05
+              // PO-08 (M6): inc = 2 × incrementG if ctx.experience.allowsDoubleJump, every top set had RIR ≥ 3 and jumpRatio ≤ 0.05
   missedBottom && history.getOrNull(1)?.let { it.topLoadG == last.topLoadG && it.missedBottom } == true
            -> DELOAD     load = roundDownToStep(last.topLoadG × 0.9), reps = repMin × targetSets
   missedBottom -> REPEAT  same load, target = repMin on every set
@@ -268,7 +271,16 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
     rec.stall = StallOptions(DELOAD_10, SWAP, HOLD)   // offered, never auto-applied; Swap opens the picker (same-movement first from M6, EX-04)
 ```
 
-- **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load; with no load yet the jump ratio is unbounded, so the big-jump guard asks for `repMax + 2` before the first plate. `ASSISTED` (P1) progresses by *reducing* the assistance load; until then it's treated as weighted.
+- **Load types.** `BODYWEIGHT` uses the `REPS_ONLY` scheme: reps climb to `repMax`, then the engine suggests a harder variation or adding load. `BODYWEIGHT_PLUS` (e.g. weighted dips) progresses the added load; with no load yet the jump ratio is unbounded, so the big-jump guard asks for `repMax + 2` before the first plate. `ASSISTED` (M6) progresses by *reducing* the assistance load (below).
+- **Assisted lifts (WL-09, M6).** The load is the assistance, so the *top* sets are those with the least of it.
+  - `INCREASE` takes one step off (two with the double step), never below zero. At zero it suggests added load or a harder variation, like bodyweight.
+  - The big-jump guard and the double step measure the step against the *effective load*: today's trend weight (§5.2) minus the assistance. Before the first weigh-in that's unknown, so neither applies and the lift moves one step at a time.
+  - `DELOAD` adds the assistance that takes about 10% off the effective load, rounded *up* to the step; before a weigh-in, one step.
+  - e1RM, PRs, the stall score and session volume use today's trend weight minus each set's assistance (`Loads.lifted`). Every session is judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall.
+  - Before the first weigh-in, less assistance is the "least assistance" record, ties go to more reps, and there's no e1RM or volume. Records keep the assistance in `load_g`.
+  - So an assisted MAX_LOAD record's `value` changes meaning at the first weigh-in: the assistance before it, trend weight minus assistance after. Charts and anything else that reads assisted records use `load_g` (or recompute from the sets), never `value`.
+  - With no assistance left, targets and history read "BW", and the next step is added load or a harder variation.
+- **Double step (PO-08, M6).** Only the top sets need 3+ reps in reserve; a set logged without RIR doesn't count. The 5% limit keeps dumbbells and light isolation work to one step. The target line says why: "weight up (2 steps: every set had 3+ reps left)".
 - **Steps.** `INCREASE` adds one increment to the top load. `DELOAD` takes 90% of the top load and rounds *down* to a multiple of the increment. Targets list one rep count per target set; `ADD_REPS` pads a short last exposure with its last set's reps.
 - **Stall metric.** The best Epley score over every working set, with no rep cap. It's a poor absolute 1RM above 12 reps, but as a progress measure it's consistent between sessions and rises with reps; excluding or capping high-rep sets made 12–20 rep work look stalled while reps climbed. Bodyweight sets use reps. Displayed e1RMs and E1RM PRs still use sets of 12 reps or fewer.
 - **Hold and Deload (PO-05).** Both store a reset point on the exercise: the start of the session where you chose. After a *Deload*, stall detection runs only on exposures after the reset, with the usual rule. After a *Hold*, the card returns once at least `window` exposures follow the reset and none beats the best from before it.
@@ -276,8 +288,8 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 - **Rounding.** `roundToStep` uses the exercise's increment as the equipment step (e.g. dumbbells at 2.5 kg). With 1.25 kg plates, the barbell step is 2.5 kg total. Load is always per dumbbell, never the pair.
 - **Estimated 1RM** uses Epley: `load × (1 + reps / 30)`. It's computed only for sets of 12 reps or fewer. Higher-rep sets still count for rep PRs.
 - **PRs** are computed once, when the workout finishes, and written to `personal_record`. At most one PR of each type per exercise per session.
-- **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `baseline`). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
-- **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
+- **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `harderVariation`, and from M6 `steps` and `assisted`, which default to 1 and false). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
+- **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load (for an assisted lift, its least assistance) differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
 - **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
 
 ### 5.2 Weight trend (BM-01)
@@ -496,8 +508,11 @@ Otherwise it shows the next routine. On a rest day the next routine still shows,
 
 ### 6.1 Active workout lifecycle (WL-05, WL-06)
 
-1. **Start.** Insert `workout_session(status = ACTIVE)`, its `session_exercise` rows (targets copied from the routine, recommendations frozen from M2) and their `set_entry` rows: last session's warm-ups, then `target_sets` working sets, all with null values. Only one session can be ACTIVE at a time; a second start throws.
+1. **Start.** Insert `workout_session(status = ACTIVE)`, its `session_exercise` rows (targets and superset groups copied from the routine, recommendations frozen from M2) and their `set_entry` rows: last session's warm-ups, then `target_sets` working sets, all with null values. Only one session can be ACTIVE at a time; a second start throws.
 2. **Every ticked set is written to Room immediately** as a single `UPDATE` of load, reps, RIR and `completed_at`. Edits before the tick are written too. The workout UI is a Flow over the database, so process death loses nothing. Ghost values are computed in the ViewModel from the hot query (`Prefill` in `:domain`), never stored. On launch, an ACTIVE session triggers a "Resume workout?" prompt. If the session is more than 4 hours old, the prompt offers to finish it, using the last set's time as the end time.
+   - **Tick order (RT-05, M6).** Ticking selects the next unticked set (`Supersets.afterTick` in `:domain`). An exercise on its own goes set by set, with its rest after each. A superset goes round by round: its warm-ups first, then the n-th set of each exercise in turn. Inside a round the next exercise's set follows with no rest (or an earlier exercise's, when the round started on a later one, unless that exercise has a set left in an earlier round: it's being skipped, so it isn't waited for), and any rest still running ends. The ongoing notification and the rest-over alert name the first unticked set in the same order. After the round's last exercise, rest starts with that exercise's rest time. There's no rest after the workout's last set.
+   - **Superset edits (M6).** *Superset with next* joins two or three consecutive exercises, and *Split superset* frees them; groups are renumbered 1, 2, 3… in order on every save. *Move up/down* never breaks one: inside a superset an exercise swaps with its neighbour, at its edge the whole superset moves, and an exercise moving past a superset jumps it. A swap keeps its slot's group.
+   - **Warm-ups (WL-11, M6).** `WarmupPlanner` suggests 40%, 60% and 80% of today's target load, as 8, 5 and 3 reps, for the first compound, weighted exercise with a target load. Loads round down to the exercise's step, and warm-ups under two steps are dropped. On a barbell a lighter warm-up is raised to the empty bar (20 kg); duplicates and any at the target are dropped. The line shows until the exercise has a warm-up set or a ticked set. *Add* inserts the suggestions as warm-up sets with their values entered, ahead of the working sets, and selects the first. It does nothing once the exercise has a warm-up or a ticked set, so a double tap can't add them twice.
 3. **`ActiveWorkoutService`** is a foreground service that runs only while a session is ACTIVE. It observes the active session and the rest timer, and stops itself when there's no active session. Its ongoing notification shows elapsed time, the current exercise and set, and the rest countdown, with *Skip rest* and *+30 s* actions; tapping it opens the workout.
    - Android 14+ needs a declared service type. Use `health`, which requires the `ACTIVITY_RECOGNITION` runtime permission. **Confirmed in M0** on the reference phone (Android 15).
    - *Start* asks for `ACTIVITY_RECOGNITION` and `POST_NOTIFICATIONS` first. If they're refused, the workout still runs with the in-app rest banner, which vibrates when rest ends while the app is open.
@@ -505,7 +520,7 @@ Otherwise it shows the next routine. On a rest day the next routine still shows,
 4. **Rest timer.** `RestTimer` stores an absolute end time and the rest length in a small DataStore, not a countdown, so it survives process death. The UI and the service both observe it. The service fires the high-priority "rest over" alert and vibration. A coroutine `delay` counts uptime, which stops while the CPU sleeps, so the service holds a `PARTIAL_WAKE_LOCK` for the rest's length plus a 10 s margin. A foreground service's wake lock is honoured even in Doze, so exact alarms (and their permission) aren't needed. "+30 s" after a rest has ended starts a fresh 30 s rest. M0 showed the alert channel's vibration supersedes a direct `Vibrator` call, so the service vibrates directly only when the channel can't: notifications are off for the app, the channel is blocked, or its vibration is turned off.
 5. **Finish.** Delete unticked sets, set `status = COMPLETED` and `ended_at`, compute PRs and outcomes (M2), write a Health Connect `ExerciseSessionRecord` (P1), then stop the service. Exercises with no sets stay, as a record that they were skipped. **Discard** sets `status = DISCARDED`; discarded sessions never count as history.
 6. **Keep screen on.** Use `FLAG_KEEP_SCREEN_ON` on the workout screen when the setting is enabled. No wake lock is needed.
-7. **Save back (RT-03).** The session's plan (exercise ids in order, with sets, rep range and rest) is compared with the routine's. If they differ, the summary offers to rewrite the routine from the session in one transaction.
+7. **Save back (RT-03).** The session's plan (exercise ids in order, with sets, rep range, rest and normalized superset groups) is compared with the routine's. If they differ, the summary offers to rewrite the routine from the session in one transaction.
 
 ### 6.2 AI features (optional; PRD §7.12)
 
@@ -1063,6 +1078,42 @@ Tests cover:
   - The workout screen is the most-used screen, so supersets must not slow a plain workout. Compose UI tests cover tick → next set both ways.
   - Assisted e1RM needs the trend weight, which may be missing; it's hidden until the first weigh-in.
 - **Parallel:** with M5.
+
+**M6 results (2026-10-18; Room v9, after M5's v8).** Built to PRD §12.2. Where the spec was silent:
+- **Assisted lifts:** before a weigh-in they move one step at a time; a deload adds about 10% of the effective load as assistance (§5.1).
+- **Warm-ups:** offered only for weighted lifts, since a share of an added plate or of the assistance isn't a warm-up, and the line goes away once the exercise has a ticked set.
+- **Moves:** never break a superset (§6.1).
+- **After a fresh-session review:**
+  - a superset round started on its later exercise goes back to the earlier one with no rest;
+  - the notification names the set in superset order;
+  - warm-up *Add* can't add twice;
+  - barbell warm-ups start at the empty bar, settled as a PRD §12.2 clarification;
+  - zero assistance reads "BW".
+
+Tests cover:
+- `:domain`:
+  - assisted lifts: less assistance as progress, the guard on the effective load, deload, the harder variation at zero, the stall score and PRs with and without a weigh-in, and volume from what each set lifted;
+  - the double step: RIR 3+ on every top set, a missing RIR, a policy without it, the 5% limit, back-off sets;
+  - `WarmupPlanner`: rounding, the two-step cut-off, duplicate loads, the barbell's empty bar;
+  - `Supersets`: join, split, normalize, block moves, and the tick order with rest, including warm-ups, uneven set counts and a round started on its later exercise.
+- Repositories:
+  - grouping mid-workout leaves the routine alone until saved back, save-back keeps the groups, a swap keeps its group, and removing one of two ends the superset;
+  - warm-up insertion, and *Add* twice or after a ticked set adding nothing;
+  - assisted progression, PRs, history and overrides;
+  - RIR through history to the double step;
+  - the frozen JSON's new fields and *Same movement*.
+- Migration 8→9 from M5's v8 with rows in `weekly_checkin` and `daily_activity`, and the 7→8→9 chain, from the exported schemas.
+- Backups: the round trip with a superset group, and a v7 and an M5 v8 backup each importing into v9 with their workouts and check-ins.
+- The notification's current set in superset order.
+- Compose UI tests on Robolectric: tick → next set with rest in a plain workout; tick → the next exercise's set with no rest, then rest after the round, in a superset; the warm-up line's *Add*.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M5 (release over the real data, 2026-10-18) | ✅ After a fresh export (Settings → Data, 15:32), the release build at 4a0abb5 (the PR's code; later commits are docs only) installed over M5's v8, and migration 8→9 ran with no crash. Today, Train (Pull next), Body and Settings matched what they showed before the install, and bench history kept both its sessions. No check-in has come due yet (the first week ends tonight), as before. *Start Pull*, then *Superset with next* on the lat pulldown, bracketed it with the next exercise ("Superset · 1 of 2", "2 of 2"). The workout was then discarded with no sets, and the routine was left untouched. |
+| Warm-ups and the double step (dev install `app.recomp.m6dev`, invented data, uninstalled afterwards) | ✅ The bench card read "Today: 55 × 8 · weight up (2 steps: every set had 3+ reps left)" and "Warm-up: 20 × 8 · 32.5 × 5 · 42.5 × 3". *Add* put three warm-up sets ahead of the working sets and selected the first, and the line went away. On Pull the line went to the machine row, the first weighted compound lift. |
+| Supersets (dev install) | ✅ *Superset with next* from the bench card's menu bracketed bench and shoulder press. After the warm-ups, ticking bench set 1 selected the shoulder press's set 1 with no rest, and ticking that started its 2:00 rest on bench set 2. *Save today's changes to Push* kept the superset in the routine, and the routine editor's *Superset with next* and *Split superset* worked. |
+| Assisted lift and swap (dev install) | ✅ The assisted pull-up read "Today: assist 20 × 8 · less assistance", with the stepper at "Assist 20 kg". The summary showed "least assistance, assist 20 kg", and on the next session a rep PR and "best estimated 1RM, about 78 kg" from the trend weight. *Swap* on the pec deck listed *Same movement* (cable fly, dumbbell fly) first. The run found the summary's volume counting the assistance as load; fixed to count body weight minus assistance (542 kg for 9 reps at assist 20 with an 80.2 kg trend). <!-- pii-ok: invented dev-install values --> |
+| Not run on the phone | Supersets of three, uneven set counts, a split mid-workout, a round started on its later exercise and a skipped exercise (the tests cover them); an assisted lift before a first weigh-in (tests); the stall card's *Swap* (same picker as the card menu's); the barbell warm-up floor (tests; the dev run predates it). On the real data nothing was ticked, so ticking runs only in the dev install and the Compose tests. |
 
 #### M7: AI providers
 

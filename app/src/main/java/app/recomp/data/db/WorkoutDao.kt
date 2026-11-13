@@ -122,6 +122,9 @@ interface WorkoutDao {
     @Query("UPDATE session_exercise SET user_overrode = :overrode WHERE id = :id")
     suspend fun setOverrode(id: Long, overrode: Boolean)
 
+    @Query("UPDATE session_exercise SET superset_group = :group WHERE id = :id")
+    suspend fun setSupersetGroup(id: Long, group: Int?)
+
     // Personal records (PO-04)
 
     @Insert
@@ -165,6 +168,14 @@ interface WorkoutDao {
 
     @Query("UPDATE set_entry SET set_type = :type WHERE id = :id")
     suspend fun setType(id: Long, type: SetType)
+
+    /** Whether an exercise already has a warm-up or a ticked set, so WL-11's suggestion no longer applies. */
+    @Query("SELECT EXISTS(SELECT 1 FROM set_entry WHERE session_exercise_id = :sessionExerciseId AND (set_type = 'WARMUP' OR completed_at IS NOT NULL))")
+    suspend fun hasWarmupOrTicked(sessionExerciseId: Long): Boolean
+
+    /** Makes room at the start of an exercise for [count] sets, e.g. warm-ups (WL-11). */
+    @Query("UPDATE set_entry SET set_index = set_index + :count WHERE session_exercise_id = :sessionExerciseId")
+    suspend fun shiftSetIndexes(sessionExerciseId: Long, count: Int)
 
     @Query("DELETE FROM set_entry WHERE id = :id")
     suspend fun deleteSet(id: Long)

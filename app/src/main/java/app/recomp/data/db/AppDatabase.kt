@@ -36,7 +36,7 @@ import kotlinx.serialization.json.Json
         WeeklyCheckinEntity::class,
         DailyActivityEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -63,6 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_5_6,
             Migrations.MIGRATION_6_7,
             Migrations.MIGRATION_7_8,
+            Migrations.MIGRATION_8_9,
         )
     }
 }

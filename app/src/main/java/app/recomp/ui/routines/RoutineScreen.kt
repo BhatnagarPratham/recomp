@@ -37,6 +37,7 @@ import app.recomp.data.db.ExerciseEntity
 import app.recomp.data.db.RoutineExerciseEntity
 import app.recomp.data.db.RoutineExerciseWithExercise
 import app.recomp.data.repo.TrainingRepository
+import app.recomp.domain.training.Supersets
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.ExercisePickerSheet
@@ -45,6 +46,8 @@ import app.recomp.ui.components.NewExercise
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.OverflowMenu
 import app.recomp.ui.components.Stepper
+import app.recomp.ui.components.SupersetBracket
+import app.recomp.ui.components.SupersetLabel
 import app.recomp.ui.components.TextEntryDialog
 import app.recomp.ui.components.formatRest
 import app.recomp.ui.navigation.RoutineRoute
@@ -84,13 +87,27 @@ class RoutineViewModel @Inject constructor(
 
     fun remove(index: Int) = edit { it.removeAt(index) }
 
+    /** Block-aware, so a move never breaks up a superset ([Supersets.move]). */
     fun move(index: Int, up: Boolean) = edit { list ->
-        val to = if (up) index - 1 else index + 1
-        if (to in list.indices) list.add(to, list.removeAt(index))
+        val order = Supersets.move(list.map { it.supersetGroup }, index, up) ?: return@edit
+        val moved = order.map { list[it] }
+        list.clear()
+        list += moved
     }
 
+    /** The replacement keeps the slot's sets and superset. */
     fun swap(index: Int, exercise: ExerciseEntity) = edit { list ->
-        list[index] = training.planRowFor(exercise, sets = list[index].targetSets)
+        list[index] = training.planRowFor(exercise, sets = list[index].targetSets).copy(supersetGroup = list[index].supersetGroup)
+    }
+
+    /** RT-05: *Superset with next* and *Split superset*. */
+    fun supersetWithNext(index: Int) = regroup { Supersets.joinNext(it, index) }
+
+    fun splitSuperset(index: Int) = regroup { Supersets.split(it, index) }
+
+    private fun regroup(change: (List<Int?>) -> List<Int?>) = edit { list ->
+        val groups = change(list.map { it.supersetGroup })
+        list.indices.forEach { list[it] = list[it].copy(supersetGroup = groups[it]) }
     }
 
     fun update(index: Int, row: RoutineExerciseEntity) = edit { it[index] = row }
@@ -111,6 +128,7 @@ fun RoutineScreen(onBack: () -> Unit, onOpenExercise: (Long) -> Unit, viewModel:
     var editing by remember { mutableStateOf<Int?>(null) }
     var renaming by remember { mutableStateOf(false) }
     var archiving by remember { mutableStateOf(false) }
+    val groups = Supersets.normalize(rows.map { it.entry.supersetGroup })
 
     Scaffold(
         topBar = {
@@ -131,22 +149,28 @@ fun RoutineScreen(onBack: () -> Unit, onOpenExercise: (Long) -> Unit, viewModel:
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             itemsIndexed(rows, key = { _, row -> row.entry.id }) { index, row ->
-                Card(Modifier.fillMaxWidth().clickable { editing = index }) {
-                    Row(Modifier.padding(start = 16.dp).heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                            Text(row.exercise.name, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "${row.entry.targetSets} × ${row.entry.repMin}–${row.entry.repMax} · rest ${formatRest(row.entry.restSec)}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        OverflowMenu("More options for ${row.exercise.name}") { close ->
-                            MenuItem("Sets, reps and rest") { close(); editing = index }
-                            MenuItem("Swap exercise") { close(); picking = index }
-                            MenuItem("Exercise settings") { close(); onOpenExercise(row.exercise.id) }
-                            MenuItem("Move up", enabled = index > 0) { close(); viewModel.move(index, up = true) }
-                            MenuItem("Move down", enabled = index < rows.lastIndex) { close(); viewModel.move(index, up = false) }
-                            MenuItem("Remove") { close(); viewModel.remove(index) }
+                val superset = Supersets.position(groups, index)
+                SupersetBracket(superset, gap = 8.dp) {
+                    Card(Modifier.fillMaxWidth().clickable { editing = index }) {
+                        Row(Modifier.padding(start = 16.dp).heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                SupersetLabel(superset)
+                                Text(row.exercise.name, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "${row.entry.targetSets} × ${row.entry.repMin}–${row.entry.repMax} · rest ${formatRest(row.entry.restSec)}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            OverflowMenu("More options for ${row.exercise.name}") { close ->
+                                MenuItem("Sets, reps and rest") { close(); editing = index }
+                                MenuItem("Swap exercise") { close(); picking = index }
+                                MenuItem("Exercise settings") { close(); onOpenExercise(row.exercise.id) }
+                                MenuItem("Move up", enabled = index > 0) { close(); viewModel.move(index, up = true) }
+                                MenuItem("Move down", enabled = index < rows.lastIndex) { close(); viewModel.move(index, up = false) }
+                                MenuItem("Superset with next", enabled = Supersets.canJoinNext(groups, index)) { close(); viewModel.supersetWithNext(index) }
+                                if (superset != null) MenuItem("Split superset") { close(); viewModel.splitSuperset(index) }
+                                MenuItem("Remove") { close(); viewModel.remove(index) }
+                            }
                         }
                     }
                 }
@@ -161,6 +185,7 @@ fun RoutineScreen(onBack: () -> Unit, onOpenExercise: (Long) -> Unit, viewModel:
         ExercisePickerSheet(
             title = if (target < 0) "Add exercise" else "Swap ${rows.getOrNull(target)?.exercise?.name}",
             library = library,
+            swapping = rows.getOrNull(target)?.exercise,
             onDismiss = { picking = null },
             onPick = { ex -> picking = null; if (target < 0) viewModel.add(ex) else viewModel.swap(target, ex) },
             onCreate = { new -> picking = null; viewModel.create(new) },

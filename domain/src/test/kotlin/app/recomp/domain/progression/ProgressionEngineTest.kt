@@ -196,4 +196,55 @@ class ProgressionEngineTest {
         val h = history(exposure(45_000, 12, 11, 10), Exposure(clock + 1, listOf(LoggedSet(SetType.WARMUP, 20_000, 10))))
         assertEquals(Action.ADD_REPS, ProgressionEngine.recommend(pulldown, h, beginner).action)
     }
+
+    // PO-08: the double step
+
+    /** A session where every working set is at [load] with the given reps in reserve. */
+    private fun exposureRir(load: Int, reps: Int, vararg rir: Int?): Exposure {
+        clock += 86_400_000
+        return Exposure(clock, rir.map { LoggedSet(SetType.WORKING, load, reps, it) })
+    }
+
+    @Test
+    fun `a beginner at the top with 3+ reps left on every set gets two steps`() {
+        val rec = ProgressionEngine.recommend(pulldown, history(exposureRir(50_000, 12, 3, 3, 3)), beginner)
+        assertEquals(Recommendation(Action.INCREASE, 55_000, listOf(8, 8, 8), steps = 2), rec)
+        assertEquals("weight up (2 steps: every set had 3+ reps left)", Targets.actionLabel(rec))
+    }
+
+    @Test
+    fun `one set with fewer than 3 reps left, or no RIR logged, is one step`() {
+        assertEquals(1, ProgressionEngine.recommend(pulldown, history(exposureRir(50_000, 12, 3, 3, 2)), beginner).steps)
+        val noRir = ProgressionEngine.recommend(pulldown, history(exposureRir(50_000, 12, 3, null, 3)), beginner)
+        assertEquals(Recommendation(Action.INCREASE, 52_500, listOf(8, 8, 8)), noRir)
+        assertEquals("weight up", Targets.actionLabel(noRir))
+    }
+
+    @Test
+    fun `a policy without the double jump always takes one step`() {
+        val intermediate = ProgressionContext(ExperiencePolicy.defaultFor(Experience.INTERMEDIATE))
+        val cfg = pulldown.copy(repMin = 6, repMax = 10)
+        val rec = ProgressionEngine.recommend(cfg, history(exposureRir(50_000, 10, 3, 3, 3)), intermediate)
+        assertEquals(Recommendation(Action.INCREASE, 52_500, listOf(6, 6, 6)), rec)
+        val custom = beginner.copy(experience = beginner.experience.copy(allowsDoubleJump = false))
+        assertEquals(1, ProgressionEngine.recommend(pulldown, history(exposureRir(50_000, 12, 3, 3, 3)), custom).steps)
+    }
+
+    @Test
+    fun `the double step needs one step to be at most 5 percent of the load`() {
+        // 2.5 on 50 is exactly 5%: two steps.
+        assertEquals(2, ProgressionEngine.recommend(pulldown, history(exposureRir(50_000, 12, 3, 3, 3)), beginner).steps)
+        // 2.5 on 47.5 is 5.3%: one step.
+        assertEquals(Recommendation(Action.INCREASE, 50_000, listOf(8, 8, 8)), ProgressionEngine.recommend(pulldown, history(exposureRir(47_500, 12, 3, 3, 3)), beginner))
+        // Dumbbells: 2.5 on 20 is 12.5%, so even past the big-jump guard it's one step.
+        val curl = ExerciseConfig(10, 15, 3, incrementG = 2_500, loadType = LoadType.WEIGHTED)
+        assertEquals(Recommendation(Action.INCREASE, 22_500, listOf(10, 10, 10)), ProgressionEngine.recommend(curl, history(exposureRir(20_000, 17, 3, 3, 3)), beginner))
+    }
+
+    @Test
+    fun `back-off sets don't need reps in reserve for the double step`() {
+        clock += 86_400_000
+        val sets = List(3) { LoggedSet(SetType.WORKING, 50_000, 12, 3) } + LoggedSet(SetType.WORKING, 40_000, 15, 0)
+        assertEquals(2, ProgressionEngine.recommend(pulldown, listOf(Exposure(clock, sets)), beginner).steps)
+    }
 }

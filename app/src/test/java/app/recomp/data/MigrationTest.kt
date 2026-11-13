@@ -335,6 +335,52 @@ class MigrationTest {
     }
 
     @Test
+    fun `8 to 9 keeps workouts and M5's check-ins and adds superset groups to session exercises`() {
+        val file = File(tmp.root, "v8.db")
+        createAt(8, file).use { db ->
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, increment_g, " +
+                    "default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, stall_reset_keeps_baseline) " +
+                    "VALUES (1, 'My press', 'chest', '[]', 'MACHINE', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 5000, 8, 12, 120, 0, 1, 0, 0)",
+            )
+            db.execSQL("INSERT INTO routine (id, name, kind, rotation_index, archived) VALUES (1, 'Push', 'STRENGTH', 0, 0)")
+            db.execSQL(
+                "INSERT INTO routine_exercise (routine_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec, scheme, superset_group) " +
+                    "VALUES (1, 1, 0, 3, 8, 12, 120, 'DOUBLE_PROGRESSION', 4)",
+            )
+            db.execSQL("INSERT INTO workout_session (id, routine_id, kind, status, started_at, ended_at, log_date) VALUES (1, 1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+            db.execSQL(
+                "INSERT INTO session_exercise (id, session_id, exercise_id, position, target_sets, rep_min, rep_max, rest_sec, user_overrode) " +
+                    "VALUES (1, 1, 1, 0, 3, 8, 12, 120, 0)",
+            )
+            db.execSQL("INSERT INTO set_entry (session_exercise_id, set_index, set_type, load_g, reps, rir, completed_at) VALUES (1, 0, 'WORKING', 40000, 10, 2, 1)")
+            // M5's tables, as the phone's v8 has them.
+            db.execSQL(
+                "INSERT INTO weekly_checkin (week_start, computed_at, window_days, logged_days, weigh_ins, kcal_mean, tdee_prev, tdee_new, flag, decision, decided_at) " +
+                    "VALUES ('2026-10-12', 2, 21, 18, 20, 2050.5, 2611, 2461, 'FLAT', 'KEPT', 3)",
+            )
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete) VALUES ('2026-10-15', 1)")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val checkin = room.checkinDao().week(LocalDate.of(2026, 10, 12))!!
+            assertEquals(listOf(2461, 2611), listOf(checkin.tdeeNew, checkin.tdeePrev))
+            assertEquals(CheckinFlag.FLAT, checkin.flag)
+            assertEquals(CheckinDecision.KEPT, checkin.decision)
+            assertEquals(listOf(LocalDate.of(2026, 10, 15)), room.checkinDao().incompleteDays(LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 18)))
+
+            val dao = room.workoutDao()
+            val row = dao.sessionExercises(1).single()
+            assertNull(row.entry.supersetGroup)
+            assertEquals(listOf(40_000 to 2), row.sets.map { it.loadG to it.rir })
+            assertEquals(4, room.routineDao().exercises(1).single().entry.supersetGroup)
+            dao.setSupersetGroup(1, 2)
+            assertEquals(2, dao.sessionExercise(1)!!.supersetGroup)
+        }
+        room.close()
+    }
+
+    @Test
     fun `6 to 7 to 8 in one open ends with every table`() {
         val file = File(tmp.root, "v6-chain.db")
         createAt(6, file).use { db ->
@@ -346,7 +392,22 @@ class MigrationTest {
             assertNull(room.checkinDao().latest())
             assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
         }
-        assertEquals(8, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `7 to 8 to 9 in one open keeps workouts`() {
+        val file = File(tmp.root, "v7-chain.db")
+        createAt(7, file).use { db ->
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-10-17')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
     }
 

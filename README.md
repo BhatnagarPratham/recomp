@@ -18,6 +18,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M3c: AI meal logging: *Describe it* with your own Claude API key (encrypted on the phone), drafts to estimate later when AI is unreachable, and a monthly spend cap.
 > - M4: body, Today and data: weigh-ins with a smoothed trend from your chosen scale, a weekly waist, body-composition scans with a consistent-conditions check, a Body tab, a Today screen that knows rest days, and export and import of all your data (Settings → Data).
 > - M5: a weekly check-in that estimates your real maintenance calories from your food and weight trend, flags when your goal is off pace, and proposes a new target you accept, adjust or keep. Days you mark incomplete are left out.
+> - M6: in the gym: supersets, warm-up suggestions for the first heavy lift, assisted pull-ups and dips, two steps up for beginners with reps to spare, and same-movement substitutes when you swap.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >

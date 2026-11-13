@@ -67,8 +67,9 @@ data class WorkoutSessionEntity(
 )
 
 /**
- * One exercise in a session. Sets, rep range and rest are copied from the routine when the workout
- * starts, so changes made mid-workout never touch the template until you save them back (RT-03).
+ * One exercise in a session. Sets, rep range, rest and superset group are copied from the routine when
+ * the workout starts, so changes made mid-workout never touch the template until you save them back
+ * (RT-03). [supersetGroup] joins consecutive exercises into a superset (RT-05, `Supersets`).
  */
 @Entity(
     tableName = "session_exercise",
@@ -91,6 +92,7 @@ data class SessionExerciseEntity(
     /** The progression engine's output, frozen when the workout starts (TRD §5.1). Written from M2. */
     @ColumnInfo(name = "recommendation_json") val recommendationJson: String? = null,
     @ColumnInfo(name = "user_overrode") val userOverrode: Boolean = false,
+    @ColumnInfo(name = "superset_group") val supersetGroup: Int? = null,
 )
 
 /**

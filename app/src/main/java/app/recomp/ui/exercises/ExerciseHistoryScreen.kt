@@ -27,6 +27,7 @@ import androidx.navigation.toRoute
 import app.recomp.data.repo.HistoryEntry
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
+import app.recomp.domain.model.LoadType
 import app.recomp.domain.training.Loads
 import app.recomp.ui.components.Labels
 import app.recomp.ui.navigation.ExerciseHistoryRoute
@@ -93,7 +94,7 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
                         Text(entry.sets, style = MaterialTheme.typography.titleMedium)
                         entry.bestE1rmG?.let { Text("Estimated 1RM ${Loads.formatKg((it + 50) / 100 * 100)} kg", style = MaterialTheme.typography.bodySmall) }
                         if (entry.records.isNotEmpty()) {
-                            Text("PR: " + entry.records.joinToString { Labels.record(it) }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                            Text("PR: " + entry.records.joinToString { Labels.record(it, exercise?.loadType == LoadType.ASSISTED) }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }

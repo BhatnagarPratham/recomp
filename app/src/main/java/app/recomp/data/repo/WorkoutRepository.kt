@@ -21,6 +21,8 @@ import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.PlanRow
 import app.recomp.domain.training.PlanSession
 import app.recomp.domain.training.Prefill
+import app.recomp.domain.training.SetValues
+import app.recomp.domain.training.Supersets
 import app.recomp.domain.training.WeeklyPlan
 import java.time.LocalDate
 import javax.inject.Inject
@@ -71,8 +73,10 @@ class WorkoutRepository @Inject constructor(
     suspend fun startRoutine(routineId: Long, now: Long = System.currentTimeMillis()): Long = db.withTransaction {
         workoutDao.active()?.let { throw WorkoutAlreadyActiveException(it.id) }
         val sessionId = workoutDao.insertSession(newSession(routineId, now, days.of(now)))
-        routineDao.exercises(routineId).forEachIndexed { position, row ->
-            insertExercise(sessionId, row.exercise, position, row.entry.targetSets, row.entry.repMin, row.entry.repMax, row.entry.restSec)
+        val rows = routineDao.exercises(routineId)
+        val groups = Supersets.normalize(rows.map { it.entry.supersetGroup })
+        rows.forEachIndexed { position, row ->
+            insertExercise(sessionId, row.exercise, position, row.entry.targetSets, row.entry.repMin, row.entry.repMax, row.entry.restSec, groups[position])
         }
         sessionId
     }
@@ -92,12 +96,12 @@ class WorkoutRepository @Inject constructor(
     )
 
     private suspend fun insertExercise(
-        sessionId: Long, exercise: ExerciseEntity, position: Int, sets: Int, repMin: Int, repMax: Int, restSec: Int,
+        sessionId: Long, exercise: ExerciseEntity, position: Int, sets: Int, repMin: Int, repMax: Int, restSec: Int, supersetGroup: Int? = null,
     ): Long {
         val id = workoutDao.insertSessionExercise(
             SessionExerciseEntity(
                 sessionId = sessionId, exerciseId = exercise.id, position = position,
-                targetSets = sets, repMin = repMin, repMax = repMax, restSec = restSec,
+                targetSets = sets, repMin = repMin, repMax = repMax, restSec = restSec, supersetGroup = supersetGroup,
             ),
         )
         insertInitialSets(id, exercise.id, sets)
@@ -119,24 +123,50 @@ class WorkoutRepository @Inject constructor(
         insertExercise(sessionId, exercise, workoutDao.maxPosition(sessionId) + 1, plan.targetSets, plan.repMin, plan.repMax, plan.restSec)
     }
 
-    /** Swapping is only offered before the first set is ticked, so logged sets never change exercise. */
+    /**
+     * Swapping is only offered before the first set is ticked, so logged sets never change exercise.
+     * The replacement takes the same place, superset included.
+     */
     suspend fun swapExercise(sessionExerciseId: Long, newExerciseId: Long) = db.withTransaction {
         val row = workoutDao.sessionExercise(sessionExerciseId) ?: return@withTransaction
         if (workoutDao.completedSets(row.id).isNotEmpty()) return@withTransaction
         val exercise = exerciseDao.get(newExerciseId) ?: return@withTransaction
         workoutDao.deleteSessionExercise(row.id)
-        insertExercise(row.sessionId, exercise, row.position, row.targetSets, exercise.defaultRepMin, exercise.defaultRepMax, exercise.defaultRestSec)
+        insertExercise(row.sessionId, exercise, row.position, row.targetSets, exercise.defaultRepMin, exercise.defaultRepMax, exercise.defaultRestSec, row.supersetGroup)
     }
 
-    suspend fun removeExercise(sessionExerciseId: Long) = workoutDao.deleteSessionExercise(sessionExerciseId)
+    /** Removing an exercise from a superset of two leaves the other on its own. */
+    suspend fun removeExercise(sessionExerciseId: Long) = db.withTransaction {
+        val row = workoutDao.sessionExercise(sessionExerciseId) ?: return@withTransaction
+        workoutDao.deleteSessionExercise(row.id)
+        regroup(row.sessionId) { rows -> rows.map { it.supersetGroup } }
+    }
 
+    /** Block-aware, so a move never breaks up a superset ([Supersets.move]). */
     suspend fun moveExercise(sessionId: Long, sessionExerciseId: Long, up: Boolean) = db.withTransaction {
-        val rows = workoutDao.sessionExercises(sessionId).map { it.entry }.toMutableList()
+        val rows = workoutDao.sessionExercises(sessionId).map { it.entry }
         val from = rows.indexOfFirst { it.id == sessionExerciseId }
-        val to = if (up) from - 1 else from + 1
-        if (from < 0 || to !in rows.indices) return@withTransaction
-        rows.add(to, rows.removeAt(from))
-        workoutDao.updateSessionExercises(rows.mapIndexed { i, r -> r.copy(position = i) })
+        val order = Supersets.move(rows.map { it.supersetGroup }, from, up) ?: return@withTransaction
+        workoutDao.updateSessionExercises(order.mapIndexed { i, old -> rows[old].copy(position = i) })
+    }
+
+    // Supersets (RT-05), in today's workout only
+
+    /** *Superset with next* from a card's menu. */
+    suspend fun supersetWithNext(sessionId: Long, sessionExerciseId: Long) = db.withTransaction {
+        regroup(sessionId) { rows -> Supersets.joinNext(rows.map { it.supersetGroup }, rows.indexOfFirst { it.id == sessionExerciseId }) }
+    }
+
+    /** *Split superset*: every exercise in it stands alone again. */
+    suspend fun splitSuperset(sessionId: Long, sessionExerciseId: Long) = db.withTransaction {
+        regroup(sessionId) { rows -> Supersets.split(rows.map { it.supersetGroup }, rows.indexOfFirst { it.id == sessionExerciseId }) }
+    }
+
+    /** Writes the session's groups from [change], normalized, touching only rows that change. */
+    private suspend fun regroup(sessionId: Long, change: (List<SessionExerciseEntity>) -> List<Int?>) {
+        val rows = workoutDao.sessionExercises(sessionId).map { it.entry }
+        val groups = Supersets.normalize(change(rows))
+        rows.zip(groups).forEach { (row, group) -> if (row.supersetGroup != group) workoutDao.setSupersetGroup(row.id, group) }
     }
 
     suspend fun setExerciseNotes(sessionExerciseId: Long, notes: String?) {
@@ -159,13 +189,15 @@ class WorkoutRepository @Inject constructor(
     }
 
     /**
-     * PO-07: an override is a top completed working load other than the target's. Back-off sets below
-     * the top and unticked typos don't count, so it's recomputed on every change.
+     * PO-07: an override is a top completed working load other than the target's (for an assisted lift,
+     * the least assistance). Back-off sets and unticked typos don't count, so it's recomputed on every change.
      */
     private suspend fun recomputeOverride(sessionExerciseId: Long) {
         val row = workoutDao.sessionExercise(sessionExerciseId) ?: return
-        val target = ProgressionRepository.decode(row.recommendationJson)?.loadG
-        val top = workoutDao.completedSets(sessionExerciseId).filter { it.setType == SetType.WORKING }.maxOfOrNull { it.loadG ?: 0 }
+        val rec = ProgressionRepository.decode(row.recommendationJson)
+        val target = rec?.loadG
+        val loads = workoutDao.completedSets(sessionExerciseId).filter { it.setType == SetType.WORKING }.map { it.loadG ?: 0 }
+        val top = if (rec?.assisted == true) loads.minOrNull() else loads.maxOrNull()
         val overrode = target != null && top != null && top != target
         if (overrode != row.userOverrode) workoutDao.setOverrode(row.id, overrode)
     }
@@ -198,6 +230,22 @@ class WorkoutRepository @Inject constructor(
         recomputeOverride(set.sessionExerciseId)
     }
 
+    /**
+     * WL-11's *Add*: the suggested warm-ups go in before the exercise's other sets, with their loads and
+     * reps entered, for you to tick. Returns the first one's id, to select it. It does nothing (null) once
+     * the exercise has a warm-up or a ticked set, so a double tap or a stale screen can't add them twice.
+     */
+    suspend fun addWarmups(sessionExerciseId: Long, plan: List<SetValues>): Long? = db.withTransaction {
+        if (plan.isEmpty() || workoutDao.sessionExercise(sessionExerciseId) == null) return@withTransaction null
+        if (workoutDao.hasWarmupOrTicked(sessionExerciseId)) return@withTransaction null
+        workoutDao.shiftSetIndexes(sessionExerciseId, plan.size)
+        plan.mapIndexed { i, warmup ->
+            workoutDao.insertSet(
+                SetEntryEntity(sessionExerciseId = sessionExerciseId, setIndex = i, setType = SetType.WARMUP, loadG = warmup.loadG, reps = warmup.reps),
+            )
+        }.first()
+    }
+
     private suspend fun adjustTargetSets(sessionExerciseId: Long, before: SetType?, after: SetType?) {
         val delta = (if (after == SetType.WORKING) 1 else 0) - (if (before == SetType.WORKING) 1 else 0)
         if (delta == 0) return
@@ -222,27 +270,35 @@ class WorkoutRepository @Inject constructor(
     suspend fun discard(sessionId: Long, now: Long = System.currentTimeMillis()) =
         workoutDao.setStatus(sessionId, SessionStatus.DISCARDED, now)
 
-    /** Whether the workout's plan (exercises, order, sets, reps, rest) differs from its routine (RT-03). */
+    /** Whether the workout's plan (exercises, order, sets, reps, rest, supersets) differs from its routine (RT-03, RT-05). */
     suspend fun differsFromTemplate(sessionId: Long): Boolean {
         val session = workoutDao.session(sessionId) ?: return false
         val routineId = session.routineId ?: return false
-        val template = routineDao.exercises(routineId).map { PlanRow(it.entry.exerciseId, it.entry.targetSets, it.entry.repMin, it.entry.repMax, it.entry.restSec) }
-        return template != planRows(sessionId)
+        val template = routineDao.exercises(routineId).map { it.entry }
+        val templateGroups = Supersets.normalize(template.map { it.supersetGroup })
+        val plan = template.mapIndexed { i, it -> PlanRow(it.exerciseId, it.targetSets, it.repMin, it.repMax, it.restSec, templateGroups[i]) }
+        return plan != planRows(sessionId)
     }
 
-    private suspend fun planRows(sessionId: Long) = workoutDao.sessionExercises(sessionId).map {
-        PlanRow(it.entry.exerciseId, it.entry.targetSets, it.entry.repMin, it.entry.repMax, it.entry.restSec)
+    private suspend fun planRows(sessionId: Long): List<PlanRow> {
+        val rows = workoutDao.sessionExercises(sessionId).map { it.entry }
+        val groups = Supersets.normalize(rows.map { it.supersetGroup })
+        return rows.mapIndexed { i, it -> PlanRow(it.exerciseId, it.targetSets, it.repMin, it.repMax, it.restSec, groups[i]) }
     }
 
-    /** "Save changes to the routine" (RT-03): the routine takes the workout's exercises, order and targets. */
+    /** "Save changes to the routine" (RT-03): the routine takes the workout's exercises, order, targets and supersets. */
     suspend fun saveToTemplate(sessionId: Long) = db.withTransaction {
         val session = workoutDao.session(sessionId) ?: return@withTransaction
         val routineId = session.routineId ?: return@withTransaction
-        val schemes = routineDao.exercises(routineId).associate { it.entry.exerciseId to (it.entry.scheme to it.entry.supersetGroup) }
-        val rows = workoutDao.sessionExercises(sessionId).map { row ->
+        val schemes = routineDao.exercises(routineId).associate { it.entry.exerciseId to it.entry.scheme }
+        val sessionRows = workoutDao.sessionExercises(sessionId)
+        val groups = Supersets.normalize(sessionRows.map { it.entry.supersetGroup })
+        val rows = sessionRows.mapIndexed { i, row ->
             val base = training.planRowFor(row.exercise, row.entry.targetSets)
-            val (scheme, superset) = schemes[row.entry.exerciseId] ?: (base.scheme to null)
-            base.copy(repMin = row.entry.repMin, repMax = row.entry.repMax, restSec = row.entry.restSec, scheme = scheme, supersetGroup = superset)
+            base.copy(
+                repMin = row.entry.repMin, repMax = row.entry.repMax, restSec = row.entry.restSec,
+                scheme = schemes[row.entry.exerciseId] ?: base.scheme, supersetGroup = groups[i],
+            )
         }
         routineDao.replaceExercises(routineId, rows)
     }
@@ -273,4 +329,4 @@ class WorkoutRepository @Inject constructor(
         )
 }
 
-fun SetEntryEntity.toLogged() = LoggedSet(setType, loadG, reps ?: 0)
+fun SetEntryEntity.toLogged() = LoggedSet(setType, loadG, reps ?: 0, rir)
