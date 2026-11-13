@@ -16,6 +16,7 @@ import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.training.Loads
+import app.recomp.ui.onboarding.GoalText
 
 /** User-facing names for the domain vocabulary. */
 object Labels {
@@ -135,7 +136,7 @@ object Labels {
             else -> loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
         }
         PrType.E1RM -> "about ${(value + 500) / 1000} kg"
-        PrType.SESSION_VOLUME -> "${(value + 500) / 1000} kg"
+        PrType.SESSION_VOLUME -> "${GoalText.n((value + 500) / 1000)} kg"
     }
 
     /** "2.5 kg". */
