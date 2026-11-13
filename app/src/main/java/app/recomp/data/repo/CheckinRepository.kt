@@ -25,7 +25,6 @@ import app.recomp.domain.checkin.WaistReading
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
-import app.recomp.domain.nutrition.WeekAverage
 import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.GuardrailNote
 import app.recomp.domain.persona.Guardrails
@@ -61,8 +60,6 @@ data class CheckinView(
     val evaluation: CheckinEvaluation,
     /** Why there's no maintenance estimate this week, or null when there is one. */
     val gap: EstimateGap?,
-    /** The week's averages against its targets, over days logged and not marked incomplete. */
-    val week: WeekAverage?,
     /** BMR × activity at today's body data: "the formula said 2,610". */
     val formulaTdee: Int,
     /** The target in force today. */
@@ -106,7 +103,6 @@ class CheckinRepository @Inject constructor(
     private val prefs: SettingsPrefs,
     private val days: DayBoundary,
     private val personas: PersonaRepository,
-    private val nutrition: NutritionRepository,
 ) {
     /** Catch-up, open and the decisions each read a row and write it back. */
     private val mutex = Mutex()
@@ -318,7 +314,6 @@ class CheckinRepository @Inject constructor(
             status = status,
             evaluation = evaluation,
             gap = AdaptiveTdee.gapOf(row.windowDays, row.loggedDays, row.weighIns, row.tdeeObs != null),
-            week = nutrition.weekAverage(row.weekStart),
             formulaTdee = personas.targetsFor(basis.profile, basis.plan, TargetOverrides(), today).tdeeKcal.roundToInt(),
             current = current,
             proposal = open?.let { CheckinProposal.targets(basis.inputs, row.tdeeNew.toDouble(), overrides.copy(kcal = null), kcal = it) },

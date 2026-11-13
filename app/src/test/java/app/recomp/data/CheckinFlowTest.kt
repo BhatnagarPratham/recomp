@@ -162,8 +162,10 @@ class CheckinFlowTest {
         assertNull(view.gap)
         // The formula at the trend weight, which has risen about 1.6 kg.
         assertTrue(view.formulaTdee in 2410..2450)
-        assertEquals(7, view.week!!.daysLogged)
-        assertEquals(2600, view.week!!.kcal)
+        // The week's averages are the review's Food section.
+        val food = app.reviews.week(latest.weekStart, date(42)).food.average!!
+        assertEquals(7, food.daysLogged)
+        assertEquals(2600, food.kcal)
         assertEquals(2400, view.current.kcal)
         assertEquals(latest.proposedKcal, view.proposal!!.kcal)
         assertTrue(view.proposal!!.kcal in view.adjustRange!!)
@@ -317,7 +319,7 @@ class CheckinFlowTest {
         assertEquals(16, row.loggedDays)
         assertNull(row.tdeeObs)
         assertEquals(EstimateGap.FOOD_DAYS, checkins.open(row.weekStart, at(42))!!.gap)
-        assertEquals(2, checkins.open(row.weekStart, at(42))!!.week!!.daysLogged)
+        assertEquals(2, app.reviews.week(row.weekStart, date(42)).food.average!!.daysLogged)
 
         // And back.
         checkins.setFoodIncomplete(date(39), false)

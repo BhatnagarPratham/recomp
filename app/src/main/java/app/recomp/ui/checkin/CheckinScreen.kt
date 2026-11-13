@@ -24,6 +24,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -34,6 +36,8 @@ import androidx.navigation.toRoute
 import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.CheckinSettingsException
 import app.recomp.data.repo.CheckinView
+import app.recomp.data.repo.ReviewRepository
+import app.recomp.data.repo.WeekReview
 import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
 import app.recomp.domain.nutrition.Goal
@@ -48,21 +52,47 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** The check-in screen's state: loading, gone (no such week), or the week. */
-sealed interface CheckinUi {
-    data object Loading : CheckinUi
-    data object Missing : CheckinUi
-    data class Shown(val view: CheckinView) : CheckinUi
+/**
+ * The review on screen. [week] is the week asked for, which ‹ and › move through [weeks]; [checkin] (null for the week
+ * in progress, which has none yet) and [review] are the week shown, which stays until the next one has loaded, so
+ * changing week never blanks the screen.
+ */
+data class ReviewUi(
+    val week: LocalDate,
+    val weeks: ClosedRange<LocalDate>? = null,
+    val checkin: CheckinView? = null,
+    val review: WeekReview? = null,
+) {
+    val loaded: Boolean get() = review != null
+
+    /** Another week is on its way: what's shown is still the last one, so its answers wait. */
+    val loading: Boolean get() = review?.weekStart != week
+
+    val hasPrevious: Boolean get() = weeks != null && week > weeks.start
+    val hasNext: Boolean get() = weeks != null && week < weeks.endInclusive
+
+    /** The shown week's title, once the range says which week is this one; until then, none. */
+    val title: String?
+        get() {
+            val range = weeks ?: return null
+            val shown = review?.weekStart ?: week
+            return ReviewText.title(shown, inProgress = shown == range.endInclusive)
+        }
 }
 
 @HiltViewModel
-class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private val checkins: CheckinRepository) : ViewModel() {
-    private val weekStart: LocalDate = LocalDate.parse(savedState.toRoute<CheckinRoute>().weekStart)
+class CheckinViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val checkins: CheckinRepository,
+    private val reviews: ReviewRepository,
+) : ViewModel() {
+    private val _ui = MutableStateFlow(ReviewUi(LocalDate.parse(savedState.toRoute<CheckinRoute>().weekStart)))
+    val ui: StateFlow<ReviewUi> = _ui
 
-    private val _ui = MutableStateFlow<CheckinUi>(CheckinUi.Loading)
-    val ui: StateFlow<CheckinUi> = _ui
+    private val week: LocalDate get() = _ui.value.week
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -72,25 +102,47 @@ class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private
     val busy: StateFlow<Boolean> = _busy
 
     init {
-        reload()
+        viewModelScope.launch {
+            val weeks = reviews.weeks()
+            _ui.update { it.copy(weeks = weeks) }
+            load(week)
+        }
     }
 
-    /** Opening recomputes a pending week, so food logged since the Monday counts. */
-    private fun reload() = viewModelScope.launch { load() }
+    /**
+     * Opening recomputes a pending check-in, so food logged since the Monday counts, then reads the week's sections.
+     * They're shown only if [target] is still the week asked for.
+     */
+    private suspend fun load(target: LocalDate): CheckinView? {
+        val checkin = checkins.open(target)
+        val review = reviews.week(target)
+        _ui.update { if (it.week == target) it.copy(checkin = checkin, review = review) else it }
+        return checkin
+    }
 
-    private suspend fun load(): CheckinView? = checkins.open(weekStart).also { _ui.value = it?.let { v -> CheckinUi.Shown(v) } ?: CheckinUi.Missing }
+    /** ‹ and › move a week at a time, within the weeks there are. The week shown stays until the next has loaded. */
+    fun show(previous: Boolean) {
+        val ui = _ui.value
+        if (if (previous) !ui.hasPrevious else !ui.hasNext) return
+        val next = ui.week.plusWeeks(if (previous) -1 else 1)
+        _ui.update { it.copy(week = next) }
+        _error.value = null
+        viewModelScope.launch { load(next) }
+    }
 
     /**
-     * One answer at a time. A refusal says so only if the week is still open (a second tap finds it answered); a
-     * failure before the commit leaves the target as it was; one after it says the target was saved.
+     * One answer at a time, for the check-in on screen, whatever week is loading. A refusal says so only if that week is
+     * still the one asked for (a second tap finds it answered); a failure before the commit leaves the target as it
+     * was; one after it says the target was saved.
      */
-    private fun answer(block: suspend () -> Boolean) {
+    private fun answer(block: suspend (LocalDate) -> Boolean) {
         if (_busy.value) return
+        val target = _ui.value.checkin?.row?.weekStart ?: return
         _busy.value = true
         viewModelScope.launch {
             var answered = true
             try {
-                answered = block()
+                answered = block(target)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CheckinSettingsException) {
@@ -98,18 +150,18 @@ class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private
             } catch (e: Exception) {
                 _error.value = "Couldn't save: ${e.message ?: e.javaClass.simpleName}. Your target is unchanged."
             } finally {
-                val view = load()
-                if (!answered) _error.value = CheckinText.refused(view?.row)
+                val view = load(target)
+                if (!answered && _ui.value.week == target) _error.value = CheckinText.refused(view?.row)
                 _busy.value = false
             }
         }
     }
 
-    fun accept(useNewTarget: Boolean = false) = answer { checkins.accept(weekStart, useNewTarget) }
+    fun accept(useNewTarget: Boolean = false) = answer { checkins.accept(it, useNewTarget) }
 
-    fun adjust(kcal: Int) = answer { checkins.adjust(weekStart, kcal) }
+    fun adjust(kcal: Int) = answer { checkins.adjust(it, kcal) }
 
-    fun keep() = answer { checkins.keep(weekStart) }
+    fun keep() = answer { checkins.keep(it) }
 
     fun dismissError() {
         _error.value = null
@@ -117,9 +169,10 @@ class CheckinViewModel @Inject constructor(savedState: SavedStateHandle, private
 }
 
 /**
- * The weekly check-in (PRD §12.1, J7): the goal's headline and verdict, the week's averages, the trend and waist,
+ * The weekly review (HM-03, HM-04, PRD §12.4), grown from M5's check-in (PRD §12.1, J7). One week at a time, with ‹ and
+ * › between weeks and the current week so far. A finished week leads with its check-in: the goal's headline and verdict,
  * the maintenance estimate, and a proposal only when the goal's flag fired. Targets never change on their own:
- * *Accept* and *Adjust* save a new version from today.
+ * *Accept* and *Adjust* save a new version from today. Then Food, Training, Body, the finish line and the calendar.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,11 +180,20 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val review = ui.review
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text((ui as? CheckinUi.Shown)?.view?.row?.weekStart?.let(CheckinText::title) ?: "Weekly check-in") },
+                title = { ui.title?.let { Text(it) } },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                actions = {
+                    TextButton(onClick = { viewModel.show(previous = true) }, enabled = ui.hasPrevious, modifier = Modifier.semantics { contentDescription = "Previous week" }) {
+                        Text("‹", style = MaterialTheme.typography.headlineSmall)
+                    }
+                    TextButton(onClick = { viewModel.show(previous = false) }, enabled = ui.hasNext, modifier = Modifier.semantics { contentDescription = "Next week" }) {
+                        Text("›", style = MaterialTheme.typography.headlineSmall)
+                    }
+                },
             )
         },
     ) { padding ->
@@ -139,22 +201,24 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            when (val state = ui) {
-                CheckinUi.Loading -> Unit
-                CheckinUi.Missing -> Text("This check-in isn't there any more, perhaps after an import.")
-                is CheckinUi.Shown -> CheckinContent(state.view, busy, viewModel)
+            if (review == null) return@Column
+            val checkin = ui.checkin
+            when {
+                checkin != null -> CheckinContent(checkin, busy || ui.loading, viewModel)
+                review.inProgress -> Text(ReviewText.SO_FAR, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             error?.let { message ->
                 Text(message, color = MaterialTheme.colorScheme.error)
                 TextButton(onClick = viewModel::dismissError) { Text("OK") }
             }
+            ReviewSections(review)
         }
     }
 }
 
 @Composable
 private fun CheckinContent(v: CheckinView, busy: Boolean, viewModel: CheckinViewModel) {
-    // 1. The goal's headline and one verdict.
+    // The goal's headline and one verdict.
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CheckinText.headline(v), style = MaterialTheme.typography.headlineSmall)
         Text(
@@ -162,23 +226,15 @@ private fun CheckinContent(v: CheckinView, busy: Boolean, viewModel: CheckinView
             style = MaterialTheme.typography.titleMedium,
             color = if (v.status == CheckinStatus.FLAGGED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (v.plan.goal == Goal.RECOMP || v.evaluation.waistChangeCm != null) Text(CheckinText.waist(v), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
-    // 2. The week's averages.
-    SectionTitle("7-day averages")
-    Text(CheckinText.averages(v.week), style = MaterialTheme.typography.bodyLarge)
-
-    // 3. Trend weight and waist.
-    SectionTitle("Trend weight")
-    Text(CheckinText.trend(v), style = MaterialTheme.typography.bodyLarge)
-    if (v.plan.goal == Goal.RECOMP || v.evaluation.waistChangeCm != null) Text(CheckinText.waist(v), color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-    // 4. The maintenance estimate.
+    // The maintenance estimate. The week's averages and trend are in the review's Food and Body sections below.
     SectionTitle("Your maintenance estimate")
     Text(CheckinText.estimate(v), style = MaterialTheme.typography.bodyLarge)
     Text(CheckinText.estimateDetail(v), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-    // 5. The proposal, or what became of it. The guardrails apply here as in Settings (PRD §4.9), and say so.
+    // The proposal, or what became of it. The guardrails apply here as in Settings (PRD §4.9), and say so.
     v.notes.forEach { Text(GoalText.guardrail(it), color = MaterialTheme.colorScheme.secondary) }
     val proposal = v.proposal
     val range = v.adjustRange

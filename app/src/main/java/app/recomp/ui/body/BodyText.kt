@@ -1,7 +1,9 @@
 package app.recomp.ui.body
 
 import app.recomp.domain.body.ProtocolIssue
+import app.recomp.domain.body.ScanChange
 import app.recomp.domain.body.ScanProtocol
+import app.recomp.domain.body.ScanSlopes
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.body.SinceMeal
 import app.recomp.domain.persona.WeightSource
@@ -29,7 +31,14 @@ object BodyText {
 
     fun oneDecimal(value: Double): String = "%.1f".format(Locale.getDefault(), value)
 
-    fun signed(value: Double, unit: String): String = (if (value > 0) "+" else if (value < 0) "−" else "") + "${oneDecimal(abs(value))} $unit"
+    /** "+0.4 kg", "−1.2 cm"; a value that rounds to 0.0 has no sign. */
+    fun signed(value: Double, unit: String): String {
+        val tenths = Math.round(value * 10)
+        return (if (tenths > 0) "+" else if (tenths < 0) "−" else "") + "${oneDecimal(abs(tenths) / 10.0)} $unit"
+    }
+
+    /** True when [value] shows as 0.0. */
+    fun roundsToZero(value: Double): Boolean = Math.round(value * 10) == 0L
 
     /** The weigh-in sheet's chips; Settings uses the longer [app.recomp.ui.components.Labels.weightSource]. */
     fun source(s: WeightSource) = when (s) {
@@ -96,6 +105,22 @@ object BodyText {
         val at = Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault())
         return at.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())) + ", " + time(at.toLocalTime())
     }
+
+    /**
+     * "+0.4 kg muscle · within noise; −0.8 pts body fat · within noise" (IB-04, TRD §5.6). A change in body fat is in
+     * points of the percentage, not a percent of it.
+     */
+    fun scanChange(c: ScanChange): String =
+        "${signed(c.muscleKg, "kg")} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
+            "; ${signed(c.bodyFatPct, "pts")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
+
+    /** The slopes per 4 weeks of muscle, fat mass and body fat (in points), signed. */
+    fun scanSlopes(s: ScanSlopes): String =
+        "Per 4 weeks: muscle ${signed(s.muscleKg, "kg")}, fat mass ${signed(s.fatKg, "kg")}, body fat ${signed(s.bodyFatPct, "pts")}"
+
+    /** Which scans the chart's slope is from: the window's ("in the last 12 weeks") or all of them. */
+    fun slopeFrom(scans: Int, weeks: Long?): String =
+        if (weeks == null) "from all $scans on-protocol scans" else "from $scans on-protocol scans in the last $weeks weeks"
 
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }

@@ -699,6 +699,7 @@ These rules hold for every block:
      - *Accept* and *Adjust* save a new target version from today (reason: check-in).
      - A calorie override you set (PR-02) stays, unless you choose *Use the new target*, which resets it.
      - The check-in applies the same guardrails as Settings (§4.9) and shows their note, e.g. a cut whose trend falls below BMI 18.5 is judged and proposed as Maintain.
+  - Since M8 this screen is the weekly review (§12.4): items 2 and 3 are its Food and Body sections.
 - **Settings follows the estimate.** Once a check-in has a maintenance estimate, Settings works out targets from it instead of the formula, and Settings → Targets says so ("from your check-in of 13 Oct"). An *Adjust* isn't carried into a later Settings change. Settings also has a *Weekly check-in* row that reopens the latest one.
   - Settings shows what a change there would save. When that differs from today's target, for example while a proposal waits, it says so under Calories: "Today's target is 2,000 kcal until you answer the check-in or change something here".
 - **Flags** (§4.8), judged on the trend, never on single weigh-ins:
@@ -749,21 +750,37 @@ These rules hold for every block:
 ### 12.4 M8: Weekly review (HM-03, HM-04, IB-04)
 
 - **The review extends M5's check-in screen.** There's one per week, with ‹ and › between weeks, and the current week shows what's in so far. Today's weekly-plan card opens it too.
+  - The current week has no check-in yet, so it shows only the sections. Its food covers the days up to yesterday, because a half-logged today would drag the averages down.
 - **Sections,** after the headline, verdict and proposal (§12.1):
-  - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target; the ramp's baseline week, which has no target, is left out); and the share of calories from *Ordered* and *Packaged* food.
+  - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target; the ramp's baseline week, which has no target, is left out); and the share of calories from *Ordered* and *Packaged* food. Days marked incomplete are left out of all three, as from the 7-day average (§12.1).
   - **Training:** sessions done against planned, for strength and each extra session; PRs; and lifts showing a stall card.
-  - **Body:** the trend weight and waist changes; the week's scan against the previous one, with noise labels; average steps and sleep, once M13 tracks them.
+    - Only the current week counts against the plan. The weekly plan is a setting with no history, so a past week shows what was done ("Strength 2 days · Yoga class 1") and says its plan isn't kept.
+    - PRs show one line per lift, with each kind of record at its latest value that week. Five lifts show, then "and 3 more lifts with PRs".
+    - A lift counts as stalled when its card showed a stall in one of the week's workouts.
+  - **Body:** the trend weight's change and the goal's pace; the waist and its change; the week's scan against the previous one, with noise labels; average steps and sleep, once M13 tracks them.
+    - A change that rounds to 0.0 kg reads "no change this week".
+    - The waist is compared with a reading at most 4 weeks older, and names its date: "(−0.5 cm since 26 Oct)". An older one isn't compared.
+    - The week's scan is its latest on-protocol one. Only a week with no on-protocol scan shows an off-protocol one, without a comparison.
+- **Past weeks keep their own goal.** The goal is a setting too; only its start and, in each target version, its goal are stored. A week is judged by today's pace and finish line only if today's plan was set by the week's end. An earlier week shows neither, and says why:
+  - another goal, from its target version (or its check-in's flag): "This week's goal was Lean bulk, before your current one from 3 Aug, so it isn't judged against today's pace or finish line";
+  - or the same goal set again since, when what it was then isn't kept.
 - **The finish line:** "At this rate: around mid-March (goal 78 kg)", or "Moving away from your goal", recomputed each week from the trend (§4.2). <!-- pii-ok: illustrative -->
+  - The rate is the trend's change over the last 4 weeks, or since the plan started when that's sooner, so a goal change doesn't carry the old direction. Under a week into a plan, it's the week's rate.
+  - At the goal weight or past it, the way the goal goes (down for fat loss and recomp, up for a lean bulk), it reads "You've reached your goal weight (78 kg)". M19 adds the Goal reached card. <!-- pii-ok: illustrative -->
+  - Barely moving (under 0.05 kg a week) reads "Holding steady, so there's no date at this rate", and over two years out reads "More than two years away at this rate".
+  - A date finish line shows the change expected by then. A body-fat finish line runs on the slope of the plan's own scans, from three on-protocol ones.
+  - Until there's a rate, it says what it needs.
 - **With AI on,** the review ends with the weekly programme review (§12.7, M11).
 - **Consistency calendar (HM-04):** a month grid in the review.
   - A day gets a filled dot for a strength workout, a ring for an extra session and a tint when food was logged.
   - There are no streak counts, and nothing marks a missed day.
+  - It shows the month of the week's Thursday, as ISO weeks do, so it follows ‹ and ›.
 - **Body-composition chart (IB-04),** on the Body tab above the scan table: three small charts on one time axis, over 12 weeks or everything:
   1. muscle mass and fat mass from scans;
   2. trend weight;
   3. waist.
 
-  On-protocol scans are filled dots. Off-protocol scans are hollow and left out of the lines. Each change between on-protocol scans is labelled, e.g. "+0.4 kg muscle · within noise" (under 1 kg of muscle or 1% body fat, TRD §5.6). From three on-protocol scans, the slope per 4 weeks shows.
+  On-protocol scans are filled dots. Off-protocol scans are hollow and left out of the lines. Each change between on-protocol scans in the chosen range is labelled, e.g. "+0.4 kg muscle · within noise; −0.8 pts body fat · within noise" (under 1 kg of muscle or 1 point of body fat, TRD §5.6). From three on-protocol scans in the range, its slope per 4 weeks shows, saying which: "in the last 12 weeks" or "all".
 
 ### 12.5 M9: Faster food logging (AI-04, NU-18, NU-06)
 

@@ -430,6 +430,11 @@ trend over ≥ 3 protocol_ok scans = least-squares slope per 4 weeks
 
 Scans taken off protocol are drawn hollow and excluded from both the deltas and the slope. Lean mass for Katch-McArdle (§5.3) comes from the latest protocol-ok scan.
 
+Implemented in `ScanTrends` (`:domain`, `body/`, M8):
+- `changes` between consecutive protocol-ok scans, with the noise labels strictly under 1.0. Each edge is compared exactly, as stored: muscle in integer grams, and body fat in tenths of a point, so 15.4% → 16.4% is a full point rather than 0.999…. A body-fat change is shown in points ("−0.8 pts").
+- `slopes`: null under three protocol-ok scans, or when they share one day. `since` keeps a chart window's scans, so its labels and slope are the window's.
+- `weekScan`: the week's latest protocol-ok scan against the protocol-ok scan before it. Only a week with none shows its off-protocol scan, without a comparison.
+
 **The protocol check in M4** (`ScanProtocol`, `:domain`, `body/`):
 - **Time of day.** The scan's time of day is compared with the usual slot's as a circular difference, so 23:30 and 00:30 are 60 minutes apart. Without a slot, the time part passes; in practice the first scan sets the slot (PRD §7.9).
 - **Since eating.** The form's *Last ate* chips store fixed minutes: under 2 h = 60, 2–3 h = 150, 3 h or more = 180, fasted overnight = 600. Only the 120-minute threshold matters.
@@ -472,6 +477,12 @@ maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached
 ```
 
 - **The pace step** shows each pace's projection in kg a week, plus when the goal weight would be reached ("around mid-March"), using the suggested goal weight until you change it. For a date finish line it shows the expected change by that date.
+- **The weekly review** (M8, `WeeklyReview.outlook`) recomputes it each week from the trend as of the week's end, for the goal after the guardrails.
+  - Only for a week of the current plan: one that ended on or after `GoalPlan.startedOn`. An earlier week has no pace or finish line, and the review says why (PRD §12.4). Its goal comes from the target version in force on its Sunday, or else its check-in's flag.
+  - The rate is the trend's change over min(28 days, days since `startedOn`), per week, so it never reaches into an earlier goal. Under 7 days, or when the trend doesn't reach that far, it's the week's rate. Either needs a weigh-in in the week.
+  - At the target or past it, the way the goal goes (at or under it for fat loss and recomp, at or over it for a lean bulk, exactly at it for Maintain), it's *reached*.
+  - Under 0.05 kg a week either way is *steady* (no date). Over 104 weeks is *far off*.
+  - A body-fat finish line uses the slope ÷ 4 of the scans since `startedOn` (steady under 0.1 points a week). At or under the target %, it's reached.
 - **Suggested goal weight** (`GoalWeights.suggest`): the BMI-25 weight for your height; if your BMI is already 25 or less, 5% below your current weight but not below BMI 20, and never above your current weight. Rounded to the nearest kg. A scan-based suggestion (IB-05) replaces it once scans exist.
 - **Default finish lines:** fat loss and recomp reach the goal weight; lean bulk ends on a date 16 weeks out; Maintain has none.
 
@@ -800,7 +811,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M5: Weekly check-in** ✅ | Adaptive maintenance estimate, the weekly check-in with per-goal flags and a proposed target, incomplete days (Room v8) | NU-05, GL-08 (flags) |
 | **M6: In the gym** | Supersets, warm-up suggestions, assisted exercises, RIR-aware jumps, substitutes (Room v9) | RT-05, WL-11, WL-09 (assisted), PO-08, EX-04 |
 | **M7: AI providers** | Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint, each with its own key (Room v10) | AI-05 |
-| **M8: Weekly review** | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
+| **M8: Weekly review** ✅ | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
 | **M9: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
 | **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
@@ -1154,9 +1165,75 @@ Tests cover:
   - `ScanTrends` in `:domain`: §5.6's deltas, noise labels and slope.
   - A reusable chart (`ui/components/Chart`) grown from M4's weight chart, still drawn on `Canvas`.
 - **Data:** none. Everything is computed on read.
-- **Tests:** each aggregate on fixed data; protein days hit leaving out the ramp's baseline week; the projection, including moving away; weeks that span a goal change or a gap; noise labels at the 1 kg and 1% edges; off-protocol scans left out; the slope.
+- **Tests:** each aggregate on fixed data; protein days hit leaving out the ramp's baseline week; the projection, including moving away; weeks that span a goal change or a gap; noise labels at the 1 kg and 1-point edges; off-protocol scans left out; the slope.
 - **Risks:** the review runs many queries. Each covers one week and uses the `log_date` indexes, so it should open well inside a second; the phone check measures it.
 - **Parallel:** with M7.
+
+**M8 results (2026-11-13, reference phone on Android 15, release build over the real data).** No Room change. Where §12.4 left room, M8 took the obvious reading, now written into PRD §12.4 and §5.8 here:
+- The current week shows only the sections, with food up to yesterday.
+- Incomplete days are left out of the whole Food section.
+- PRs show one line per lift.
+- A stall counts when a workout's frozen recommendation showed one.
+- The calendar shows the month of the week's Thursday.
+- The finish line has *steady*, *far off* and *needs data* states, and a body-fat goal runs on the scans' slope.
+
+The check-in screen became the review. Its 7-day averages and trend line moved into the Food and Body sections, so `CheckinView` no longer computes the week's average. PR values are formatted in one place (`Labels.recordValue`), shared with the workout summary.
+
+**Fixed after PR #13's review (2026-11-14).** No schema change:
+- *Past weeks and the goal.* A week before today's plan was judged by it, so after a switch from a bulk to a cut the bulk's weeks read "Moving away". Such a week now shows no pace or finish line and says why. It names its own goal when its target version or check-in shows a different one, and otherwise says the plan then isn't kept.
+- *The rate after a goal change.* The 4-week rate now starts no earlier than the plan, so a cut's second week no longer reads as the bulk before it.
+- *Past the goal.* A trend past the goal weight read "Moving away from your goal". It's now *reached*.
+- *Noise at exactly 1.* 15.4 → 16.4% read "within noise" because the doubles subtract to 0.999…; scans now compare grams and tenths.
+- *Smaller fixes:*
+  - Changing week blanked the screen. The week shown now stays until the next has loaded, and its title comes from the range, so the current week no longer flips from "Week of …" to "This week". Answers go to the check-in on screen, and wait while another week loads.
+  - The load-time log is gone.
+  - The chart's change labels and slope are over the chosen range, and say which.
+  - An off-protocol scan no longer hides the week's on-protocol one.
+  - "−0.0 kg" reads "no change this week".
+  - A past week's Training shows what was done, since the plan has no history.
+  - The waist compares with a reading at most 4 weeks older, and names its date.
+  - Today's weekly-plan line is a 48 dp target.
+  - Body-fat changes are in points.
+
+Tests cover:
+- `:domain`:
+  - `ScanTrends`:
+    - noise labels at 1 kg and 1 point, both ways, including pairs whose doubles subtract to 0.999…;
+    - off-protocol scans left out of the changes and the slope;
+    - the slope per 4 weeks;
+    - no slope under three scans or on one day;
+    - a week's scan against the one before, and its on-protocol scan over a later off-protocol one;
+    - a chart window's scans and slope.
+  - `WeeklyReview`:
+    - protein days hit at 95%, leaving out days without a target;
+    - origin shares;
+    - each finish-line outcome: around a date, reached (at the goal and past it, for a cut, a recomp and a lean bulk, and for body fat), moving away, steady, far off, needs data, a date finish line and a body-fat one;
+    - the calendar's layout and marks, with nothing for a blank day;
+    - a week's month.
+- Repository:
+  - the range of weeks;
+  - strength days and each extra session against the plan this week, and what was done in a past week;
+  - each week's own PRs and stall cards;
+  - food across the ramp's baseline week, a mid-week target change and an incomplete day, with origin shares;
+  - the current week up to yesterday;
+  - the week's trend change, waist against the last reading, and scan against the previous;
+  - the waist compared only with a reading at most 4 weeks older;
+  - the finish line, including moving away;
+  - a week before a goal change, and the same goal set again: no pace or finish line, with the week's own goal from its target version or check-in;
+  - the finish line's rate after a change of direction at the plan's start, and under a week into it;
+  - a body-fat finish line on the plan's own scans;
+  - steps and sleep hidden while empty;
+  - an empty week;
+  - the calendar.
+- Text: PR lines per lift; the finish line's goal and *reached*; "no change" for a change that rounds to 0.0; body fat in points; a past week's Training; the note on an earlier plan.
+- `CheckinViewModel`: ‹ and › within the range, the week shown kept until the next has loaded, and an answer that finishes after the week changed.
+
+| Check | Result |
+|-------|--------|
+| The real data | ✅ Today's weekly-plan line opened this week's review, and ‹ went back to the first week. Each week opened in 39–107 ms, well inside TRD's one second. The finished weeks showed their check-in first, then the sections, including a real PR and the extra session's count. Nothing was answered or logged. |
+| About seven weeks of invented data | ✅ In a separate debug install (`app.recomp.m8dev`, uninstalled afterwards), loading in 164–283 ms a week. *Food:* 6 days logged with the incomplete day left out, and "Ordered 9% · packaged 6% of calories". *Training:* "Strength 3 of 3 days · Yoga class 1 of 1". *Body:* "Trend 81.7 kg · −0.3 kg this week (−0.35%), goal −0.5% a week", the waist against the last reading, a scan's change "· within noise", steps and sleep, and "At this rate: around early-April 2027". *Earlier weeks:* "Stall card: Lat pulldown", and "Scan 24 Oct: off protocol, so it isn't compared". *Calendar:* dots, rings and tints. *Body's chart:* hollow off-protocol dots, change labels and the 4-week slope, with 12 weeks and All. <!-- pii-ok: invented dev-install values --> |
+| Fixed during the phone run | Rising invented loads listed every record type of every lift, one line each, so PRs now show one line per lift, five lifts and then "and N more". Calendar days only tinted their number; they now fill the cell. The goal showed as "76.0 kg". |
+| Not run on the phone | Real steps and sleep (M13 fills them; the dev install had invented ones). The *steady*, *far off* and body-fat finish lines. The fixes after the review: the phone runs above are of the build before them. The tests cover these. |
 
 #### M9: Faster food logging
 
