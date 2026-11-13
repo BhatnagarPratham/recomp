@@ -518,7 +518,7 @@ private fun InputStep(
         Text("Origin", style = MaterialTheme.typography.labelLarge)
         ChoiceChips(Origin.entries, origin, FoodText::origin, { if (!estimating) onOrigin(it) })
         if (origin == Origin.ORDERED) {
-            Text("Claude assumes restaurant levels of oil, ghee and cream.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("The estimate assumes restaurant levels of oil, ghee and cream.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (estimating) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -568,7 +568,7 @@ private fun ReviewStep(
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Claude asks: $q", style = MaterialTheme.typography.bodyLarge)
+                            Text("Question: $q", style = MaterialTheme.typography.bodyLarge)
                             OutlinedTextField(value = answer, onValueChange = { answer = it }, label = { Text("Your answer") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                             OutlinedButton(onClick = { onReestimate(answer) }, enabled = answer.isNotBlank()) { Text("Re-estimate") }
                         }
@@ -578,7 +578,7 @@ private fun ReviewStep(
             if (review.rejected.isNotEmpty()) {
                 item {
                     Text(
-                        "Left out, because Claude gave no usable weight or amount: ${review.rejected.joinToString()}. Add them with search or quick add.",
+                        "Left out, because the estimate gave no usable weight or amount: ${review.rejected.joinToString()}. Add them with search or quick add.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )
