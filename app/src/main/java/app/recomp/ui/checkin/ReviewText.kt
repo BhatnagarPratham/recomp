@@ -44,11 +44,20 @@ object ReviewText {
         (listOf("Strength ${t.strengthDays} of ${t.strengthTarget} ${days(t.strengthTarget)}") +
             t.extras.map { if (it.planned > 0) "${it.name} ${it.done} of ${it.planned}" else "${it.name} ${it.done}" }).joinToString(" · ")
 
-    /** A PR as the workout summary says it: the exercise, the kind of record, and its value. */
-    fun record(r: WeekRecordRow): String {
-        val assisted = r.loadType == LoadType.ASSISTED
-        return "${r.exercise}: ${Labels.record(r.type, assisted)}, ${Labels.recordValue(r.type, r.value, r.loadG, assisted)}"
+    /** How many lifts' PRs the Training section lists before "and N more". */
+    const val RECORDS_SHOWN = 5
+
+    /**
+     * The week's PRs, one line per lift in the order they were set: each kind of record with its latest value that week
+     * (a later workout beats an earlier one), worded as the workout summary words them.
+     */
+    fun records(rows: List<WeekRecordRow>): List<String> = rows.groupBy { it.exercise }.map { (exercise, prs) ->
+        val assisted = prs.first().loadType == LoadType.ASSISTED
+        exercise + ": " + prs.associateBy { it.type }.values.sortedBy { it.type.ordinal }
+            .joinToString(" · ") { "${Labels.record(it.type, assisted)} ${Labels.recordValue(it.type, it.value, it.loadG, assisted)}" }
     }
+
+    fun moreRecords(n: Int): String = "and $n more ${if (n == 1) "lift" else "lifts"} with PRs"
 
     const val NO_RECORDS = "No PRs this week"
 
@@ -88,7 +97,7 @@ object ReviewText {
 
     fun outlook(o: FinishOutlook): String = when (o) {
         is FinishOutlook.Around ->
-            "At this rate: around ${GoalText.around(o.date)} (goal " + (if (o.bodyFat) "${BodyText.oneDecimal(o.goal)}% body fat" else BodyText.kg(o.goal)) + ")"
+            "At this rate: around ${GoalText.around(o.date)} (goal " + (if (o.bodyFat) "${GoalText.d(o.goal)}% body fat" else "${GoalText.d(o.goal)} kg") + ")"
         FinishOutlook.MovingAway -> "Moving away from your goal"
         FinishOutlook.Steady -> "Holding steady, so there's no date at this rate"
         FinishOutlook.FarOff -> "More than two years away at this rate"

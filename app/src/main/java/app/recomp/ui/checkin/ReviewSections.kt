@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,11 +46,10 @@ fun ReviewSections(r: WeekReview) {
 
     SectionTitle("Training")
     Text(ReviewText.plan(r.training), style = MaterialTheme.typography.bodyLarge)
-    if (r.training.records.isEmpty()) {
-        Text(ReviewText.NO_RECORDS, color = muted)
-    } else {
-        r.training.records.forEach { Text(ReviewText.record(it)) }
-    }
+    val records = ReviewText.records(r.training.records)
+    if (records.isEmpty()) Text(ReviewText.NO_RECORDS, color = muted)
+    records.take(ReviewText.RECORDS_SHOWN).forEach { Text(it) }
+    if (records.size > ReviewText.RECORDS_SHOWN) Text(ReviewText.moreRecords(records.size - ReviewText.RECORDS_SHOWN), color = muted)
     if (r.training.stalled.isNotEmpty()) Text(ReviewText.stalled(r.training.stalled), color = muted)
 
     SectionTitle("Body")
@@ -113,6 +113,7 @@ private fun DayCell(day: CalendarDay) {
     }.joinToString(", ")
     Box(
         Modifier
+            .fillMaxSize()
             .padding(1.dp)
             .background(if (day.food) colors.secondaryContainer else colors.surface, RoundedCornerShape(8.dp))
             .semantics { contentDescription = described }
