@@ -1,14 +1,18 @@
 package app.recomp.data
 
 import app.recomp.data.db.DailyActivityEntity
+import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.db.TargetReason
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ProgressionRepository
+import app.recomp.data.repo.ExtraDone
 import app.recomp.data.repo.ScanInput
+import app.recomp.data.repo.WeekPlan
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
+import app.recomp.domain.checkin.CheckinFlag
 import app.recomp.domain.food.Origin
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SetType
@@ -26,8 +30,12 @@ import app.recomp.domain.progression.PrType
 import app.recomp.domain.progression.Recommendation
 import app.recomp.domain.review.FinishOutlook
 import app.recomp.domain.review.ProteinDays
+import app.recomp.domain.review.WeeklyReview
 import app.recomp.domain.trend.TrendCalculator
 import app.recomp.domain.trend.WeighIn
+import app.recomp.domain.trend.WeightPace
+import app.recomp.ui.body.BodyText
+import app.recomp.ui.checkin.ReviewText
 import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -114,17 +122,23 @@ class ReviewFlowTest {
         val stalledRow = app.db.workoutDao().sessionExercises(wednesday).first()
         app.db.workoutDao().setRecommendation(stalledRow.entry.id, ProgressionRepository.encode(Recommendation(Action.REPEAT, 40_000, listOf(10, 10, 10), stalled = true)))
 
-        val week = reviews.week(date(0), today = date(20)).training
+        // While the week runs, against today's plan.
+        val running = reviews.week(date(0), today = date(5)).training
         val target = app.prefs.currentTraining().strengthDaysPerWeek
+        assertEquals(2, running.strengthDays)
+        assertEquals(target, running.strengthTarget)
+        assertEquals(listOf(ExtraDone("Yoga class", done = 1, planned = 1)), running.extras)
+        assertEquals(0, reviews.week(date(7), today = date(8)).training.extras.single().done)
+        // Once it's past, the plan then isn't kept, so it's what was done: no target, and only the extras done.
+        val week = reviews.week(date(0), today = date(20)).training
         assertEquals(2, week.strengthDays)
-        assertEquals(target, week.strengthTarget)
-        assertEquals("Yoga class", week.extras.single().name)
-        assertEquals(1, week.extras.single().done)
-        assertEquals(1, week.extras.single().planned)
+        assertNull(week.strengthTarget)
+        assertEquals(listOf(ExtraDone("Yoga class", done = 1, planned = null)), week.extras)
         assertEquals(listOf(stalledRow.exercise.name), week.stalled)
+        assertEquals("Strength 2 days · Yoga class 1", ReviewText.plan(week))
         val next = reviews.week(date(7), today = date(20)).training
         assertEquals(1, next.strengthDays)
-        assertEquals(0, next.extras.single().done)
+        assertTrue(next.extras.isEmpty())
         assertTrue(next.stalled.isEmpty())
         // First workouts set no PRs (there's nothing to beat), so the test sets one in each week: each week lists its own.
         assertTrue(week.records.isEmpty())
@@ -206,6 +220,7 @@ class ReviewFlowTest {
         assertEquals(rate.kgPerWeek, body.changeKg!!, 1e-9)
         assertEquals(89.4, body.waistCm!!, 1e-9)
         assertEquals(-0.6, body.waistChangeCm!!, 1e-9)
+        assertEquals(date(6), body.waistSince)
         val change = body.scan!!.change!!
         assertEquals(0.4, change.muscleKg, 1e-9)
         assertTrue(change.muscleWithinNoise)
@@ -220,14 +235,113 @@ class ReviewFlowTest {
         onboard()
         (0..13).forEach { app.body.logWeighIn(((84.0 - 0.1 * it) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
         val points = TrendCalculator.trend((0..13).map { WeighIn(date(it), at(it, 7), ((84.0 - 0.1 * it) * 1000).roundToInt(), WeightSource.HOME_SCALE) }, WeightSource.HOME_SCALE)
-        // Under 4 weeks of trend, the week's rate is the rate.
-        val rate = TrendCalculator.weeklyRate(points)!!.kgPerWeek
+        // Under 4 weeks into the plan, the rate is the change since it started, per week.
+        val rate = (points.last().trendKg - TrendCalculator.trendAt(points, date(0))!!) / 13 * 7
         val weeks = Projection.weeksTo(points.last().trendKg, 76.0, rate)!!
         assertEquals(FinishOutlook.Around(Projection.finishDate(date(13), weeks), 76.0), reviews.week(date(7), today = date(20)).outlook)
 
-        // Gaining instead: moving away.
-        (14..27).forEach { app.body.logWeighIn(((82.7 + 0.15 * (it - 13)) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
-        assertEquals(FinishOutlook.MovingAway, reviews.week(date(21), today = date(30)).outlook)
+        // Gaining for the next four weeks instead: moving away.
+        (14..41).forEach { app.body.logWeighIn(((82.7 + 0.15 * (it - 13)) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
+        assertEquals(FinishOutlook.MovingAway, reviews.week(date(35), today = date(44)).outlook)
+    }
+
+    @Test
+    fun `the waist change is against a reading at most 4 weeks older`() = runBlocking {
+        onboard()
+        app.body.logWaist(90.0, at(0, 8))
+        app.body.logWaist(89.0, at(28, 8))
+        app.body.logWaist(88.6, at(57, 8))
+        // 28 days apart: compared, with the date.
+        val within = reviews.week(date(28), today = date(70)).body
+        assertEquals(-1.0, within.waistChangeCm!!, 1e-9)
+        assertEquals(date(0), within.waistSince)
+        assertEquals("Waist 89.0 cm (−1.0 cm since ${BodyText.shortDate(date(0))})", ReviewText.waist(within))
+        // 29 days apart: just the reading.
+        val stale = reviews.week(date(56), today = date(70)).body
+        assertEquals(88.6, stale.waistCm!!, 1e-9)
+        assertNull(stale.waistChangeCm)
+        assertNull(stale.waistSince)
+        assertEquals("Waist 88.6 cm", ReviewText.waist(stale))
+    }
+
+    private fun cut(startedOn: LocalDate) = GoalPlan.of(Goal.FAT_LOSS, Pace.STANDARD, 76.0, FinishLine.GoalWeight, startedOn)
+
+    @Test
+    fun `a week before a goal change keeps its own goal, without today's pace or finish line`() = runBlocking {
+        onboard()
+        (0..34).forEach { app.body.logWeighIn(((84.0 - 0.05 * it) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
+        // Before the change, week 1 is judged by the recomp it was on.
+        val before = reviews.week(date(7), today = date(20))
+        assertEquals(WeekPlan.Current, before.plan)
+        assertNotNull(before.body.pace)
+        assertNotNull(before.outlook)
+
+        // A switch to a cut on day 28 writes a target version with the new goal.
+        app.personas.save(plan = cut(date(28)), now = at(28))
+        assertEquals(Goal.FAT_LOSS, app.db.nutritionDao().targetOn(date(28))!!.goal)
+        val after = reviews.week(date(7), today = date(30))
+        assertEquals(WeekPlan.EarlierGoal(Goal.RECOMP, since = date(28)), after.plan)
+        assertNull(after.body.pace)
+        assertNull(after.outlook)
+        val note = ReviewText.earlierPlan(after.plan)!!
+        assertTrue(note, note.startsWith("This week's goal was Recomp"))
+        // Its own numbers are as they were.
+        assertEquals(before.body.changeKg!!, after.body.changeKg!!, 1e-9)
+        // The cut's first week is judged by the cut.
+        val first = reviews.week(date(28), today = date(30))
+        assertEquals(WeekPlan.Current, first.plan)
+        assertEquals(WeightPace.of(cut(date(28)).policy), first.body.pace)
+        assertNull(ReviewText.earlierPlan(first.plan))
+
+        // The same goal set again on day 35: the week before it can't know its pace then.
+        app.personas.save(plan = GoalPlan.of(Goal.FAT_LOSS, Pace.GENTLE, 76.0, FinishLine.GoalWeight, date(35)), now = at(35))
+        val reset = reviews.week(date(28), today = date(36))
+        assertEquals(WeekPlan.EarlierPlan(since = date(35)), reset.plan)
+        assertNull(reset.body.pace)
+        assertNull(reset.outlook)
+        assertTrue(ReviewText.earlierPlan(reset.plan)!!.contains("isn't kept"))
+
+        // Without a target version for the week, its check-in's flag says which goal it was on.
+        app.db.checkinDao().upsert(WeeklyCheckinEntity(date(-7), computedAt = 1, windowDays = 21, loggedDays = 0, weighIns = 0, tdeePrev = 2400, tdeeNew = 2400, flag = CheckinFlag.GAIN_SLOW))
+        assertEquals(WeekPlan.EarlierGoal(Goal.LEAN_BULK, since = date(35)), reviews.week(date(-7), today = date(36)).plan)
+    }
+
+    @Test
+    fun `after a goal change the finish line's rate starts at the change`() = runBlocking {
+        onboard()
+        // Gaining for four weeks, then a cut from day 28 that loses fast.
+        fun kg(d: Int) = if (d < 28) 84.0 + 0.15 * d else 84.0 + 0.15 * 27 - 0.3 * (d - 27)
+        (0..41).forEach { app.body.logWeighIn((kg(it) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
+        app.personas.save(plan = cut(date(28)), now = at(28))
+        val points = TrendCalculator.trend((0..41).map { WeighIn(date(it), at(it, 7), (kg(it) * 1000).roundToInt(), WeightSource.HOME_SCALE) }, WeightSource.HOME_SCALE)
+        val trend = points.last().trendKg
+        // 4 weeks back would reach into the gaining weeks and read as gaining.
+        val fourWeeks = (trend - TrendCalculator.trendAt(points, date(41 - 28))!!) / 4
+        assertTrue("$fourWeeks", fourWeeks > 0)
+        // The 13 days since the cut started read as losing.
+        val sinceCut = (trend - TrendCalculator.trendAt(points, date(28))!!) / 13 * 7
+        assertTrue("$sinceCut", sinceCut < -WeeklyReview.STEADY_KG_PER_WEEK)
+        val outlook = reviews.week(date(35), today = date(43)).outlook
+        assertEquals(WeeklyReview.outlook(cut(date(28)), date(41), trend, sinceCut), outlook)
+        assertTrue("$outlook", outlook is FinishOutlook.Around)
+
+        // Under a week into the cut, it's the week's rate.
+        val early = points.filter { !it.date.isAfter(date(31)) }
+        assertEquals(
+            WeeklyReview.outlook(cut(date(28)), date(31), early.last().trendKg, TrendCalculator.weeklyRate(early)!!.kgPerWeek),
+            reviews.week(date(28), today = date(31)).outlook,
+        )
+    }
+
+    @Test
+    fun `a body-fat finish line's slope is over the plan's own scans`() = runBlocking {
+        onboard(GoalPlan.of(Goal.RECOMP, Pace.STANDARD, null, FinishLine.BodyFat(15.0), day0))
+        fun scan(d: Int, pct: Double) = ScanInput(at(d, 7), 83_000, 33_000, (83_000 * pct / 100).roundToInt(), pct, 8.0, minsSinceMeal = 180, workoutBefore = false)
+        // Rising before the plan, falling a point a week since.
+        listOf(-21 to 20.0, -14 to 21.0, -7 to 22.0, 0 to 22.0, 7 to 21.0, 14 to 20.0).forEach { (d, pct) -> app.body.saveScan(scan(d, pct)) }
+        app.body.logWeighIn(83_000, WeightSource.HOME_SCALE, at(14, 7))
+        // 20% down to 15% at a point a week: 5 weeks from day 14.
+        assertEquals(FinishOutlook.Around(Projection.finishDate(date(20), 5.0), 15.0, bodyFat = true), reviews.week(date(14), today = date(21)).outlook)
     }
 
     @Test

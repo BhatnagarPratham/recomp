@@ -46,6 +46,7 @@ fun ReviewSections(r: WeekReview) {
 
     SectionTitle("Training")
     Text(ReviewText.plan(r.training), style = MaterialTheme.typography.bodyLarge)
+    if (r.training.strengthTarget == null) Text(ReviewText.PAST_PLAN, style = MaterialTheme.typography.bodySmall, color = muted)
     val records = ReviewText.records(r.training.records)
     if (records.isEmpty()) Text(ReviewText.NO_RECORDS, color = muted)
     records.take(ReviewText.RECORDS_SHOWN).forEach { Text(it) }
@@ -54,6 +55,7 @@ fun ReviewSections(r: WeekReview) {
 
     SectionTitle("Body")
     Text(ReviewText.trend(r.body), style = MaterialTheme.typography.bodyLarge)
+    ReviewText.earlierPlan(r.plan)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = muted) }
     ReviewText.waist(r.body)?.let { Text(it) }
     r.body.scan?.let { Text(ReviewText.scan(it)) }
     r.activity?.let { a ->

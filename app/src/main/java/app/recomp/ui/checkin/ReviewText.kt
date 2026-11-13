@@ -5,6 +5,7 @@ import app.recomp.data.repo.ActivityWeek
 import app.recomp.data.repo.BodyWeek
 import app.recomp.data.repo.FoodWeek
 import app.recomp.data.repo.TrainingWeek
+import app.recomp.data.repo.WeekPlan
 import app.recomp.domain.body.WeekScan
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.review.FinishOutlook
@@ -39,10 +40,17 @@ object ReviewText {
 
     // Training
 
-    /** "Strength 2 of 3 days · Yoga class 1 of 1". An extra session without set days counts without a plan. */
-    fun plan(t: TrainingWeek): String =
-        (listOf("Strength ${t.strengthDays} of ${t.strengthTarget} ${days(t.strengthTarget)}") +
-            t.extras.map { if (it.planned > 0) "${it.name} ${it.done} of ${it.planned}" else "${it.name} ${it.done}" }).joinToString(" · ")
+    /**
+     * "Strength 2 of 3 days · Yoga class 1 of 1". An extra session without set days counts without a plan, and so does
+     * a past week, whose plan isn't kept: "Strength 2 days · Yoga class 1".
+     */
+    fun plan(t: TrainingWeek): String {
+        val target = t.strengthTarget
+        val strength = if (target == null) "Strength ${t.strengthDays} ${days(t.strengthDays)}" else "Strength ${t.strengthDays} of $target ${days(target)}"
+        return (listOf(strength) + t.extras.map { e -> e.planned?.takeIf { it > 0 }?.let { "${e.name} ${e.done} of $it" } ?: "${e.name} ${e.done}" }).joinToString(" · ")
+    }
+
+    const val PAST_PLAN = "What you did. Your weekly plan isn't kept for past weeks, so there's nothing to count it against."
 
     /** How many lifts' PRs the Training section lists before "and N more". */
     const val RECORDS_SHOWN = 5
@@ -69,13 +77,28 @@ object ReviewText {
         val kg = b.trendKg ?: return BodyText.NO_TREND
         val change = b.changeKg
         return "Trend ${BodyText.kg(kg)} · " +
-            (if (change == null) "no weigh-in this week" else "${BodyText.signed(change, "kg")} this week (${CheckinText.pct(b.changePct ?: 0.0)})") +
+            when {
+                change == null -> "no weigh-in this week"
+                BodyText.roundsToZero(change) -> "no change this week"
+                else -> "${BodyText.signed(change, "kg")} this week (${CheckinText.pct(b.changePct ?: 0.0)})"
+            } +
             (b.pace?.let { ", ${BodyText.pace(it)}" } ?: "")
     }
 
+    /** The week's waist and its change against a reading at most 4 weeks older, named by that reading's date. */
     fun waist(b: BodyWeek): String? {
         val cm = b.waistCm ?: return null
-        return "Waist ${BodyText.cm(cm)}" + (b.waistChangeCm?.let { " (${BodyText.signed(it, "cm")} since the last)" } ?: "")
+        val since = b.waistSince
+        return "Waist ${BodyText.cm(cm)}" + (b.waistChangeCm?.takeIf { since != null }?.let { " (${BodyText.signed(it, "cm")} since ${BodyText.shortDate(since!!)})" } ?: "")
+    }
+
+    /** Why a week before the current plan has no pace or finish line (PRD §12.4). Null for the current plan's weeks. */
+    fun earlierPlan(p: WeekPlan?): String? = when (p) {
+        null, WeekPlan.Current -> null
+        is WeekPlan.EarlierGoal ->
+            "This week's goal was ${Labels.goal(p.goal)}, before your current one from ${BodyText.shortDate(p.since)}, so it isn't judged against today's pace or finish line."
+        is WeekPlan.EarlierPlan ->
+            "This week was before your current plan from ${BodyText.shortDate(p.since)}. The plan then isn't kept, so there's no pace or finish line for it."
     }
 
     fun scan(s: WeekScan): String {
@@ -98,6 +121,7 @@ object ReviewText {
     fun outlook(o: FinishOutlook): String = when (o) {
         is FinishOutlook.Around ->
             "At this rate: around ${GoalText.around(o.date)} (goal " + (if (o.bodyFat) "${GoalText.d(o.goal)}% body fat" else "${GoalText.d(o.goal)} kg") + ")"
+        is FinishOutlook.Reached -> if (o.bodyFat) "You've reached your body-fat goal (${GoalText.d(o.goal)}%)" else "You've reached your goal weight (${GoalText.d(o.goal)} kg)"
         FinishOutlook.MovingAway -> "Moving away from your goal"
         FinishOutlook.Steady -> "Holding steady, so there's no date at this rate"
         FinishOutlook.FarOff -> "More than two years away at this rate"
