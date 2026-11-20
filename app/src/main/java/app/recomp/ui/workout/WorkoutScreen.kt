@@ -104,6 +104,7 @@ fun WorkoutScreen(
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val library by viewModel.library.collectAsStateWithLifecycle()
+    val inDeficit by viewModel.inDeficit.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = LocalActivity.current
     val scope = rememberCoroutineScope()
@@ -203,6 +204,7 @@ fun WorkoutScreen(
                         onNotes = { dialog = Dialog.ExerciseNotes(exercise) },
                         onSettings = { onOpenExercise(exercise.exerciseId) },
                         onHistory = { onOpenHistory(exercise.exerciseId) },
+                        inDeficit = inDeficit,
                         onStallDeload = { viewModel.deloadToday(exercise.id) },
                         onStallSwap = { dialog = Dialog.Pick(exercise, forStall = true) },
                         onStallHold = { viewModel.holdStall(exercise.id) },
@@ -347,6 +349,7 @@ private fun ExerciseCard(
     onNotes: () -> Unit,
     onSettings: () -> Unit,
     onHistory: () -> Unit,
+    inDeficit: Boolean,
     onStallDeload: () -> Unit,
     onStallSwap: () -> Unit,
     onStallHold: () -> Unit,
@@ -391,7 +394,7 @@ private fun ExerciseCard(
                 }
             }
             exercise.warmupText?.let { WarmupLine(it, onAddWarmups) }
-            if (exercise.showStall) StallCard(onStallDeload, onStallSwap, onStallHold)
+            if (exercise.showStall) StallCard(inDeficit, onStallDeload, onStallSwap, onStallHold)
             Spacer(Modifier.height(4.dp))
             exercise.sets.forEach { set ->
                 SetRow(exercise, set, selected = set.id == selectedSetId, onSelect = { onSelect(set.id) }, onTick = { onTick(set.id) },
@@ -634,7 +637,7 @@ private fun WarmupLine(text: String, onAdd: () -> Unit) {
 
 /** PO-05: offered, never auto-applied. Hidden once the exercise's first set is ticked. */
 @Composable
-private fun StallCard(onDeload: () -> Unit, onSwap: () -> Unit, onHold: () -> Unit) {
+private fun StallCard(inDeficit: Boolean, onDeload: () -> Unit, onSwap: () -> Unit, onHold: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -644,6 +647,7 @@ private fun StallCard(onDeload: () -> Unit, onSwap: () -> Unit, onHold: () -> Un
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("No gain lately", style = MaterialTheme.typography.titleSmall)
             Text("Your estimated 1RM hasn't moved for a few sessions. Pick what to do; nothing changes until you do.", style = MaterialTheme.typography.bodySmall)
+            if (inDeficit) Text(DeficitText.HOLDING, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onDeload, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) { Text("Deload 10%") }
                 OutlinedButton(onClick = onSwap, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) { Text("Swap") }

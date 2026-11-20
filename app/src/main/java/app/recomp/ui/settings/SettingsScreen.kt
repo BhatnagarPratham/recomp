@@ -293,6 +293,7 @@ fun SettingsScreen(
                 Text("Split, experience, weekly plan, equipment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
         }
+        VolumeBandSetting()
 
         SectionTitle("Food")
         SettingRow("Diet", ui.stored.diet?.let(Labels::diet) ?: "Not set") { editing = Editing.Diet }
