@@ -56,6 +56,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun programmeReviewDao(): ProgrammeReviewDao
     abstract fun backupCheckDao(): BackupCheckDao
     abstract fun nudgeDao(): NudgeDao
+    abstract fun historyDao(): HistoryDao
 
     companion object {
         const val NAME = "recomp.db"
