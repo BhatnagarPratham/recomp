@@ -228,7 +228,7 @@ class FitViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val ids = log.saveDescribedMeal(
-                    days.today(clock.millis()), into, result.items.map { it.toLog() }, origin.value, result.requestId, foods.defaultDiet(),
+                    today.value?.today ?: days.today(), into, result.items.map { it.toLog() }, origin.value, result.requestId, foods.defaultDiet(),
                     mealName = null, draftId = null,
                 )
                 val name = log.mealSlots.first().firstOrNull { it.key == into }?.name ?: into

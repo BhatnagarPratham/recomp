@@ -144,8 +144,12 @@ class DescribeFlowTest {
         app.connectivity.online.value = false
         val vm = viewModel()
         vm.setText("chai and biscuits")
+        // From M9 Estimate still answers, from the local parser (AI-04): here it finds nothing, and says so.
         vm.estimate()
-        eventually { if (vm.phase.value == DescribePhase.Input) true else null }
+        val review = eventually { vm.phase.value as? DescribePhase.Review }
+        assertTrue(review.items.isEmpty())
+        assertEquals(listOf("chai", "biscuits"), review.unmatched)
+        vm.backToText()
         vm.saveDraft()
         val outcome = eventually { vm.outcome.value }
         assertTrue(outcome.message.contains("Kept as a draft"))
@@ -165,7 +169,7 @@ class DescribeFlowTest {
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertEquals(listOf("Phulka"), review.items.map { it.current.name })
 
-        vm.update(0, review.items[0].current.scaledTo(80.0))
+        vm.update(0, review.items[0].copy(current = review.items[0].current.scaledTo(80.0)))
         assertTrue((vm.phase.value as DescribePhase.Review).items[0].edited)
         vm.save(null)
         val outcome = eventually { vm.outcome.value }

@@ -11,6 +11,8 @@ import app.recomp.domain.food.ParsedItem
 import app.recomp.domain.food.ParsedMeal
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** Where a described item's numbers came from (PRD §12.5). */
 enum class ItemFrom { YOUR_FOOD, DATABASE, AI, QUICK_ADD }
@@ -64,6 +66,9 @@ class MealDescriber @Inject constructor(
      * [draft] keeps the description when the AI was needed for all of it and failed (AI-02). With
      * [parserOnFailure] (a fit check, which never keeps a draft) a failed request falls back to whatever the
      * parser found instead.
+     *
+     * Like the request itself, this runs to completion even if the caller goes away: a screen left the moment
+     * *Estimate* is tapped still sends its request once and keeps its draft, never neither.
      */
     suspend fun describe(
         text: String,
@@ -72,16 +77,16 @@ class MealDescriber @Inject constructor(
         clarification: Clarification? = null,
         draft: DraftPlan? = null,
         parserOnFailure: Boolean = false,
-    ): DescribeResult {
+    ): DescribeResult = withContext(NonCancellable) {
         val state = ai.state()
-        if (state != AiState.READY) return DescribeResult.Described(local(foods.parseMeal(text), state))
+        if (state != AiState.READY) return@withContext DescribeResult.Described(local(foods.parseMeal(text), state))
         val parsed = if (origin == Origin.ORDERED) null else foods.parseMeal(text)
-        if (parsed != null && parsed.items.isNotEmpty() && parsed.unmatched.isEmpty()) return DescribeResult.Described(local(parsed, state))
+        if (parsed != null && parsed.items.isNotEmpty() && parsed.unmatched.isEmpty()) return@withContext DescribeResult.Described(local(parsed, state))
 
         val counted = parsed?.items.orEmpty()
         // With something matched there's a review either way, so no draft: saving both would count the meal twice.
         val plan = draft.takeIf { counted.isEmpty() && !parserOnFailure }
-        return when (val result = ai.estimate(text, origin, clarification, plan, kind, counted.map { it.counted })) {
+        when (val result = ai.estimate(text, origin, clarification, plan, kind, counted.map { it.counted })) {
             is EstimateResult.Estimated -> {
                 val merged = DescribeMerge.merge(counted, result.meal.items)
                 DescribeResult.Described(

@@ -120,8 +120,12 @@ class FakeHostResolver : HostResolver {
     val hosts = mutableMapOf<String, List<String>>()
     val lookups = mutableListOf<String>()
 
+    /** A lookup that hangs, like a network whose DNS doesn't answer: the next one waits until a test completes this. */
+    var hang: CompletableDeferred<Unit>? = null
+
     override suspend fun addresses(host: String): List<java.net.InetAddress> {
         lookups += host
+        hang?.also { hang = null }?.await()
         return hosts[host].orEmpty().map { java.net.InetAddress.getByName(it) }
     }
 }

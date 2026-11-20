@@ -2,6 +2,7 @@ package app.recomp.data
 
 import androidx.datastore.preferences.core.edit
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.ai.DnsHostResolver
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.CustomFood
@@ -879,5 +880,49 @@ class AiFlowTest {
         app.clock.instant = Instant.parse("2027-01-02T06:30:00Z")
         val after = ai.estimate("dal", Origin.HOME) as EstimateResult.Estimated
         assertEquals(1.50 + 7.50, ai.request(after.requestId)!!.costUsd, 1e-9)
+    }
+
+    @Test
+    fun `a name lookup that hangs holds up its own estimate only, not the send lock`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("https://ai.far.example/v1", "m", 0.0, 0.0)
+        ai.saveKey("far-test-key")
+        app.resolver.hosts["ai.far.example"] = listOf("104.18.2.115")
+        app.localNetwork.allowed.value = false
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, MealEstimate(listOf(item()), null)) }
+
+        // The first estimate's lookup hangs. A second estimate made meanwhile goes through: nothing queues behind it.
+        val hang = CompletableDeferred<Unit>()
+        app.resolver.hang = hang
+        val first = async { ai.estimate("dal", Origin.HOME) }
+        withTimeout(5_000) { while (app.resolver.lookups.isEmpty()) delay(10) }
+        val second = withTimeout(5_000) { ai.estimate("roti", Origin.HOME) }
+        assertTrue(second is EstimateResult.Estimated)
+        assertFalse(first.isCompleted)
+
+        hang.complete(Unit)
+        assertTrue(withTimeout(5_000) { first.await() } is EstimateResult.Estimated)
+        assertEquals(2, app.estimator.requests.size)
+    }
+
+    @Test
+    fun `the system resolver stops waiting at its limit, even for a lookup that ignores interrupts`() = runBlocking {
+        val release = java.util.concurrent.CountDownLatch(1)
+        val stuck = DnsHostResolver(limitMs = 200) { _ ->
+            // Like `InetAddress.getAllByName` on a network whose DNS hangs: it doesn't respond to an interrupt.
+            while (!release.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)) Unit
+            emptyList()
+        }
+        val started = System.nanoTime()
+        assertTrue(stuck.addresses("slow.example").isEmpty())
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+        release.countDown()
+        assertTrue("gave up after $tookMs ms", tookMs in 150..2_000)
+
+        val quick = DnsHostResolver(limitMs = 3_000) { host -> listOf(java.net.InetAddress.getByAddress(host, byteArrayOf(10, 0, 0, 7))) }
+        assertEquals("10.0.0.7", quick.addresses("box.example").single().hostAddress)
+        val failing = DnsHostResolver(limitMs = 3_000) { throw java.net.UnknownHostException("nowhere.example") }
+        assertTrue(failing.addresses("nowhere.example").isEmpty())
     }
 }

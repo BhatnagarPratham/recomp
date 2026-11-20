@@ -10,7 +10,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.prefs.ExtraSchedule
 import app.recomp.data.prefs.StoredPersona
 import app.recomp.domain.training.LogDates
+import app.recomp.data.prefs.SettingsKeys
 import app.recomp.data.prefs.SettingsPrefs
+import app.recomp.domain.food.MealSlot
+import app.recomp.domain.food.MealTimes
+import app.recomp.domain.food.SnackAllowance
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.persona.Profile
 import java.io.File
@@ -21,6 +25,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -113,5 +118,46 @@ class SettingsPrefsTest {
         prefs.updatePersona { it.copy(strengthDaysPerWeek = 4) }
         assertNull(store.data.first()[personaCopy])
         assertEquals(emptyList<String>(), prefs.unreadable.first())
+    }
+
+    @Test
+    fun `meal slots saved before M9 read without a start, and a start you set is kept`() = runBlocking {
+        val old = """[{"key":"breakfast","name":"Breakfast"},{"key":"meal-1","name":"Pre-workout","removed":true}]"""
+        val (prefs, _) = storeWith(stringPreferencesKey("meal_slots") to old)
+        assertEquals(listOf(MealSlot("breakfast", "Breakfast"), MealSlot("meal-1", "Pre-workout", removed = true)), prefs.mealSlots.first())
+        assertEquals("the default start still applies", 5 * 60, MealTimes.start(prefs.mealSlots.first()[0]))
+        assertEquals(emptyList<String>(), prefs.problems(mutablePreferencesOf(stringPreferencesKey("meal_slots") to old)))
+
+        prefs.edit { mealSlots = mealSlots.map { if (it.key == "meal-1") it.copy(startMinutes = 17 * 60 + 30) else it } }
+        assertEquals(17 * 60 + 30, prefs.mealSlots.first()[1].startMinutes)
+        assertNull(prefs.mealSlots.first()[0].startMinutes)
+
+        // A start outside the day is refused on import and ignored on read.
+        val bad = """[{"key":"breakfast","name":"Breakfast","start":5000}]"""
+        assertEquals(listOf("meal_slots"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("meal_slots") to bad)))
+        assertNull(storeWith(stringPreferencesKey("meal_slots") to bad).first.mealSlots.first()[0].startMinutes)
+    }
+
+    @Test
+    fun `the snack allowance is off until set, and only the offered amounts are kept`() = runBlocking {
+        val (prefs, store) = storeWith()
+        assertNull(prefs.snackAllowance.first())
+        prefs.setSnackAllowance(SnackAllowance(150))
+        assertEquals(SnackAllowance(150, "snacks"), prefs.snackAllowance.first())
+        assertEquals("""{"kcal":150}""", store.data.first()[stringPreferencesKey("snack_allowance")])
+        prefs.setSnackAllowance(SnackAllowance(250, "meal-1"))
+        assertEquals(SnackAllowance(250, "meal-1"), prefs.snackAllowance.first())
+        assertEquals(emptyList<String>(), prefs.problems(store.data.first()))
+        assertTrue("it travels with a settings export", SettingsKeys.exported("snack_allowance"))
+        prefs.setSnackAllowance(null)
+        assertNull(prefs.snackAllowance.first())
+        assertFalse(store.data.first().contains(stringPreferencesKey("snack_allowance")))
+        assertTrue(runCatching { prefs.setSnackAllowance(SnackAllowance(125)) }.isFailure)
+
+        // A value this version doesn't offer reads as off, and an import with one is refused.
+        val odd = """{"kcal":125,"slot":"snacks"}"""
+        assertNull(storeWith(stringPreferencesKey("snack_allowance") to odd).first.snackAllowance.first())
+        assertEquals(listOf("snack_allowance"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("snack_allowance") to odd)))
+        assertEquals(listOf("snack_allowance"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("snack_allowance") to "not json")))
     }
 }
