@@ -300,6 +300,16 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 - **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `harderVariation`, and from M6 `steps` and `assisted`, which default to 1 and false). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
 - **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load (for an assisted lift, its least assistance) differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
 - **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
+- **Rebuilding PRs (WL-10, M10).** PRs are the only derived training data that's stored; the rotation, targets, stall flags and weekly plan are computed from the sessions on every read. So editing, moving or deleting a completed session rebuilds PRs and nothing else.
+  - `PrRebuilder` (`:domain`) takes every completed exposure of one exercise and returns the PRs of the sessions that start at or after `from`. It calls the same `PersonalRecords.detect` as finishing a workout, with the same history: sessions that started earlier (ties by session id), and never a second row of the same exercise in the same session.
+  - A PR depends only on earlier sets, so `from` is the earlier of the session's old and new start, and rows before it are never rewritten. `HistoryRepository.rebuildPrs` deletes the affected exercises' rows from there on and inserts the rebuilt ones, inside the edit's transaction. The affected exercises are every one the session had before the edit.
+  - A rebuild with no `from` recomputes everything. Tests compare the two after each kind of edit, and compare a full rebuild of untouched history with what finishing wrote.
+  - Rebuilt assisted-lift records use today's trend weight, like every other read of them; earlier rows keep the weight of their day (readers use `load_g`, above). Finishing reads at most 500 earlier exposures of an exercise and a rebuild reads all of them, which differs only past 500 sessions of one lift.
+- **Editing a session (WL-10, M10).** `HistoryRepository.saveEdit` is one transaction over a draft the screen holds; only a COMPLETED strength session is accepted.
+  - `log_date` is recomputed from the new start, and every set's `completed_at` moves by the change in start. An added set takes the tick time of the set before it, or the session's end.
+  - `recommendation_json`, `target_sets`, the rep range and rest are never written: they're the plan as shown that day. `user_overrode` is recomputed with the same rule as in a live workout (`Targets.overrode`).
+  - Removing an exercise renormalizes the session's superset groups.
+  - A stall reset is "one millisecond before the start of the session it was chosen in". When that session's start moves, the reset moves with it; when the session is deleted or loses the exercise, the reset is cleared. Resets chosen in other sessions are plain timestamps and are left alone.
 
 ### 5.2 Weight trend (BM-01)
 
@@ -426,6 +436,8 @@ A proposal is always §5.3 recomputed with `tdee_new` at the current pace, and i
 ### 5.5 Weekly volume per muscle (PO-10, P1)
 
 Each working set counts as 1 set for the exercise's primary muscle and 0.5 for each secondary muscle. The weekly total per muscle is compared against an editable reference band (default 10–20). It's for information only and never triggers a notification.
+
+`MuscleVolume` (M10) counts in half sets, so the totals are exact. It takes completed sets of type `WORKING` from COMPLETED sessions whose `log_date` falls in the ISO week (Monday start, as `WeeklyPlan`), grouped per exercise by one query. A muscle listed as both primary and secondary counts once. The Train card also lists, at zero, the primary muscles of the exercises in the rotation's routines; `other` (custom exercises) is left out. The band lives in DataStore as `volume_band_min` and `volume_band_max`; a missing or invalid pair reads as 10–20, and a backup with an invalid pair is refused like any other bad setting.
 
 ### 5.6 InBody trends (IB-02, IB-04)
 
