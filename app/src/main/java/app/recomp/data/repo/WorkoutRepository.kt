@@ -17,6 +17,7 @@ import app.recomp.data.prefs.DayBoundary
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
+import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.PlanRow
 import app.recomp.domain.training.PlanSession
@@ -197,10 +198,7 @@ class WorkoutRepository @Inject constructor(
     private suspend fun recomputeOverride(sessionExerciseId: Long) {
         val row = workoutDao.sessionExercise(sessionExerciseId) ?: return
         val rec = ProgressionRepository.decode(row.recommendationJson)
-        val target = rec?.loadG
-        val loads = workoutDao.completedSets(sessionExerciseId).filter { it.setType == SetType.WORKING }.map { it.loadG ?: 0 }
-        val top = if (rec?.assisted == true) loads.minOrNull() else loads.maxOrNull()
-        val overrode = target != null && top != null && top != target
+        val overrode = Targets.overrode(rec, workoutDao.completedSets(sessionExerciseId).map { it.toLogged() })
         if (overrode != row.userOverrode) workoutDao.setOverrode(row.id, overrode)
     }
 
