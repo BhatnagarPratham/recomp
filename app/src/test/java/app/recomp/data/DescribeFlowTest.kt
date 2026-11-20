@@ -73,6 +73,7 @@ class DescribeFlowTest {
         app.ai,
         app.foodLog,
         app.foods,
+        app.describer,
     )
 
     private val phulka = EstimatedItem("Phulka", 2.0, "piece", 70.0, 210.0, 6.5, 42.0, 1.5, 4.0, Confidence.HIGH, "no ghee")

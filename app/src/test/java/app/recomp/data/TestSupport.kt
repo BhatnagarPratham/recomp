@@ -20,6 +20,7 @@ import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.LegacyTrainingMigration
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.AiRepository
+import app.recomp.data.repo.MealDescriber
 import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.FoodLogRepository
@@ -208,6 +209,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var ai: AiRepository
         private set
+    lateinit var describer: MealDescriber
+        private set
     lateinit var body: BodyRepository
         private set
     lateinit var backup: BackupManager
@@ -236,6 +239,7 @@ class TestApp(private val dir: File) {
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, foods, clock)
+        describer = MealDescriber(ai, foods)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)

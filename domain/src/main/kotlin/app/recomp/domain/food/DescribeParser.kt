@@ -89,6 +89,10 @@ object DescribeParser {
         return ParsedMeal(items, unmatched)
     }
 
+    /** A typed chunk without its amount and unit ("1 katori cucumber salad" → "cucumber salad"), to search for or name a quick add. */
+    fun nameOf(typed: String): String =
+        chunk(Quantities.tokens(Quantities.normalise(typed)), emptySet(), keepSoft = true)?.name?.joinToString(" ") ?: typed.trim()
+
     /** Splits at "and" and "with", except an "and" inside an amount ("one and a half"). */
     internal fun softSplit(tokens: List<String>): List<List<String>> {
         val parts = mutableListOf(mutableListOf<String>())

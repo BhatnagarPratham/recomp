@@ -322,6 +322,14 @@ class DescribeParserTest {
     }
 
     @Test
+    fun `a chunk's name leaves out its amount and unit`() {
+        assertEquals("cucumber salad", DescribeParser.nameOf("1 katori cucumber salad"))
+        assertEquals("salad", DescribeParser.nameOf("salad"))
+        assertEquals("paneer", DescribeParser.nameOf("150 g paneer"))
+        assertEquals("2", DescribeParser.nameOf(" 2 "))
+    }
+
+    @Test
     fun `a long description is cut off, not refused`() {
         val long = List(40) { "2 roti" }.joinToString(", ")
         val meal = parse(long)

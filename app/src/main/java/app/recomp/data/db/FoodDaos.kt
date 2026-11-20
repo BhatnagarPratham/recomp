@@ -139,6 +139,10 @@ interface FoodDao {
     @Query("DELETE FROM food_unit WHERE food_id = :foodId")
     suspend fun deleteUnits(foodId: Long)
 
+    /** Every own unit label, so the local parser reads them as units (AI-04). */
+    @Query("SELECT DISTINCT label FROM food_unit")
+    suspend fun unitLabels(): List<String>
+
     @Query("DELETE FROM food_unit WHERE food_id = :foodId AND calibrated = 0")
     suspend fun deleteUncalibratedUnits(foodId: Long)
 }
@@ -170,6 +174,10 @@ interface FoodLogDao {
     /** The last time a food was logged, for the portion sheet's prefill. */
     @Query("SELECT * FROM food_log WHERE food_id = :foodId ORDER BY logged_at DESC, id DESC LIMIT 1")
     suspend fun lastOf(foodId: Long): FoodLogEntity?
+
+    /** The unit each of these foods was logged in last, for the local parser's serving (AI-04). */
+    @Query("SELECT food_id, unit_label FROM food_log WHERE id IN (SELECT MAX(id) FROM food_log WHERE food_id IN (:foodIds) GROUP BY food_id)")
+    suspend fun lastUnits(foodIds: List<Long>): List<LastUnitRow>
 
     @Query("SELECT * FROM food_log WHERE id = :id")
     suspend fun get(id: Long): FoodLogEntity?
