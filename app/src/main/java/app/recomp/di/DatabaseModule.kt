@@ -13,6 +13,7 @@ import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
+import app.recomp.data.db.NudgeDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.ProgrammeReviewDao
 import app.recomp.data.db.ReviewDao
@@ -37,6 +38,14 @@ annotation class SettingsStore
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
 annotation class WorkoutStateStore
+
+/**
+ * Device state (TRD §4): what belongs to this phone, not to your data, such as the reminder ledger. Its file is in
+ * neither exports nor Android's own backup, so a restored or transferred phone starts it fresh.
+ */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class DeviceStore
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -83,6 +92,18 @@ object DatabaseModule {
 
     @Provides
     fun provideProgrammeReviewDao(db: AppDatabase): ProgrammeReviewDao = db.programmeReviewDao()
+
+    @Provides
+    fun provideNudgeDao(db: AppDatabase): NudgeDao = db.nudgeDao()
+
+    @Provides
+    @Singleton
+    @DeviceStore
+    fun provideDeviceStore(@ApplicationContext context: Context): DataStore<Preferences> =
+        PreferenceDataStoreFactory.create { context.preferencesDataStoreFile(DEVICE_FILE) }
+
+    /** The device store's file name; `data_extraction_rules.xml` must never include it. */
+    const val DEVICE_FILE = "device"
 
     @Provides
     @Singleton

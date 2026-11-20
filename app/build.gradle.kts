@@ -203,6 +203,8 @@ dependencies {
 
     implementation(libs.datastore.preferences)
     implementation(libs.health.connect)
+    // HM-05: the home-screen widget (TRD §2).
+    implementation(libs.glance.appwidget)
     implementation(libs.anthropic.java)
     // OpenAI, Gemini and OpenAI-compatible servers (AI-05): plain HTTP with kotlinx.serialization, no SDKs. The Anthropic SDK already brings OkHttp.
     implementation(libs.okhttp)

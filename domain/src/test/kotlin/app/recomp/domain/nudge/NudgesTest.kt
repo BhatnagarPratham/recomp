@@ -156,6 +156,8 @@ class NudgesTest {
         val slots = MealSlots.DEFAULT
         assertEquals("lunch", MealClock.slotAt(slots, LocalTime.of(14, 30))?.key)
         assertEquals("dinner", MealClock.slotAt(slots, LocalTime.of(20, 30))?.key)
+        // A suggestion tapped after midnight still goes with the evening's meal.
+        assertEquals("dinner", MealClock.slotAt(slots, LocalTime.of(1, 0))?.key)
     }
 
     @Test

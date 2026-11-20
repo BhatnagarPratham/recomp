@@ -10,6 +10,8 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Reminders are set again after a restart (RM-01, TRD §6.6). They use inexact alarms, so no exact-alarm permission. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Keeps the rest timer's alert on time while the phone sleeps during a rest (TRD §6.1). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -70,5 +72,35 @@
             android:name=".workout.ActiveWorkoutService"
             android:exported="false"
             android:foregroundServiceType="health" />
+
+        <!-- RM-01 (TRD §6.6): the reminder alarm, and what can make it stale: a restart, an app update, a clock or time-zone change. -->
+        <receiver
+            android:name=".reminders.ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+            </intent-filter>
+        </receiver>
+
+        <!-- The evening nudge's buttons: log a suggested portion, and Undo (NU-23). -->
+        <receiver
+            android:name=".reminders.NudgeActionReceiver"
+            android:exported="false" />
+
+        <!-- HM-05: the home-screen widget. -->
+        <receiver
+            android:name=".widget.RecompWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/recomp_widget_info" />
+        </receiver>
     </application>
 </manifest>
