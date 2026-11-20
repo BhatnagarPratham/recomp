@@ -118,7 +118,7 @@ class FoodRepository @Inject constructor(
         val origin = last?.origin ?: if (food.brand != null) Origin.PACKAGED else Origin.HOME
         return when {
             last != null && lastUnit != null -> PortionChoice(food, units, last.quantity, lastUnit, origin)
-            units.first().kind == PortionUnit.Kind.OWN && (food.source == FoodSource.CUSTOM || Portions.plausible(units.first().grams)) ->
+            units.first().kind == PortionUnit.Kind.OWN && (food.source in YOUR_OWN || Portions.plausible(units.first().grams)) ->
                 PortionChoice(food, units, 1.0, units.first(), origin)
             else -> PortionChoice(food, units, 100.0, units.last(), origin)
         }
@@ -201,4 +201,9 @@ class FoodRepository @Inject constructor(
 
     /** How many INDB foods this phone has (Settings → Food → Food data). */
     fun observeIndbCount(): Flow<Int> = foodDao.observeCount(FoodSource.INDB.name)
+
+    private companion object {
+        /** Foods whose serving you set yourself, so it prefills however big it is: custom foods and recipes (M14). */
+        val YOUR_OWN = setOf(FoodSource.CUSTOM, FoodSource.RECIPE)
+    }
 }

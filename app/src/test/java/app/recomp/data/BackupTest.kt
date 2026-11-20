@@ -22,6 +22,8 @@ import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
+import app.recomp.data.repo.RecipeDraft
+import app.recomp.data.repo.RecipeSaved
 import app.recomp.data.repo.ScanInput
 import app.recomp.data.repo.SegmentalLean
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
@@ -112,6 +114,11 @@ class BackupTest {
         app.foodLog.log(today, "lunch", paneer, 150.0, grams, Origin.HOME)
         app.foodLog.quickAdd(today.minusDays(1), "snacks", "Bar", 210.0, 20.5, null, 7.25, Origin.PACKAGED)
         app.foodLog.saveMeal("My lunch", today, "lunch")
+        // Recipes (M14): one with a cooked weight and servings, used inside another, and logged.
+        val curd = app.foods.search("curd").first().food
+        val bhurji = (app.recipes.save(null, RecipeDraft("Paneer bhurji", listOf(paneer.id to 200.0, curd.id to 50.0), 230.0, 2.0)) as RecipeSaved.Ok).foodId
+        app.recipes.save(null, RecipeDraft("Bhurji bowl", listOf(bhurji to 115.0, curd.id to 100.0), null, 1.0))
+        app.foodLog.log(today, "dinner", app.foods.food(bhurji)!!, 1.0, app.foods.units(bhurji).first(), Origin.HOME)
 
         // Training: a finished workout with a superset and a ticked set, a PR, and a yoga class.
         val routine = app.training.observeNextRoutine().first()!!
@@ -376,6 +383,33 @@ class BackupTest {
         assertTrue(s.noticeSeen(AiKind.MEAL_TEXT))
         assertFalse(s.copy(provider = AiProviderId.OPENAI).noticeSeen(AiKind.MEAL_TEXT))
         assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+    }
+
+    @Test
+    fun `an M7 v10 backup imports into M14's schema with its foods, and recipes work on top of them`() = runBlocking {
+        // The phone before M14: a custom food with a serving, logged once. No recipe tables in the file at all.
+        val v10 = backupAt(10) { db ->
+            db.execSQL(
+                "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, archived, created_at) " +
+                    "VALUES (1, 'Test dal', 'CUSTOM', 'VEGAN', 120, 7, 18, 2, 4, 1, 0, 1)",
+            )
+            db.execSQL("INSERT INTO food_unit (food_id, label, grams, calibrated) VALUES (1, 'katori', 180, 1)")
+            db.execSQL(
+                "INSERT INTO food_log (log_date, meal_slot, food_id, name, quantity, unit_label, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, origin, source, logged_at) " +
+                    "VALUES ('2026-10-18', 'lunch', 1, 'Test dal', 1, 'katori', 180, 216, 12.6, 32.4, 3.6, 7.2, 'HOME', 'MANUAL', 1)",
+            )
+        }
+        assertFalse("recipe" in json.decodeFromString<DatabaseData>(entries(v10).getValue(BackupManager.DATABASE)).tables)
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(v10)))
+
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+        assertEquals(216.0, app.foodLog.day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
+        assertEquals(emptyList<Any>(), app.db.backupCheckDao().recipe())
+        assertEquals(emptyList<Any>(), app.db.backupCheckDao().recipeIngredient())
+        // The new tables are there and usable: a recipe made from the restored food.
+        val id = (app.recipes.save(null, RecipeDraft("Dal bowl", listOf(1L to 300.0), 600.0, 2.0)) as RecipeSaved.Ok).foodId
+        assertEquals(60.0, app.foods.food(id)!!.kcal100g, 1e-9)
+        assertEquals(listOf("Dal bowl"), app.foods.search("bowl").map { it.food.name })
     }
 
     @Test

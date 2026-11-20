@@ -18,6 +18,8 @@ import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.NutritionTargetEntity
+import app.recomp.data.db.RecipeEntity
+import app.recomp.data.db.RecipeIngredientEntity
 import app.recomp.data.db.TargetReason
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiProviderId
@@ -433,7 +435,7 @@ class MigrationTest {
             it.moveToFirst()
             assertEquals("ANTHROPIC", it.getString(0))
         }
-        assertEquals(10, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
     }
 
@@ -485,6 +487,96 @@ class MigrationTest {
         runBlocking {
             assertEquals(1L, room.workoutDao().session(1)!!.id)
             assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `10 to 11 keeps foods, units, logs and saved meals, and adds recipes on top of them`() {
+        val file = File(tmp.root, "v10.db")
+        createAt(10, file).use { db ->
+            // The phone's v10: a custom food with a calibrated unit, logged and in a saved meal, and an AI request.
+            db.execSQL(
+                "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, last_used_at, archived, created_at) " +
+                    "VALUES (1, 'Test dal', 'CUSTOM', 'VEGAN', 120, 7, 18, 2, 4, 1, 5, 0, 1)",
+            )
+            db.execSQL(
+                "INSERT INTO food (id, name, source, source_key, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, archived, created_at) " +
+                    "VALUES (2, 'Test ghee', 'SEED', 'seed:test-ghee', 'VEGETARIAN', 900, 0, 0, 100, 0, 0, 0, 1)",
+            )
+            db.execSQL("INSERT INTO food_unit (food_id, label, grams, calibrated) VALUES (1, 'katori', 180, 1)")
+            db.execSQL(
+                "INSERT INTO food_log (log_date, meal_slot, food_id, name, quantity, unit_label, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, origin, source, logged_at) " +
+                    "VALUES ('2026-10-18', 'lunch', 1, 'Test dal', 1, 'katori', 180, 216, 12.6, 32.4, 3.6, 7.2, 'HOME', 'MANUAL', 5)",
+            )
+            db.execSQL("INSERT INTO saved_meal (id, name, default_slot, use_count, created_at) VALUES (1, 'My lunch', 'lunch', 0, 1)")
+            db.execSQL(
+                "INSERT INTO saved_meal_item (saved_meal_id, position, food_id, name, quantity, unit_label, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, origin) " +
+                    "VALUES (1, 0, 1, 'Test dal', 1, 'katori', 180, 216, 12.6, 32.4, 3.6, 7.2, 'HOME')",
+            )
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, provider) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'gpt-6-luna', 2000, 1000, 0, 0, 0.002, 'OK', 4000, 'OPENAI')",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val foods = room.foodDao()
+            val dal = foods.get(1)!!
+            assertEquals(listOf("Test dal", FoodSource.CUSTOM, 120.0, 1), listOf(dal.name, dal.source, dal.kcal100g, dal.useCount))
+            assertEquals(listOf("katori" to 180.0), foods.units(1).map { it.label to it.grams })
+            assertEquals(216.0, room.foodLogDao().day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
+            assertEquals(1L, room.savedMealDao().get(1)!!.items.single().foodId)
+            assertEquals(AiProviderId.OPENAI, room.aiDao().request(1)!!.provider)
+
+            // No recipes yet, and the new tables take one built from the old foods.
+            val recipes = room.recipeDao()
+            assertEquals(emptyList<Any>(), recipes.links())
+            val id = foods.insert(
+                FoodEntity(name = "Test tadka dal", source = FoodSource.RECIPE, diet = FoodDiet.VEGETARIAN, kcal100g = 150.0, protein100g = 7.0, carbs100g = 18.0, fat100g = 5.0, fiber100g = 4.0, createdAt = 2),
+            )
+            recipes.upsert(RecipeEntity(id, servings = 2.0, cookedWeightG = 300.0))
+            recipes.insertIngredients(listOf(RecipeIngredientEntity(recipeId = id, position = 0, foodId = 1, grams = 300.0), RecipeIngredientEntity(recipeId = id, position = 1, foodId = 2, grams = 10.0)))
+            assertEquals(RecipeEntity(id, 2.0, 300.0), recipes.get(id))
+            assertEquals(listOf(1L to 300.0, 2L to 10.0), recipes.ingredients(id).map { it.foodId to it.grams })
+            assertEquals(FoodSource.RECIPE, foods.get(id)!!.source)
+        }
+        // The links are real foreign keys: an ingredient that isn't a food is refused, and so is a recipe that isn't one.
+        val db = room.openHelper.writableDatabase
+        listOf(
+            "INSERT INTO recipe_ingredient (recipe_id, position, food_id, grams) VALUES (3, 2, 99, 5)",
+            "INSERT INTO recipe (food_id, servings) VALUES (99, 1)",
+        ).forEach { sql ->
+            try {
+                db.execSQL(sql)
+                org.junit.Assert.fail("$sql should break a foreign key")
+            } catch (e: android.database.SQLException) {
+                // expected
+            }
+        }
+        assertEquals(11, db.version)
+        room.close()
+    }
+
+    @Test
+    fun `9 to 10 to 11 in one open keeps the AI log and foods`() {
+        val file = File(tmp.root, "v9-two-hops.db")
+        createAt(9, file).use { db ->
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'claude-opus-5-5', 2000, 1000, 0, 0, 0.028, 'OK', 4000)",
+            )
+            db.execSQL(
+                "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, archived, created_at) " +
+                    "VALUES (1, 'Test dal', 'CUSTOM', 'VEGAN', 120, 7, 18, 2, 4, 0, 0, 1)",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(AiProviderId.ANTHROPIC, room.aiDao().request(1)!!.provider)
+            assertEquals("Test dal", room.foodDao().get(1)!!.name)
+            assertEquals(emptyList<Any>(), room.recipeDao().links())
         }
         assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
