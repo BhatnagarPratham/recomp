@@ -487,7 +487,8 @@ maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached
 - **The pace step** shows each pace's projection in kg a week, plus when the goal weight would be reached ("around mid-March"), using the suggested goal weight until you change it. For a date finish line it shows the expected change by that date.
 - **The weekly review** (M8, `WeeklyReview.outlook`) recomputes it each week from the trend as of the week's end, for the goal after the guardrails.
   - Only for a week of the current plan: one that ended on or after `GoalPlan.startedOn`. An earlier week has no pace or finish line, and the review says why (PRD §12.4). Its goal comes from the target version in force on its Sunday, or else its check-in's flag.
-  - The rate is the trend's change over min(28 days, days since `startedOn`), per week, so it never reaches into an earlier goal. Under 7 days, or when the trend doesn't reach that far, it's the week's rate. Either needs a weigh-in in the week.
+  - The rate is the trend's change over min(28 days, days since `startedOn`), per week, so it never reaches into an earlier goal. When the trend doesn't reach that far, it's the week's rate. Either needs a weigh-in in the week.
+  - Under 7 days into the plan (at the week's last weigh-in) there's no rate, since any week's would still be the plan before. The finish line *needs data*: "The date appears once your plan is a week old".
   - At the target or past it, the way the goal goes (at or under it for fat loss and recomp, at or over it for a lean bulk, exactly at it for Maintain), it's *reached*.
   - Under 0.05 kg a week either way is *steady* (no date). Over 104 weeks is *far off*.
   - A body-fat finish line uses the slope ÷ 4 of the scans since `startedOn` (steady under 0.1 points a week). At or under the target %, it's reached.
@@ -1336,7 +1337,8 @@ The check-in screen became the review. Its 7-day averages and trend line moved i
   - The chart's change labels and slope are over the chosen range, and say which.
   - An off-protocol scan no longer hides the week's on-protocol one.
   - "−0.0 kg" reads "no change this week".
-  - A past week's Training shows what was done, since the plan has no history.
+  - Training: this week and the week just finished count against today's plan, which has almost never changed since; an older week shows what was done, since the plan has no history.
+  - From the re-check: in a plan's first week the finish line could still read "Moving away", from a week's rate reaching back before the plan. It now says the date appears once the plan is a week old.
   - The waist compares with a reading at most 4 weeks older, and names its date.
   - Today's weekly-plan line is a 48 dp target.
   - Body-fat changes are in points.
@@ -1358,7 +1360,7 @@ Tests cover:
     - a week's month.
 - Repository:
   - the range of weeks;
-  - strength days and each extra session against the plan this week, and what was done in a past week;
+  - strength days and each extra session against the plan this week and the week just finished, and what was done in an older week;
   - each week's own PRs and stall cards;
   - food across the ramp's baseline week, a mid-week target change and an incomplete day, with origin shares;
   - the current week up to yesterday;
@@ -1366,12 +1368,12 @@ Tests cover:
   - the waist compared only with a reading at most 4 weeks older;
   - the finish line, including moving away;
   - a week before a goal change, and the same goal set again: no pace or finish line, with the week's own goal from its target version or check-in;
-  - the finish line's rate after a change of direction at the plan's start, and under a week into it;
+  - the finish line's rate after a change of direction at the plan's start, and no direction under a week into it, including a plan started mid-week;
   - a body-fat finish line on the plan's own scans;
   - steps and sleep hidden while empty;
   - an empty week;
   - the calendar.
-- Text: PR lines per lift; the finish line's goal and *reached*; "no change" for a change that rounds to 0.0; body fat in points; a past week's Training; the note on an earlier plan.
+- Text: PR lines per lift; the finish line's goal, *reached* and a new plan's *needs data*; "no change" for a change that rounds to 0.0; body fat in points; an older week's Training; the note on an earlier plan.
 - `CheckinViewModel`: ‹ and › within the range, the week shown kept until the next has loaded, and an answer that finishes after the week changed.
 
 | Check | Result |

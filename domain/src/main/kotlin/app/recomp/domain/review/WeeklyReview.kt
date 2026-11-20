@@ -39,8 +39,11 @@ sealed interface FinishOutlook {
     /** A date finish line: the change expected by then. */
     data class ByDate(val date: LocalDate, val changeKg: Double) : FinishOutlook
 
-    /** Not enough trend yet for a rate, or ([bodyFat]) under three on-protocol scans for a body-fat finish line. */
-    data class NeedsData(val bodyFat: Boolean = false) : FinishOutlook
+    /**
+     * Not enough trend yet for a rate, or ([bodyFat]) under three on-protocol scans for a body-fat finish line. With
+     * [newPlan], the plan is under a week old, and a week's rate would still be the plan before it.
+     */
+    data class NeedsData(val bodyFat: Boolean = false, val newPlan: Boolean = false) : FinishOutlook
 }
 
 /** A day of the consistency calendar (HM-04): what happened, never what didn't. */

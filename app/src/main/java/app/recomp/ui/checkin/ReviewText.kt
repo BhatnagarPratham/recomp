@@ -42,7 +42,7 @@ object ReviewText {
 
     /**
      * "Strength 2 of 3 days · Yoga class 1 of 1". An extra session without set days counts without a plan, and so does
-     * a past week, whose plan isn't kept: "Strength 2 days · Yoga class 1".
+     * a week older than the last one, whose plan isn't kept: "Strength 2 days · Yoga class 1".
      */
     fun plan(t: TrainingWeek): String {
         val target = t.strengthTarget
@@ -50,7 +50,7 @@ object ReviewText {
         return (listOf(strength) + t.extras.map { e -> e.planned?.takeIf { it > 0 }?.let { "${e.name} ${e.done} of $it" } ?: "${e.name} ${e.done}" }).joinToString(" · ")
     }
 
-    const val PAST_PLAN = "What you did. Your weekly plan isn't kept for past weeks, so there's nothing to count it against."
+    const val PAST_PLAN = "What you did. Your weekly plan isn't kept for older weeks, so there's nothing to count it against."
 
     /** How many lifts' PRs the Training section lists before "and N more". */
     const val RECORDS_SHOWN = 5
@@ -126,8 +126,11 @@ object ReviewText {
         FinishOutlook.Steady -> "Holding steady, so there's no date at this rate"
         FinishOutlook.FarOff -> "More than two years away at this rate"
         is FinishOutlook.ByDate -> "At this rate: ${BodyText.signed(o.changeKg, "kg")} by ${BodyText.shortDate(o.date)}"
-        is FinishOutlook.NeedsData ->
-            if (o.bodyFat) "The date appears from three on-protocol scans" else "The date appears with a weigh-in this week, once your trend spans a week"
+        is FinishOutlook.NeedsData -> when {
+            o.bodyFat -> "The date appears from three on-protocol scans"
+            o.newPlan -> "The date appears once your plan is a week old"
+            else -> "The date appears with a weigh-in this week, once your trend spans a week"
+        }
     }
 
     // The calendar (HM-04)

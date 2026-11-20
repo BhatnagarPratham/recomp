@@ -759,7 +759,7 @@ These rules hold for every block:
 - **Sections,** after the headline, verdict and proposal (§12.1):
   - **Food:** average calories and protein against target; protein days hit (95% or more of that day's target; the ramp's baseline week, which has no target, is left out); and the share of calories from *Ordered* and *Packaged* food. Days marked incomplete are left out of all three, as from the 7-day average (§12.1).
   - **Training:** sessions done against planned, for strength and each extra session; PRs; and lifts showing a stall card.
-    - Only the current week counts against the plan. The weekly plan is a setting with no history, so a past week shows what was done ("Strength 2 days · Yoga class 1") and says its plan isn't kept.
+    - The current week and the week just finished count against today's plan ("Strength 2 of 3 days"); the plan has almost never changed since the week just finished. The weekly plan is a setting with no history, so an older week shows what was done ("Strength 2 days · Yoga class 1") and says its plan isn't kept.
     - PRs show one line per lift, with each kind of record at its latest value that week. Five lifts show, then "and 3 more lifts with PRs".
     - A lift counts as stalled when its card showed a stall in one of the week's workouts.
   - **Body:** the trend weight's change and the goal's pace; the waist and its change; the week's scan against the previous one, with noise labels; average steps and sleep, once M13 tracks them.
@@ -770,7 +770,7 @@ These rules hold for every block:
   - another goal, from its target version (or its check-in's flag): "This week's goal was Lean bulk, before your current one from 3 Aug, so it isn't judged against today's pace or finish line";
   - or the same goal set again since, when what it was then isn't kept.
 - **The finish line:** "At this rate: around mid-March (goal 78 kg)", or "Moving away from your goal", recomputed each week from the trend (§4.2). <!-- pii-ok: illustrative -->
-  - The rate is the trend's change over the last 4 weeks, or since the plan started when that's sooner, so a goal change doesn't carry the old direction. Under a week into a plan, it's the week's rate.
+  - The rate is the trend's change over the last 4 weeks, or since the plan started when that's sooner, so a goal change doesn't carry the old direction. In a plan's first week any rate would still be the plan before, so it reads "The date appears once your plan is a week old".
   - At the goal weight or past it, the way the goal goes (down for fat loss and recomp, up for a lean bulk), it reads "You've reached your goal weight (78 kg)". M19 adds the Goal reached card. <!-- pii-ok: illustrative -->
   - Barely moving (under 0.05 kg a week) reads "Holding steady, so there's no date at this rate", and over two years out reads "More than two years away at this rate".
   - A date finish line shows the change expected by then. A body-fat finish line runs on the slope of the plan's own scans, from three on-protocol ones.

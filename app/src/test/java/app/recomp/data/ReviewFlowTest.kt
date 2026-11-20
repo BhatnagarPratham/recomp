@@ -129,17 +129,26 @@ class ReviewFlowTest {
         assertEquals(target, running.strengthTarget)
         assertEquals(listOf(ExtraDone("Yoga class", done = 1, planned = 1)), running.extras)
         assertEquals(0, reviews.week(date(7), today = date(8)).training.extras.single().done)
-        // Once it's past, the plan then isn't kept, so it's what was done: no target, and only the extras done.
+        // The week just finished still counts against today's plan: it has almost never changed since.
+        assertEquals(running, reviews.week(date(0), today = date(10)).training)
+        assertEquals("Strength 2 of $target days · Yoga class 1 of 1", ReviewText.plan(running))
+        // An older week's plan isn't kept, so it's what was done: no target, and only the extras done.
         val week = reviews.week(date(0), today = date(20)).training
         assertEquals(2, week.strengthDays)
         assertNull(week.strengthTarget)
         assertEquals(listOf(ExtraDone("Yoga class", done = 1, planned = null)), week.extras)
         assertEquals(listOf(stalledRow.exercise.name), week.stalled)
         assertEquals("Strength 2 days · Yoga class 1", ReviewText.plan(week))
+        // Week 1 is now the one just finished: against the plan, the yoga class it didn't have included.
         val next = reviews.week(date(7), today = date(20)).training
         assertEquals(1, next.strengthDays)
-        assertTrue(next.extras.isEmpty())
+        assertEquals(target, next.strengthTarget)
+        assertEquals(listOf(ExtraDone("Yoga class", done = 0, planned = 1)), next.extras)
         assertTrue(next.stalled.isEmpty())
+        // A week later it's older, and only what was done shows.
+        val older = reviews.week(date(7), today = date(21)).training
+        assertNull(older.strengthTarget)
+        assertTrue(older.extras.isEmpty())
         // First workouts set no PRs (there's nothing to beat), so the test sets one in each week: each week lists its own.
         assertTrue(week.records.isEmpty())
         suspend fun pr(session: Long, kg: Int) = app.db.workoutDao().insertRecords(
@@ -325,12 +334,27 @@ class ReviewFlowTest {
         assertEquals(WeeklyReview.outlook(cut(date(28)), date(41), trend, sinceCut), outlook)
         assertTrue("$outlook", outlook is FinishOutlook.Around)
 
-        // Under a week into the cut, it's the week's rate.
+        // In the cut's first week any week's rate would still be the gaining weeks, so there's no direction yet.
         val early = points.filter { !it.date.isAfter(date(31)) }
-        assertEquals(
-            WeeklyReview.outlook(cut(date(28)), date(31), early.last().trendKg, TrendCalculator.weeklyRate(early)!!.kgPerWeek),
-            reviews.week(date(28), today = date(31)).outlook,
-        )
+        assertTrue(TrendCalculator.weeklyRate(early)!!.kgPerWeek > 0)
+        assertEquals(FinishOutlook.NeedsData(newPlan = true), reviews.week(date(28), today = date(31)).outlook)
+        assertEquals(FinishOutlook.NeedsData(newPlan = true), reviews.week(date(28), today = date(36)).outlook)
+    }
+
+    @Test
+    fun `a plan started mid-week has no direction until it's a week old`() = runBlocking {
+        onboard()
+        // Gaining, then a cut from Thursday of week 4 (day 31) losing every day.
+        fun kg(d: Int) = if (d < 31) 84.0 + 0.1 * d else 84.0 + 0.1 * 30 - 0.1 * (d - 30)
+        (0..41).forEach { app.body.logWeighIn((kg(it) * 1000).roundToInt(), WeightSource.HOME_SCALE, at(it, 7)) }
+        app.personas.save(plan = cut(date(31)), now = at(31))
+        val week = reviews.week(date(28), today = date(36))
+        assertEquals(WeekPlan.Current, week.plan)
+        assertEquals(FinishOutlook.NeedsData(newPlan = true), week.outlook)
+        assertEquals("The date appears once your plan is a week old", ReviewText.outlook(week.outlook!!))
+        // The next week the plan is 10 days old at its last weigh-in: a rate over those days.
+        val next = reviews.week(date(35), today = date(43)).outlook
+        assertTrue("$next", next !is FinishOutlook.NeedsData)
     }
 
     @Test

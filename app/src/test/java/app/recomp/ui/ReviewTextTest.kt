@@ -59,6 +59,8 @@ class ReviewTextTest {
         // At the goal or past it, it's reached, never "moving away".
         assertEquals("You've reached your goal weight (76 kg)", ReviewText.outlook(FinishOutlook.Reached(76.0)))
         assertEquals("You've reached your body-fat goal (15%)", ReviewText.outlook(FinishOutlook.Reached(15.0, bodyFat = true)))
+        assertEquals("The date appears once your plan is a week old", ReviewText.outlook(FinishOutlook.NeedsData(newPlan = true)))
+        assertEquals("The date appears from three on-protocol scans", ReviewText.outlook(FinishOutlook.NeedsData(bodyFat = true)))
     }
 
     private fun body(changeKg: Double?, changePct: Double?) = BodyWeek(80.9, changeKg, changePct, null, null, null)

@@ -37,14 +37,15 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
 
 /**
- * Sessions done against planned for one extra session (PRD §7.6): [planned] is 0 for "whenever", and null for a past
- * week, whose plan isn't kept.
+ * Sessions done against planned for one extra session (PRD §7.6): [planned] is 0 for "whenever", and null for a week
+ * older than the last one, whose plan isn't kept.
  */
 data class ExtraDone(val name: String, val done: Int, val planned: Int?)
 
 /**
  * The review's Training section (HM-03): the weekly plan, PRs and lifts that showed a stall card. The weekly plan is a
- * setting with no history, so only the current week has a [strengthTarget]; a past week shows what was done.
+ * setting with no history, so only this week and the week just finished, where it has almost never changed, count
+ * against today's plan and have a [strengthTarget]. An older week shows what was done.
  */
 data class TrainingWeek(val strengthDays: Int, val strengthTarget: Int?, val extras: List<ExtraDone>, val records: List<WeekRecordRow>, val stalled: List<String>)
 
@@ -139,7 +140,8 @@ class ReviewRepository @Inject constructor(
             weekStart = weekStart,
             inProgress = inProgress,
             food = food(weekStart, end, day, inProgress),
-            training = training(weekStart, end, inProgress),
+            // This week and the one just finished count against today's plan.
+            training = training(weekStart, end, againstPlan = !weekStart.isBefore(WeeklyPlan.weekStart(day).minusWeeks(1))),
             body = body(weekStart, asOf, current),
             activity = activity(weekStart, end),
             plan = weekPlan,
@@ -171,12 +173,12 @@ class ReviewRepository @Inject constructor(
         return if (goal != null && goal != plan.goal) WeekPlan.EarlierGoal(goal, plan.startedOn) else WeekPlan.EarlierPlan(plan.startedOn)
     }
 
-    private suspend fun training(start: LocalDate, end: LocalDate, inProgress: Boolean): TrainingWeek {
+    private suspend fun training(start: LocalDate, end: LocalDate, againstPlan: Boolean): TrainingWeek {
         val sessions = reviewDao.sessions(start, end).map { PlanSession(it.logDate, it.kind, it.routineId) }
         val records = reviewDao.records(start, end)
         val stalled = stalled(start, end)
-        if (!inProgress) {
-            // Settings keep no history, so a past week is what was done, extra sessions by the routine they used.
+        if (!againstPlan) {
+            // Settings keep no history, so an older week is what was done, extra sessions by the routine they used.
             val done = sessions.filter { it.kind != SessionKind.STRENGTH && it.routineId != null }.groupingBy { it.routineId!! }.eachCount()
             return TrainingWeek(
                 strengthDays = WeeklyPlan.progress(start, sessions, 0, emptyList()).strengthDays,
@@ -242,22 +244,24 @@ class ReviewRepository @Inject constructor(
     /**
      * The finish line at the trend's rate as of [asOf] (TRD §5.8), for the current [plan]. The rate is the change over
      * the last 4 weeks, or since the plan started when that's sooner, per week: steadier than one week's, and never
-     * reaching back into an earlier goal. Under a week into the plan, it's the week's rate.
+     * reaching back into an earlier goal. Under a week into the plan there's no rate yet, since any week's would still
+     * be the plan before: the finish line says the date comes once the plan is a week old.
      */
     private suspend fun outlook(start: LocalDate, asOf: LocalDate, plan: GoalPlan): FinishOutlook? {
         val points = trend(asOf)
         val anchor = points.lastOrNull()?.takeIf { !it.date.isBefore(start) }
-        val kgPerWeek = anchor?.let { a ->
-            val lookback = minOf(FOUR_WEEKS, ChronoUnit.DAYS.between(plan.startedOn, a.date))
-            lookback.takeIf { it >= WEEK }
-                ?.let { days -> TrendCalculator.trendAt(points, a.date.minusDays(days))?.let { (a.trendKg - it) / days * WEEK } }
+        val lookback = anchor?.let { minOf(FOUR_WEEKS, ChronoUnit.DAYS.between(plan.startedOn, it.date)) }
+        val newPlan = lookback != null && lookback < WEEK
+        val kgPerWeek = anchor?.takeIf { !newPlan }?.let { a ->
+            TrendCalculator.trendAt(points, a.date.minusDays(lookback!!))?.let { (a.trendKg - it) / lookback * WEEK }
                 ?: TrendCalculator.weeklyRate(points)?.kgPerWeek
         }
         val scans = scans().filter { !it.date.isAfter(asOf) }
         val bodyFat = ScanTrends.onProtocol(scans).lastOrNull()?.bodyFatPct
         // The slope, like the weight's rate, is over the plan's own scans.
         val bodyFatPerWeek = ScanTrends.slopes(ScanTrends.since(scans, plan.startedOn))?.bodyFatPct?.div(4)
-        return WeeklyReview.outlook(plan, asOf, anchor?.trendKg, kgPerWeek, bodyFat, bodyFatPerWeek)
+        val outlook = WeeklyReview.outlook(plan, asOf, anchor?.trendKg, kgPerWeek, bodyFat, bodyFatPerWeek)
+        return if (newPlan && outlook == FinishOutlook.NeedsData()) FinishOutlook.NeedsData(newPlan = true) else outlook
     }
 
     /** The goal after the guardrails (PRD §4.9), as Settings and the check-in use it. */
