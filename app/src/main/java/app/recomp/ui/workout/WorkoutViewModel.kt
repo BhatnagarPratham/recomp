@@ -146,6 +146,10 @@ class WorkoutViewModel @Inject constructor(
     private val title = MutableStateFlow("")
     private var routineId: Long? = null
 
+    /** PRD §4.8: in a deficit the stall card adds that holding strength is a win. */
+    private val _inDeficit = MutableStateFlow(false)
+    val inDeficit: StateFlow<Boolean> = _inDeficit
+
     val library: StateFlow<List<ExerciseEntity>> =
         training.observeLibrary().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -153,6 +157,7 @@ class WorkoutViewModel @Inject constructor(
         viewModelScope.launch {
             routineId = workouts.observeSession(sessionId).first()?.routineId
             title.value = routineId?.let { workouts.routine(it)?.name } ?: "Workout"
+            _inDeficit.value = progression.inDeficit()
         }
     }
 

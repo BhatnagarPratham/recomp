@@ -41,7 +41,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.db.ImportedSessionRow
 import app.recomp.data.repo.BodyTrend
+import app.recomp.data.repo.HealthRepository
+import app.recomp.data.repo.SleepToday
+import app.recomp.data.repo.StepsToday
+import app.recomp.ui.health.HealthText
+import app.recomp.ui.health.SleepSheet
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PreviewLine
 import app.recomp.data.repo.ProgressionRepository
@@ -121,8 +127,20 @@ class TodayViewModel @Inject constructor(
     private val progression: ProgressionRepository,
     nutrition: NutritionRepository,
     body: BodyRepository,
+    private val health: HealthRepository,
 ) : ViewModel() {
-    val bodyEntries = BodyEntries(body)
+    val bodyEntries = BodyEntries(body, health)
+
+    /** AR-01: today's steps against the goal, by calendar day; null while steps are off. */
+    val steps: StateFlow<StepsToday?> = health.observeSteps().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** AR-02: last night's sleep, which the weight card asks for until it's entered; null while *Track sleep* is off. */
+    val sleep: StateFlow<SleepToday?> = health.observeSleep().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** AR-04: what other apps recorded today. */
+    val imported: StateFlow<List<ImportedSessionRow>> = health.observeImportedToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun saveSleep(night: SleepToday, hours: Double?) = viewModelScope.launch { health.setTypedSleep(night.date, hours) }
 
     /** The weight card: trend weight, the week's rate, and *Log waist* once the last one is a week old. */
     val body: StateFlow<TodayBody?> = combine(body.observeTrend(), body.observeWaist(), workouts.observeToday()) { trend, waist, today ->
@@ -228,6 +246,10 @@ fun TodayScreen(
     var waist by remember { mutableStateOf<WaistDraft?>(null) }
     val food by viewModel.food.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
+    val steps by viewModel.steps.collectAsStateWithLifecycle()
+    val sleep by viewModel.sleep.collectAsStateWithLifecycle()
+    val imported by viewModel.imported.collectAsStateWithLifecycle()
+    var sleepSheet by remember { mutableStateOf<SleepToday?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingStart by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -335,14 +357,21 @@ fun TodayScreen(
             }
         }
 
+        // AR-04: read-only, from Health Connect. They already count in "This week" below.
+        imported.forEach { row -> Text(HealthText.imported(row), style = MaterialTheme.typography.bodyLarge) }
+
         body?.let { b ->
             WeightCard(
                 b,
+                sleep = sleep,
+                onSleep = { sleepSheet = sleep },
                 onOpen = onOpenBody,
                 onLogWeight = { scope.launch { weighIn = viewModel.bodyEntries.newWeighIn() } },
                 onLogWaist = { scope.launch { waist = viewModel.bodyEntries.newWaist() } },
             )
         }
+
+        steps?.let { Text(HealthText.steps(it), style = MaterialTheme.typography.bodyLarge) }
 
         ui.week?.takeIf { ui.setupDone }?.let { week ->
             val names = (ui.dueExtras + ui.otherExtras).associate { it.id to it.name }
@@ -405,6 +434,12 @@ fun TodayScreen(
             viewModel.save(saved)
         }
     }
+    sleepSheet?.let { night ->
+        SleepSheet(night.hours, onDismiss = { sleepSheet = null }) { hours ->
+            sleepSheet = null
+            viewModel.saveSleep(night, hours)
+        }
+    }
 }
 
 /**
@@ -440,13 +475,17 @@ private fun RestDayCard(ui: TodayUi, onStart: (Long?) -> Unit, onChoose: () -> U
 
 /** Today's weight card (PRD §7.11): trend weight and the week's rate against the goal's pace. Opens Body. */
 @Composable
-private fun WeightCard(b: TodayBody, onOpen: () -> Unit, onLogWeight: () -> Unit, onLogWaist: () -> Unit) {
+private fun WeightCard(b: TodayBody, sleep: SleepToday?, onSleep: () -> Unit, onOpen: () -> Unit, onLogWeight: () -> Unit, onLogWaist: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Open Body", onClick = onOpen)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             TrendSummary(b.trend)
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onLogWeight, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log weight") }
                 if (b.waistDue) OutlinedButton(onClick = onLogWaist, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log waist") }
+            }
+            // AR-02: asks until last night is entered, then shows it; tap to change it.
+            if (sleep != null) {
+                TextButton(onClick = onSleep, modifier = Modifier.heightIn(min = 48.dp)) { Text(HealthText.slept(sleep) ?: HealthText.SLEEP_ASK) }
             }
         }
     }

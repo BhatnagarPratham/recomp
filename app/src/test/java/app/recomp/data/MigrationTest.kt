@@ -1,6 +1,8 @@
 package app.recomp.data
 
 import app.recomp.data.db.ProgrammeReviewEntity
+import app.recomp.data.db.ScanDraftEntity
+import app.recomp.data.db.SleepSource
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -475,7 +477,76 @@ class MigrationTest {
             it.moveToFirst()
             assertEquals("[]", it.getString(0))
         }
-        assertEquals(11, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `11 to 12 adds scan drafts, marks a night stored before it as typed, and keeps M11's reviews and deload marks`() {
+        val file = File(tmp.root, "v11.db")
+        createAt(11, file).use { db ->
+            // The phone's v11 (M11): a review with an applied suggestion, an exercise marked for a deload, and days.
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, increment_g, " +
+                    "default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, stall_reset_keeps_baseline, deload_pending) " +
+                    "VALUES (1, 'My press', 'chest', '[]', 'MACHINE', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 5000, 8, 12, 120, 0, 1, 0, 0, 1)",
+            )
+            db.execSQL(
+                "INSERT INTO programme_review (id, week_start, created_at, sections, sent_text, ai_request_id, response_json, applied_json) " +
+                    "VALUES (1, '2026-11-09', 5, 'goal,food,training', 'Weekly programme review.', NULL, '{}', '[0]')",
+            )
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete) VALUES ('2026-11-10', 1)")
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete, steps, steps_synced_at, sleep_hours) VALUES ('2026-11-11', 0, 7432, 5, 7.5)")
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-11-10')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            // M11's data is where it was.
+            assertTrue(room.exerciseDao().get(1)!!.deloadPending)
+            assertEquals(listOf(1L), room.programmeReviewDao().pendingDeloads())
+            assertEquals("[0]", room.programmeReviewDao().get(1)!!.appliedJson)
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            // M13's: the flag day has no night; the night stored before is typed, so a sync leaves it alone.
+            val health = room.healthDao()
+            val flagged = health.day(LocalDate.of(2026, 11, 10))!!
+            assertTrue(flagged.foodIncomplete)
+            assertNull(flagged.sleepSource)
+            val night = health.day(LocalDate.of(2026, 11, 11))!!
+            assertEquals(7432, night.steps)
+            assertEquals(7.5, night.sleepHours)
+            assertEquals(SleepSource.TYPED, night.sleepSource)
+            assertEquals(0, health.setSyncedSleep(LocalDate.of(2026, 11, 11), 6.0))
+            assertEquals(1, health.setSyncedSleep(LocalDate.of(2026, 11, 10), 6.0))
+            assertEquals(SleepSource.HEALTH_CONNECT, health.day(LocalDate.of(2026, 11, 10))!!.sleepSource)
+            // The new table takes a draft with and without the optional numbers.
+            assertTrue(health.drafts().isEmpty())
+            val id = health.insert(ScanDraftEntity(measuredAt = 100, weightG = 80_000, bodyFatPct = 24.6, bmrKcal = 1_705, hcIds = listOf("w", "f", "b")))
+            health.insert(ScanDraftEntity(measuredAt = 200, weightG = 80_100))
+            assertEquals(listOf("w", "f", "b"), health.draft(id)!!.hcIds)
+            assertEquals(2, health.drafts().size)
+        }
+        assertEquals(12, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `10 to 11 to 12 in one open keeps the AI log and adds both milestones' tables`() {
+        val file = File(tmp.root, "v10-chain.db")
+        createAt(10, file).use { db ->
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete, sleep_hours) VALUES ('2026-11-11', 0, 6.5)")
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, provider) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'gpt-6-luna', 2000, 1000, 0, 0, 0.01, 'OK', 4000, 'OPENAI')",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(AiProviderId.OPENAI, room.aiDao().request(1)!!.provider)
+            assertEquals(SleepSource.TYPED, room.healthDao().day(LocalDate.of(2026, 11, 11))!!.sleepSource)
+            assertTrue(room.programmeReviewDao().observeAll().first().isEmpty())
+            assertTrue(room.healthDao().drafts().isEmpty())
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
     }
 
