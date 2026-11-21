@@ -1691,6 +1691,7 @@ Tests cover:
   - The app takes `ACTION_SEND` for `image/*`. The image is copied into `files/scan_images` (JPEG, PNG or WebP, up to 20 MB) the moment it arrives, while the share's permission holds.
   - "What is this?" offers *InBody result* and *Cancel*; nutrition labels and meal photos wait for M18.
   - The scan form pins the image above the fields, and a tap makes it taller. Saving keeps its file name as `image_path`, and an edit keeps it.
+  - **With M13's InBody drafts:** a shared screenshot's form picks up the newest open draft measured in the 12 hours before the share, or up to 10 minutes after (`SharedScan`). Its time, weight, body fat % and BMR are filled in, and saving makes the scan `HEALTH_CONNECT` and closes the draft, as Body's draft row does. With no such draft, the form starts empty.
   - Deleting the scan deletes the file. An image no scan keeps, such as a share you backed out of, is removed a day later at launch.
   - Android's backup rules list only the database and the settings, so the images are left out by omission, which `BackupRulesTest` checks. The app's own export doesn't carry them either.
 
@@ -1704,11 +1705,12 @@ Tests cover:
   - an image kept with its scan, kept through an edit and deleted with it;
   - staging limits and the clean-up.
 - `BackupRulesTest`: shared images are left out of cloud backup and device transfer.
+- `SharedScanTest` and `ScanShareViewModelTest`: the draft from the same time as a share, a form prefilled from it whose save closes it, and one with no matching draft.
 
 | Check | Result |
 |-------|--------|
 | Dev install with invented data | ✅ `app.recomp.m15dev` (d97cb5d), uninstalled afterwards; the real app untouched.<br>- An invented screenshot, labelled as such, was shared from Google Photos through the system share sheet. "What is this?" showed it, and *InBody result* opened the scan form with it pinned above.<br>- The typed scan saved on protocol, with the image kept in app-private storage.<br>- Body then offered *Targets from your scan*; *Save* took the scan-based targets, the card went, and Today showed the new target.<br>- The goal flow's body-fat finish line was enabled, and a 20% target filled the goal weight.<br>- The saved scan reopened with its image, and deleting it deleted the file. |
-| Not run on the phone | The InBody draft prefill, which lands with M13 (#19). A share sent from `adb` can't grant read access, so the app shows its "couldn't be read" screen, as designed; the real share sheet works. |
+| Not run on the phone | The InBody draft prefill with a real InBody measurement in Health Connect; `ScanShareViewModelTest` covers it with and without a draft. A share sent from `adb` can't grant read access, so the app shows its "couldn't be read" screen, as designed; the real share sheet works. |
 
 #### M16: Data out
 
