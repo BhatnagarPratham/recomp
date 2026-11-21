@@ -9,6 +9,7 @@ import app.recomp.data.repo.BodyActivity
 import app.recomp.data.repo.SleepToday
 import app.recomp.data.repo.StepsToday
 import app.recomp.domain.health.SleepNight
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.onboarding.GoalText
 
@@ -68,8 +69,8 @@ object HealthText {
     /** "New InBody scan, Mon 16 Nov, 10:05: add muscle and visceral fat". */
     fun draft(d: ScanDraftEntity): String = "New InBody scan, ${BodyText.dateTime(d.measuredAt)}: add muscle and visceral fat"
 
-    fun draftDetail(d: ScanDraftEntity): String = listOfNotNull(
-        BodyText.kg(d.weightG),
+    fun draftDetail(d: ScanDraftEntity, style: UnitStyle): String = listOfNotNull(
+        BodyText.weight(d.weightG, style),
         d.bodyFatPct?.let { "${BodyText.oneDecimal(it)}% body fat" },
         d.bmrKcal?.let { "BMR ${GoalText.kcal(it)}" },
     ).joinToString(" · ")

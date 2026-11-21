@@ -61,6 +61,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import app.recomp.domain.persona.Units
+import app.recomp.ui.onboarding.UnitFields
 
 /**
  * AI goal interpretation (GL-03, TRD §5.7) against a local server standing in for the provider: the request
@@ -345,12 +347,37 @@ class GoalAiFlowTest {
     }
 
     @Test
+    fun `onboarding asks units first, defaulting from the region, and saves cm and kg (PR-05)`() = runBlocking {
+        val vm = flow(goalOnly = false)
+        vm.until { it.loaded }
+        val region = UnitFields.defaultUnits()
+        assertEquals(region, vm.ui.value.draft.units)
+        assertEquals(region, vm.ui.value.about.units)
+        // A preset doesn't reset the units.
+        vm.pickPreset("custom")
+        assertEquals(region, vm.ui.value.draft.units)
+        vm.setUnits(Units.IMPERIAL)
+        vm.updateAbout { it.copy(sex = profile.sex, birthDate = profile.birthDate, height = "5", heightIn = "9", weight = "176.4") }
+        val typed = vm.ui.value.profile!!
+        assertEquals(175.26, typed.heightCm, 1e-9)
+        assertEquals(80.014, typed.weightKg, 1e-9)
+        // Switching shows them in cm and kg and keeps the exact values.
+        vm.setUnits(Units.METRIC)
+        assertEquals("175.3", vm.ui.value.about.height)
+        assertEquals(typed, vm.ui.value.profile)
+        assertEquals(Units.METRIC, vm.ui.value.goal.units)
+        vm.viewModelScope.cancel()
+    }
+
+    @Test
     fun `in onboarding the lifting question is still asked, and with AI off there's no text box`() = runBlocking {
         app.ai.markNoticeSeen(AiKind.GOAL)
         val vm = flow(goalOnly = false)
         vm.until { it.loaded && it.aiReady }
         assertEquals(5, vm.ui.value.presets.size)
         vm.pickPreset("custom")
+        // Typed in kg and cm, whatever the test locale suggests (PR-05).
+        vm.setUnits(Units.METRIC)
         vm.updateAbout { it.copy(sex = profile.sex, birthDate = profile.birthDate, height = "163.5", weight = "71.25") }
         vm.next()
         vm.next()

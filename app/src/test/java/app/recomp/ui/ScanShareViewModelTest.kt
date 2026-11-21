@@ -54,7 +54,7 @@ class ScanShareViewModelTest {
 
     private fun image(): String = runBlocking { app.scanImages.stage(ByteArrayInputStream(ByteArray(512) { 3 }), "image/png")!! }
 
-    private fun viewModel(image: String) = ScanViewModel(SavedStateHandle(mapOf("image" to image)), app.body, app.health, app.scanImages)
+    private fun viewModel(image: String) = ScanViewModel(SavedStateHandle(mapOf("image" to image)), app.body, app.health, app.scanImages, app.personas)
 
     @Test
     fun `a shared screenshot is prefilled from the InBody draft from the same time, which the save closes`() {

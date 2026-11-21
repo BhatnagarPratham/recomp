@@ -10,6 +10,7 @@ import app.recomp.domain.checkin.EstimateGap
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.WeekAverage
 import app.recomp.domain.trend.WeightPace
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.onboarding.GoalText
 import java.time.LocalDate
@@ -27,13 +28,13 @@ object CheckinText {
     private fun aWeek(value: Double) = "${pct(value)} a week"
 
     /** The goal's headline (PRD §4.8): what success means for it, from the trend. */
-    fun headline(v: CheckinView): String {
+    fun headline(v: CheckinView, style: UnitStyle): String {
         val e = v.evaluation
-        val trend = e.trendKg?.let { "Trend ${BodyText.kg(it)}" }
+        val trend = e.trendKg?.let { "Trend ${BodyText.weight(it, style)}" }
         return when (v.plan.goal) {
             Goal.FAT_LOSS -> e.ratePct?.let { (if (it <= 0) "Losing " else "Gaining ") + aWeek(abs(it)).removePrefix("+") } ?: trend
             Goal.LEAN_BULK -> e.ratePct?.let { (if (it >= 0) "Gaining " else "Losing ") + aWeek(abs(it)).removePrefix("+") } ?: trend
-            Goal.RECOMP -> listOfNotNull(e.waistChangeCm?.let { "Waist ${BodyText.signed(it, "cm")}" }, trend).joinToString(" · ").ifEmpty { null }
+            Goal.RECOMP -> listOfNotNull(e.waistChangeCm?.let { "Waist ${BodyText.signedLength(it, style)}" }, trend).joinToString(" · ").ifEmpty { null }
             Goal.MAINTAIN -> trend?.let { t -> e.fourWeekPct?.let { "$t, ${pct(it)} over 4 weeks" } ?: t }
         } ?: "No weigh-ins yet"
     }
@@ -42,7 +43,7 @@ object CheckinText {
      * One verdict under the headline: on track, the flag that fired, or what's missing. A frozen week's flag can belong
      * to a goal you've since changed; then it's named without a comparison against the new goal's pace.
      */
-    fun verdict(v: CheckinView): String {
+    fun verdict(v: CheckinView, style: UnitStyle): String {
         val e = v.evaluation.takeIf { v.row.flag == null || v.row.flag.goal == v.plan.goal } ?: v.evaluation.copy(ratePct = null, fourWeekPct = null, waistChangeCm = null)
         val pace = WeightPace.of(v.plan.policy)
         if (v.pregnant && v.row.flag == null) return if (v.pregnantNow) PREGNANT_VERDICT else AFTER_PREGNANCY_VERDICT
@@ -54,7 +55,7 @@ object CheckinText {
             CheckinStatus.FLAGGED -> when (v.row.flag) {
                 CheckinFlag.LOSS_SLOW -> "Losing slower than planned" + (e.ratePct?.let { ": ${aWeek(it)} against ${pct(pace.minPctPerWeek)}" } ?: "")
                 CheckinFlag.FLAT -> "Trend weight and waist both flat for 4 weeks" +
-                    listOfNotNull(e.fourWeekPct?.let(::pct), e.waistChangeCm?.let { BodyText.signed(it, "cm") }).joinToString(" and ").let { if (it.isEmpty()) "" else ": $it" }
+                    listOfNotNull(e.fourWeekPct?.let(::pct), e.waistChangeCm?.let { BodyText.signedLength(it, style) }).joinToString(" and ").let { if (it.isEmpty()) "" else ": $it" }
                 CheckinFlag.DRIFT -> "Drifting from your weight" + (e.fourWeekPct?.let { ": ${pct(it)} over 4 weeks, beyond ±1%" } ?: "")
                 CheckinFlag.GAIN_SLOW -> "Gaining slower than planned" + (e.ratePct?.let { ": ${aWeek(it)} against ${range(pace)}" } ?: "")
                 CheckinFlag.GAIN_FAST -> "Gaining faster than planned" + (e.ratePct?.let { ": ${aWeek(it)} against ${range(pace)}" } ?: "")
@@ -89,8 +90,8 @@ object CheckinText {
     private fun days(n: Int) = if (n == 1) "1 day" else "$n days"
 
     /** A recomp's 4-week waist change, which its flag judges (PRD §12.1). */
-    fun waist(v: CheckinView): String =
-        v.evaluation.waistChangeCm?.let { "Waist ${BodyText.signed(it, "cm")} over 4 weeks" } ?: "Waist: needs a reading near each end of the last 4 weeks"
+    fun waist(v: CheckinView, style: UnitStyle): String =
+        v.evaluation.waistChangeCm?.let { "Waist ${BodyText.signedLength(it, style)} over 4 weeks" } ?: "Waist: needs a reading near each end of the last 4 weeks"
 
     /** "About 2,480 kcal a day, from 21 days of food and weigh-ins (the formula said 2,610)". */
     fun estimate(v: CheckinView): String = when (v.gap) {

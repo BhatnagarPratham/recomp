@@ -6,6 +6,8 @@ import androidx.compose.ui.Modifier
 import app.recomp.data.db.BodyWeightEntity
 import app.recomp.data.repo.BodyTrend
 import app.recomp.domain.trend.TrendCalculator
+import app.recomp.domain.units.UnitMath
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.Chart
 import app.recomp.ui.components.ChartDots
 import app.recomp.ui.components.ChartPoint
@@ -24,14 +26,17 @@ fun WeightChart(trend: BodyTrend, today: LocalDate, days: Long?, modifier: Modif
     // The line starts at the window's edge, interpolated, so a long window doesn't begin mid-air.
     val edge = TrendCalculator.trendAt(trend.points, from)?.takeIf { line.firstOrNull()?.date != from }
     val colors = MaterialTheme.colorScheme
+    val style = LocalUnitStyle.current
+    // Series in the display unit, so the axis labels read in it too (PR-05).
+    fun shown(kg: Double) = UnitMath.weightOf(kg, style.units)
     val description = buildString {
         append("Weight chart, ${shown.size} ${if (shown.size == 1) "weigh-in" else "weigh-ins"}")
-        trend.trendKg?.let { append(", trend ${BodyText.kg(it)}") }
+        trend.trendKg?.let { append(", trend ${BodyText.weight(it, style)}") }
     }
-    fun points(rows: List<BodyWeightEntity>) = rows.map { ChartPoint(it.logDate, it.weightG / 1000.0) }
+    fun points(rows: List<BodyWeightEntity>) = rows.map { ChartPoint(it.logDate, shown(it.weightG / 1000.0)) }
     Chart(
         series = listOf(
-            ChartSeries(listOfNotNull(edge?.let { ChartPoint(from, it) }) + line.map { ChartPoint(it.date, it.trendKg) }, colors.primary, line = true, dots = ChartDots.NONE),
+            ChartSeries(listOfNotNull(edge?.let { ChartPoint(from, shown(it)) }) + line.map { ChartPoint(it.date, shown(it.trendKg)) }, colors.primary, line = true, dots = ChartDots.NONE),
             ChartSeries(points(shown.filter { it.id in trend.countedIds }), colors.primary),
             ChartSeries(points(shown.filter { it.id !in trend.countedIds }), colors.onSurfaceVariant, dots = ChartDots.HOLLOW),
         ),

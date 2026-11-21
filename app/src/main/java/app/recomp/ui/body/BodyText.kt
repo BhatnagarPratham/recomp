@@ -208,5 +208,8 @@ object BodyText {
     fun scanSlopes(s: ScanSlopes, style: UnitStyle): String =
         "Per 4 weeks: muscle ${signedWeight(s.muscleKg, style)}, fat mass ${signedWeight(s.fatKg, style)}, body fat ${signed(s.bodyFatPct, "pts")}"
 
+    /** The scan table's caption, in the style's unit. */
+    fun scanTableCaption(style: UnitStyle): String = "Weight, muscle and fat in ${style.weight}. Off-protocol scans are marked ◌."
+
     private val STEP_LB = BigDecimal("0.2")
 }

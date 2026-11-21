@@ -88,6 +88,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import app.recomp.ui.onboarding.UnitFields
+import app.recomp.domain.units.UnitStyle
+import app.recomp.ui.components.LocalUnitStyle
 
 data class SettingsUi(
     val loaded: Boolean = false,
@@ -261,6 +267,7 @@ fun SettingsScreen(
     if (!ui.loaded) return
     val profile = ui.profile
     val plan = ui.plan
+    val style = LocalUnitStyle.current
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -272,8 +279,8 @@ fun SettingsScreen(
             SectionTitle("Goal")
             Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Change goal", onClick = onOpenGoal)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(GoalText.goalSummary(plan.goal, plan.policy, Labels.pace(plan.pace), plan.goalWeightKg), style = MaterialTheme.typography.titleMedium)
-                    Text(finishLineText(plan), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(GoalText.goalSummary(plan.goal, plan.policy, Labels.pace(plan.pace), plan.goalWeightKg, style), style = MaterialTheme.typography.titleMedium)
+                    Text(finishLineText(plan, style), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     GoalCardText.settingsLine(ui.goalStatus)?.let { Text(it, color = MaterialTheme.colorScheme.secondary) }
                     Text("Change goal, pace or finish line", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 }
@@ -299,16 +306,16 @@ fun SettingsScreen(
             SectionTitle("About you")
             SettingRow("Sex", Labels.sex(profile.sex)) { editing = Editing.Sex }
             SettingRow("Date of birth", profile.birthDate.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG))) { editing = Editing.Birth }
-            SettingRow("Height", "${GoalText.d(profile.heightCm)} cm") { editing = Editing.Height }
+            SettingRow("Height", BodyText.height(profile.heightCm, style)) { editing = Editing.Height }
             val trend = ui.trendKg
             if (trend == null) {
-                SettingRow("Current weight", "${GoalText.d(profile.weightKg)} kg") { editing = Editing.Weight }
+                SettingRow("Current weight", BodyText.weight(profile.weightKg, style)) { editing = Editing.Weight }
             } else {
                 // The trend stands in for a typed weight (TRD §5.0); tapping previews the targets at it.
-                SettingRow("Current weight", "${GoalText.d(trend)} kg · trend") { viewModel.changeProfile(profile) }
+                SettingRow("Current weight", "${BodyText.weight(trend, style)} · trend") { viewModel.changeProfile(profile) }
                 Text(
                     "From your weigh-ins." + if (kotlin.math.abs(trend - profile.weightKg) >= 0.05) {
-                        " Your targets use ${GoalText.d(profile.weightKg)} kg until they're next recomputed; tap to see them at your trend."
+                        " Your targets use ${BodyText.weight(profile.weightKg, style)} until they're next recomputed; tap to see them at your trend."
                     } else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -408,20 +415,22 @@ fun SettingsScreen(
             editing = null
             if (date.isBefore(ui.today)) profile?.let { viewModel.changeProfile(it.copy(birthDate = date)) }
         }
-        Editing.Height, Editing.Weight -> {
-            val height = e == Editing.Height
-            NumberEntryDialog(
-                if (height) "Height" else "Current weight",
-                profile?.let { GoalText.d(if (height) it.heightCm else it.weightKg) }.orEmpty(),
-                decimal = true,
-                suffix = if (height) "cm" else "kg",
-                onDismiss = { editing = null },
-            ) { text ->
+        // In lb and in, height is two fields, feet and inches (PR-05). A value left as shown changes nothing.
+        Editing.Height -> if (profile != null) {
+            val (ft, inches) = UnitFields.heightTexts(profile.heightCm, style)
+            HeightDialog(ft, inches, style, onDismiss = { editing = null }) { a, b ->
                 editing = null
-                val value = text.trim().replace(',', '.').toDoubleOrNull()
-                if (profile != null && value != null) {
-                    if (height && value in 100.0..250.0) viewModel.changeProfile(profile.copy(heightCm = value))
-                    if (!height && value in 30.0..300.0) viewModel.changeProfile(profile.copy(weightKg = value))
+                if (UnitFields.heightKey(a, b, style) != UnitFields.heightKey(ft, inches, style)) {
+                    UnitFields.parseHeightCm(a, b, style)?.takeIf { it in 100.0..250.0 }?.let { viewModel.changeProfile(profile.copy(heightCm = it)) }
+                }
+            }
+        }
+        Editing.Weight -> if (profile != null) {
+            val shown = UnitFields.weightText(profile.weightKg, style)
+            NumberEntryDialog("Current weight", shown, decimal = true, suffix = style.weight, onDismiss = { editing = null }) { text ->
+                editing = null
+                if (text.trim() != shown) {
+                    UnitFields.parseWeightKg(text, style)?.takeIf { it in 30.0..300.0 }?.let { viewModel.changeProfile(profile.copy(weightKg = it)) }
                 }
             }
         }
@@ -459,9 +468,39 @@ fun SettingsScreen(
     }
 }
 
-private fun finishLineText(plan: GoalPlan): String = when (val f = plan.finishLine) {
+/** Settings' height: cm, or feet and inches in two fields (PR-05). */
+@Composable
+private fun HeightDialog(first: String, second: String, style: UnitStyle, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+    if (!style.imperial) {
+        NumberEntryDialog("Height", first, decimal = true, suffix = "cm", onDismiss = onDismiss) { onConfirm(it, "") }
+        return
+    }
+    var ft by remember { mutableStateOf(first) }
+    var inches by remember { mutableStateOf(second) }
+    val valid = UnitFields.parseHeightCm(ft, inches, style)?.let { it in 100.0..250.0 } == true
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Height") },
+        text = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    ft, { ft = it }, Modifier.weight(1f), singleLine = true, suffix = { Text("ft") }, isError = !valid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                OutlinedTextField(
+                    inches, { inches = it }, Modifier.weight(1f), singleLine = true, suffix = { Text("in") }, isError = !valid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(ft, inches) }, enabled = valid) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun finishLineText(plan: GoalPlan, style: UnitStyle): String = when (val f = plan.finishLine) {
     null -> "No finish line"
-    FinishLine.GoalWeight -> "Finish line: reach ${plan.goalWeightKg?.let { "${GoalText.d(it)} kg" } ?: "your goal weight"}"
+    FinishLine.GoalWeight -> "Finish line: reach ${plan.goalWeightKg?.let { GoalText.weight(it, style) } ?: "your goal weight"}"
     is FinishLine.BodyFat -> "Finish line: ${GoalText.d(f.pct)}% body fat"
     is FinishLine.ByDate -> "Finish line: ${f.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG))}"
 }
@@ -517,7 +556,7 @@ private fun PreviewDialog(preview: TargetPreview, onConfirm: () -> Unit, onDismi
                 if (before != null && before.goal != preview.targetGoal) {
                     Text("Goal: ${Labels.goal(before.goal)} → ${Labels.goal(preview.targetGoal)}")
                     // PS-04: a guardrail moving the goal is a change of goal too, so it says what the scale will do.
-                    GoalChange.expect(before.goal, preview.targetGoal)?.let { Text(GoalText.expect(it), style = MaterialTheme.typography.bodySmall) }
+                    GoalChange.expect(before.goal, preview.targetGoal)?.let { Text(GoalText.expect(it, LocalUnitStyle.current), style = MaterialTheme.typography.bodySmall) }
                 }
                 ChangeLine("Protein", before?.proteinG, after.proteinG, "g")
                 ChangeLine("Calories", before?.kcal, after.kcal, "kcal")
