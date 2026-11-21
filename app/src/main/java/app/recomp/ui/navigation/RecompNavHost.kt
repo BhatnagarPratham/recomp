@@ -46,6 +46,8 @@ import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
 import app.recomp.ui.food.PortionSizesScreen
 import app.recomp.ui.onboarding.OnboardingScreen
+import app.recomp.ui.reminders.LocalOpenReminders
+import app.recomp.ui.reminders.RemindersScreen
 import app.recomp.ui.routines.RoutineScreen
 import app.recomp.ui.settings.SettingsScreen
 import app.recomp.ui.setup.SetupScreen
@@ -111,6 +113,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object HiddenFoodsRoute
 
+/** Settings → Reminders (RM-01). */
+@Serializable data object RemindersRoute
+
 private data class TopLevel(val label: String, val glyph: String, val route: Any)
 
 private val topLevel = listOf(
@@ -137,6 +142,13 @@ fun RecompNavHost(main: MainViewModel) {
             when (event) {
                 is AppNav.Workout -> nav.openWorkout(event.sessionId)
                 is AppNav.Summary -> nav.navigate(SummaryRoute(event.sessionId)) { launchSingleTop = true }
+                AppNav.Today -> nav.openTopLevel(TodayRoute)
+                AppNav.Food -> nav.openTopLevel(FoodRoute)
+                AppNav.Body -> nav.openTopLevel(BodyRoute)
+                is AppNav.Checkin -> {
+                    nav.openTopLevel(TodayRoute)
+                    nav.openCheckin(event.weekStart)
+                }
             }
         }
     }
@@ -220,7 +232,7 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<SettingsRoute> {
-                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenReminders provides { nav.navigate(RemindersRoute) }) {
                     SettingsScreen(
                         onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
                         onOpenTraining = { nav.navigate(SetupRoute) },
@@ -232,6 +244,7 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<HealthConnectRoute> { app.recomp.ui.health.HealthConnectScreen(onBack = { nav.popBackStack() }) }
+            composable<RemindersRoute> { RemindersScreen(onBack = { nav.popBackStack() }) }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
             composable<LibraryRoute> { LibraryScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) }) }
             composable<ExerciseRoute> { ExerciseScreen(onBack = { nav.popBackStack() }, onOpenHistory = { nav.navigate(ExerciseHistoryRoute(it)) }) }
@@ -295,6 +308,7 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
             "meal_slots" -> "your meal names"
             "portion_sizes" -> "your portion sizes"
             "scan_slot" -> "your usual scan slot"
+            "reminders" -> "your reminders"
             else -> it
         }
     }

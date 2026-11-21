@@ -23,6 +23,8 @@ import app.recomp.domain.ai.Rates
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
+import app.recomp.domain.nudge.Reminder
+import app.recomp.domain.nudge.Reminders
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.domain.nutrition.Pace
@@ -271,6 +273,65 @@ data class StoredScanSlot(val day: Int, val minutes: Int) {
     }
 }
 
+/** One reminder as stored: on or off, and minutes after midnight. */
+@Serializable
+data class StoredReminder(val on: Boolean = false, val minutes: Int) {
+    init {
+        require(minutes in 0 until 24 * 60) { "No such time of day: minute $minutes" }
+    }
+
+    fun toReminder() = Reminder(on, LocalTime.of(minutes / 60, minutes % 60))
+
+    companion object {
+        fun of(r: Reminder) = StoredReminder(r.on, r.time.hour * 60 + r.time.minute)
+    }
+}
+
+/** Settings → Reminders (RM-01) as stored under `reminders`. A reminder that's missing keeps its default. */
+@Serializable
+data class StoredReminders(
+    val weighIn: StoredReminder? = null,
+    val lunch: StoredReminder? = null,
+    val lunchSlot: String? = null,
+    val evening: StoredReminder? = null,
+    val workout: StoredReminder? = null,
+    /** ISO day numbers, Monday = 1. */
+    val workoutDays: Set<Int> = emptySet(),
+    val checkin: StoredReminder? = null,
+    val scan: Boolean = false,
+) {
+    init {
+        require(workoutDays.all { it in 1..7 }) { "Weekdays are 1 to 7, not $workoutDays" }
+    }
+
+    fun toReminders(): Reminders {
+        val d = Reminders()
+        return Reminders(
+            weighIn = weighIn?.toReminder() ?: d.weighIn,
+            lunch = lunch?.toReminder() ?: d.lunch,
+            lunchSlot = lunchSlot,
+            evening = evening?.toReminder() ?: d.evening,
+            workout = workout?.toReminder() ?: d.workout,
+            workoutDays = workoutDays.map(DayOfWeek::of).toSet(),
+            checkin = checkin?.toReminder() ?: d.checkin,
+            scan = scan,
+        )
+    }
+
+    companion object {
+        fun of(r: Reminders) = StoredReminders(
+            weighIn = StoredReminder.of(r.weighIn),
+            lunch = StoredReminder.of(r.lunch),
+            lunchSlot = r.lunchSlot,
+            evening = StoredReminder.of(r.evening),
+            workout = StoredReminder.of(r.workout),
+            workoutDays = r.workoutDays.map { it.value }.toSet(),
+            checkin = StoredReminder.of(r.checkin),
+            scan = r.scan,
+        )
+    }
+}
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -305,6 +366,9 @@ internal object SettingsKeys {
     /** M11's scheduled deload: the Monday of the last deload week you accepted, and the day "Not now" hides the card until. */
     val DELOAD_WEEK = stringPreferencesKey("deload_week")
     val DELOAD_SNOOZED_UNTIL = stringPreferencesKey("deload_snoozed_until")
+
+    /** RM-01: each reminder's on or off, time and weekdays (PRD §12.8). Absent is every reminder off. */
+    val REMINDERS = stringPreferencesKey("reminders")
 
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
@@ -439,6 +503,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         if (unreadable<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)) add(SettingsKeys.MEAL_SLOTS)
         if (unreadable<Map<String, Double>>(SettingsKeys.PORTION_SIZES)) add(SettingsKeys.PORTION_SIZES)
         if (unreadable<StoredScanSlot>(SettingsKeys.SCAN_SLOT)) add(SettingsKeys.SCAN_SLOT)
+        if (unreadable<StoredReminders>(SettingsKeys.REMINDERS)) add(SettingsKeys.REMINDERS)
     }
 
     /** Copies each unreadable value aside (once) before a write could replace it with a default. */
@@ -478,6 +543,16 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     /** IB-02. Null until set; the first scan sets it. */
     val scanSlot: Flow<ScanSlot?> =
         store.data.map { prefs -> prefs.decode<StoredScanSlot>(SettingsKeys.SCAN_SLOT)?.let { runCatching { it.toSlot() }.getOrNull() } }.distinctUntilChanged()
+
+    /** RM-01: every reminder is off until you turn it on. */
+    val reminders: Flow<Reminders> =
+        store.data.map { prefs -> prefs.decode<StoredReminders>(SettingsKeys.REMINDERS)?.toReminders() ?: Reminders() }.distinctUntilChanged()
+
+    suspend fun updateReminders(transform: (Reminders) -> Reminders) = store.edit { prefs ->
+        prefs.keepUnreadable()
+        val current = prefs.decode<StoredReminders>(SettingsKeys.REMINDERS)?.toReminders() ?: Reminders()
+        prefs[SettingsKeys.REMINDERS] = settingsJson.encodeToString(StoredReminders.of(transform(current)))
+    }
 
     /** The week of the latest check-in you opened; null before the first. */
     val checkinSeen: Flow<LocalDate?> =
@@ -521,6 +596,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
             SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
             SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL, SettingsKeys.CHECKIN_SEEN, SettingsKeys.DELOAD_WEEK, SettingsKeys.DELOAD_SNOOZED_UNTIL,
+            SettingsKeys.REMINDERS,
             SettingsKeys.AI_PROVIDER, SettingsKeys.AI_MODEL_OPENAI, SettingsKeys.AI_MODEL_GEMINI, SettingsKeys.AI_MODEL_COMPATIBLE, SettingsKeys.AI_BASE_URL,
         )
         return buildList {
@@ -550,6 +626,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (!decodes(SettingsKeys.CHECKIN_SEEN, LocalDate::parse)) add(SettingsKeys.CHECKIN_SEEN.name)
             if (!decodes(SettingsKeys.DELOAD_WEEK, LocalDate::parse)) add(SettingsKeys.DELOAD_WEEK.name)
             if (!decodes(SettingsKeys.DELOAD_SNOOZED_UNTIL, LocalDate::parse)) add(SettingsKeys.DELOAD_SNOOZED_UNTIL.name)
+            if (!decodes(SettingsKeys.REMINDERS, { settingsJson.decodeFromString<StoredReminders>(it).toReminders() })) add(SettingsKeys.REMINDERS.name)
         }.distinct()
     }
 

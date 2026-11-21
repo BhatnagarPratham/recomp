@@ -289,6 +289,7 @@ fun TodayScreen(
         if (!ui.loaded) return@Column
 
         food?.let { NutritionCard(it, onOpenFood) }
+        app.recomp.ui.nudge.EveningNudgeCard() // M12: tonight's nudge, from the evening reminder's time
         app.recomp.ui.checkin.WeeklyCheckinCard() // M5: the card lives in ui/checkin, so M8 and M11 change it there
 
         val active = ui.active

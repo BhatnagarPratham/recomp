@@ -14,6 +14,7 @@ import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.HealthDao
+import app.recomp.data.db.NudgeDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.ProgrammeReviewDao
 import app.recomp.data.db.ReviewDao
@@ -40,8 +41,9 @@ annotation class SettingsStore
 annotation class WorkoutStateStore
 
 /**
- * Device state (TRD §4): Health Connect's change tokens and the like. Exports and Android's own backup leave this
- * file out, so a restored or transferred phone starts it fresh.
+ * Device state (TRD §4): what belongs to this phone, not to your data: the reminder ledger (M12) and Health
+ * Connect's change tokens (M13). Its file is in neither exports nor Android's own backup, so a restored or
+ * transferred phone starts it fresh.
  */
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
@@ -97,6 +99,18 @@ object DatabaseModule {
     fun provideHealthDao(db: AppDatabase): HealthDao = db.healthDao()
 
     @Provides
+    fun provideNudgeDao(db: AppDatabase): NudgeDao = db.nudgeDao()
+
+    @Provides
+    @Singleton
+    @DeviceStore
+    fun provideDeviceStore(@ApplicationContext context: Context): DataStore<Preferences> =
+        PreferenceDataStoreFactory.create { context.preferencesDataStoreFile(DEVICE_FILE) }
+
+    /** The device store's file name; `data_extraction_rules.xml` must never include it. */
+    const val DEVICE_FILE = "device"
+
+    @Provides
     @Singleton
     @SettingsStore
     fun provideSettingsStore(@ApplicationContext context: Context): DataStore<Preferences> =
@@ -107,13 +121,4 @@ object DatabaseModule {
     @WorkoutStateStore
     fun provideWorkoutStateStore(@ApplicationContext context: Context): DataStore<Preferences> =
         PreferenceDataStoreFactory.create { context.preferencesDataStoreFile("workout_state") }
-
-    @Provides
-    @Singleton
-    @DeviceStore
-    fun provideDeviceStore(@ApplicationContext context: Context): DataStore<Preferences> =
-        PreferenceDataStoreFactory.create { context.preferencesDataStoreFile(DEVICE_STORE_NAME) }
-
-    /** `datastore/device.preferences_pb`: named in no backup rule (BackupRulesTest). */
-    const val DEVICE_STORE_NAME = "device"
 }

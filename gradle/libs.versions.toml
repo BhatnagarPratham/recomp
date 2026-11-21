@@ -13,6 +13,7 @@ navigation = "2.10.2"
 datastore = "1.2.1"
 healthConnect = "1.1.0"
 work = "2.12.0"
+glance = "1.2.0"
 anthropic = "2.73.0"
 tink = "1.23.0"
 okhttp = "4.12.0"
@@ -45,6 +46,7 @@ room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
 health-connect = { module = "androidx.health.connect:connect-client", version.ref = "healthConnect" }
 anthropic-java = { module = "com.anthropic:anthropic-java", version.ref = "anthropic" }
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }

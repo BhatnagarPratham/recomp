@@ -9,24 +9,47 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.data.health.HealthFeature
 import app.recomp.di.DeviceStore
+import app.recomp.domain.nudge.ReminderKind
+import app.recomp.domain.nudge.ReminderLedger
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
+
+/** The reminder ledger as stored. Kinds are names, so one a later build adds or drops is just ignored. */
+@Serializable
+data class StoredLedger(
+    @Serializable(with = LocalDateIso::class) val date: LocalDate,
+    val sent: List<String> = emptyList(),
+    val handled: Set<String> = emptySet(),
+) {
+    fun toLedger(): ReminderLedger {
+        fun kind(name: String) = ReminderKind.entries.firstOrNull { it.name == name }
+        return ReminderLedger(date, sent.mapNotNull(::kind), handled.mapNotNull(::kind).toSet())
+    }
+
+    companion object {
+        fun of(l: ReminderLedger) = StoredLedger(l.date, l.sent.map { it.name }, l.handled.map { it.name }.toSet())
+    }
+}
 
 /** When Health Connect was last read, and what went wrong if something did. */
 data class HealthSyncState(val lastSyncAt: Long? = null, val error: String? = null)
 
 /**
- * Device state (TRD §4): what only makes sense on this phone, against this copy of the data. It lives in its own
- * `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone
- * starts it fresh and reads Health Connect's last 30 days again.
+ * Device state (TRD §4): the `device` DataStore, which exports and Android's own backup leave out, so a restored or
+ * transferred phone starts it fresh. M12 keeps the day's reminder ledger here; M13 keeps Health Connect's change
+ * tokens and the like, so a restored phone reads Health Connect's last 30 days again.
  */
 @Singleton
 class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<Preferences>) {
     private object Keys {
+        val LEDGER = stringPreferencesKey("reminder_ledger")
+
         /** Health Connect's change token for a feature's record types (TRD §6.3). */
         fun changes(feature: HealthFeature) = stringPreferencesKey("hc_changes_${feature.name.lowercase()}")
 
@@ -38,6 +61,16 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
         val LAST_SYNC_AT = longPreferencesKey("hc_last_sync_at")
         val LAST_SYNC_ERROR = stringPreferencesKey("hc_last_sync_error")
     }
+
+    // Reminders (M12)
+
+    /** Null before the first reminder, or when the stored value can't be read: the day then starts fresh. */
+    suspend fun ledger(): ReminderLedger? =
+        store.data.first()[Keys.LEDGER]?.let { runCatching { settingsJson.decodeFromString<StoredLedger>(it).toLedger() }.getOrNull() }
+
+    suspend fun setLedger(ledger: ReminderLedger) = store.edit { it[Keys.LEDGER] = settingsJson.encodeToString(StoredLedger.of(ledger)) }
+
+    // Health Connect (M13)
 
     val healthSync: Flow<HealthSyncState> = store.data.map { HealthSyncState(it[Keys.LAST_SYNC_AT], it[Keys.LAST_SYNC_ERROR]) }.distinctUntilChanged()
 

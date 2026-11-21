@@ -184,6 +184,19 @@ class FakeEstimator : MealEstimator {
     }
 }
 
+/** Reminders, collected instead of shown. [allowed] is the notification permission; [blocked] are channels switched off. */
+class FakeNotifier : app.recomp.reminders.ReminderNotifier {
+    var allowed = true
+    val blocked = mutableSetOf<app.recomp.domain.nudge.ReminderKind>()
+    val shown = mutableListOf<app.recomp.reminders.ReminderContent>()
+
+    override fun canNotify() = allowed
+    override fun canShow(kind: app.recomp.domain.nudge.ReminderKind) = kind !in blocked
+    override fun show(content: app.recomp.reminders.ReminderContent) {
+        shown += content
+    }
+}
+
 /** A settings store whose writes can be made to fail, as on a full disk. */
 class FlakyStore(private val inner: DataStore<Preferences>) : DataStore<Preferences> {
     var failWrites = false
@@ -324,6 +337,7 @@ class TestApp(private val dir: File) {
     val deviceFile = File(dir, "device.preferences_pb")
     val device = DevicePrefs(PreferenceDataStoreFactory.create { deviceFile })
     val healthSource = FakeHealthSource()
+    val notifier = FakeNotifier()
 
     lateinit var db: AppDatabase
         private set
@@ -357,6 +371,10 @@ class TestApp(private val dir: File) {
         private set
     lateinit var health: HealthRepository
         private set
+    lateinit var snapshots: app.recomp.data.repo.TodaySnapshotRepository
+        private set
+    lateinit var reminders: app.recomp.reminders.ReminderRunner
+        private set
 
     init {
         open()
@@ -382,6 +400,8 @@ class TestApp(private val dir: File) {
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
         programmeReviews = ProgrammeReviewRepository(db, db.programmeReviewDao(), db.exerciseDao(), db.routineDao(), db.nutritionDao(), prefs, days, personas, training, progression, reviews, ai)
         health = HealthRepository(db, db.healthDao(), db.bodyDao(), db.workoutDao(), db.routineDao(), prefs, device, days, healthSource, clock)
+        snapshots = app.recomp.data.repo.TodaySnapshotRepository(days, prefs, nutrition, training, workouts, progression, checkins, foods, foodLog, db.nudgeDao())
+        reminders = app.recomp.reminders.ReminderRunner(prefs, device, days, snapshots, checkins, notifier)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

@@ -350,6 +350,9 @@ fun SettingsScreen(
             onClick = onOpenHealth,
         )
 
+        SectionTitle("Reminders")
+        app.recomp.ui.reminders.RemindersSettingsRow() // M12: its screen lives in ui/reminders
+
         SectionTitle("Days")
         SettingRow("Day starts at", formatDayStart(ui.dayStart)) { editing = Editing.DayStart }
 
