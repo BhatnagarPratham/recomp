@@ -51,4 +51,12 @@ class BackupRulesTest {
         val manifest = File("src/main/AndroidManifest.xml").readText()
         assertTrue(manifest.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""))
     }
+
+    /** PRD §12.13, TRD §10 M17: progress photos are never in Android's own backup or device transfer. */
+    @Test
+    fun `progress photos are left out of cloud backup and device transfer`() {
+        val photo = "file" to "${app.recomp.data.repo.PhotoRepository.PHOTO_DIR}/front-1.jpg"
+        listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $photo", leftOut(section, photo)) }
+    }
 }
+
