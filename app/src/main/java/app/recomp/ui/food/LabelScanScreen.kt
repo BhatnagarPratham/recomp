@@ -24,6 +24,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import app.recomp.data.body.ScanImages
 import app.recomp.data.food.PhotoStore
 import app.recomp.data.food.TesseractLabelReader
 import app.recomp.data.prefs.AiSettings
@@ -57,8 +58,13 @@ class LabelScanViewModel @Inject constructor(
     private val photos: PhotoStore,
     private val cameraFood: CameraFoodRepository,
     private val ai: AiRepository,
+    images: ScanImages,
 ) : ViewModel() {
-    private val name = savedState.toRoute<LabelScanRoute>().name
+    private val route = savedState.toRoute<LabelScanRoute>()
+    private val name = route.name
+
+    /** A label shared to Recomp (M15's picker): read instead of the camera, and its copy deleted once read. */
+    val shared: PickedPhoto? = route.sharedImage.takeIf { it.isNotEmpty() }?.let(images::file)?.let { PickedPhoto.Taken(it) }
 
     private val _phase = MutableStateFlow<LabelScanPhase>(LabelScanPhase.Camera)
     val phase: StateFlow<LabelScanPhase> = _phase
@@ -110,18 +116,27 @@ fun LabelScanScreen(onBack: () -> Unit, onScanned: () -> Unit, viewModel: LabelS
 
     LaunchedEffect(phase) { if (phase == LabelScanPhase.Done) onScanned() }
 
+    fun handle(photo: PickedPhoto) {
+        scope.launch {
+            if (!viewModel.aiReady()) viewModel.read(photo, useAi = false)
+            else if (settings?.noticeSeen(AiKind.LABEL) == true) viewModel.read(photo, useAi = true)
+            else asking = photo
+        }
+    }
+
+    val shared = viewModel.shared
+    LaunchedEffect(shared, settings) { if (shared != null && settings != null && phase == LabelScanPhase.Camera && asking == null) handle(shared) }
+
     when (val p = phase) {
-        LabelScanPhase.Camera -> PhotoCaptureScreen(
+        LabelScanPhase.Camera -> if (shared != null) {
+            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+            }
+        } else PhotoCaptureScreen(
             title = "Scan label",
             hint = "Fill the picture with the nutrition table, straight on and in good light.",
             onBack = onBack,
-        ) { photo ->
-            scope.launch {
-                if (!viewModel.aiReady()) viewModel.read(photo, useAi = false)
-                else if (settings?.noticeSeen(AiKind.LABEL) == true) viewModel.read(photo, useAi = true)
-                else asking = photo
-            }
-        }
+        ) { photo -> handle(photo) }
         is LabelScanPhase.Reading, LabelScanPhase.Done -> Column(
             Modifier.fillMaxSize().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),

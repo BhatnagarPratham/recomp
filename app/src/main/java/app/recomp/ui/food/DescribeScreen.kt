@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import app.recomp.data.body.ScanImages
 import app.recomp.data.food.PhotoStore
 import app.recomp.ui.camera.PhotoCaptureScreen
 import app.recomp.ui.camera.PickedPhoto
@@ -133,6 +134,7 @@ class DescribeViewModel @Inject constructor(
     private val foods: FoodRepository,
     private val photos: PhotoStore,
     private val describer: MealDescriber,
+    private val images: ScanImages,
 ) : ViewModel(), ReviewActions {
     private val route = savedState.toRoute<DescribeRoute>()
     val date: LocalDate = LocalDate.parse(route.date)
@@ -156,6 +158,8 @@ class DescribeViewModel @Inject constructor(
     private var draftPhoto: String? = null
 
     private val _photoBusy = MutableStateFlow(false)
+    private val _photoProblem = MutableStateFlow(false)
+    val photoProblem: StateFlow<Boolean> = _photoProblem
     val photoBusy: StateFlow<Boolean> = _photoBusy
 
     val gate: StateFlow<AiGateView?> = ai.gate.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -188,6 +192,8 @@ class DescribeViewModel @Inject constructor(
     private var beforeReestimate: DescribePhase.Review? = null
 
     init {
+        // A meal photo shared to Recomp (M15's picker): attached once, and its shared copy deleted after.
+        if (route.sharedImage.isNotEmpty() && !restored) images.file(route.sharedImage)?.let { attachPhoto(PickedPhoto.Taken(it)) }
         val id = draftId
         if (id != null && !restored) {
             viewModelScope.launch {
@@ -235,8 +241,6 @@ class DescribeViewModel @Inject constructor(
         }
     }
 
-    private val _photoProblem = MutableStateFlow(false)
-    val photoProblem: StateFlow<Boolean> = _photoProblem
 
     fun photoProblemShown() {
         _photoProblem.value = false

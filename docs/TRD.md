@@ -1900,6 +1900,7 @@ Tests cover:
 - **Risks:** an open-source recogniser reads labels less well than ML Kit would; AI cleans up when it's on, and every field stays editable. Tesseract and its `tessdata_fast` models are Apache-2.0, so the English model (about 4 MB) can be committed. Tesseract4Android ships through JitPack, a third-party repository: pin its version and limit JitPack to that group in Gradle's content filter. ZXing is Apache-2.0 too. Open Food Facts covers Indian brands patchily, so label scan is the fallback. Camera permissions and lifecycle on the phone.
 - **Parallel:** with M17.
 - **Built (2026-11-21):** CameraX 1.6.2, ZXing core 3.5.4 and Tesseract4Android 4.9.0 (JitPack limited to `cz.adaptech.tesseract4android`); the `tessdata_fast` English model is committed (commit `8741641`, about 4 MB). No ML Kit or Google Play services. The Open Food Facts contact comes from `recomp.off.contact` in `local.properties`, into `BuildConfig`. Details in §6.4.
+- **Share picker (2026-11-22, after M15):** *Nutrition label* reads the shared image like a scan (phone, then AI after its notice) and opens New food in today's meal for the time of day; *Meal photo* opens Describe it there with the image as its photo. Either way the shared copy is deleted once read. A photo estimate goes straight to the AI through M9's `MealDescriber`: the parser can't see a photo.
 
 #### M19: Goals
 

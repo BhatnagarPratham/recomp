@@ -125,13 +125,13 @@ import kotlinx.serialization.Serializable
 @Serializable data class ExerciseHistoryRoute(val exerciseId: Long)
 
 /** Adding food to one meal of one day (J3). [date] is an ISO log date. */
-@Serializable data class AddFoodRoute(val date: String, val slot: String)
+@Serializable data class AddFoodRoute(val date: String, val slot: String, val labelScanned: Boolean = false)
 
 /** The recipe editor (NU-22): [id] is the recipe's food, or 0 for a new one starting with [name]. */
 @Serializable data class RecipeRoute(val id: Long = 0, val name: String = "")
 
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
-@Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
+@Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0, val sharedImage: String = "")
 
 /** *Will it fit?* (NU-18). [slot] is the meal it was opened from, or empty for the meal for the time of day. */
 @Serializable data class FitRoute(val slot: String = "")
@@ -141,7 +141,8 @@ import kotlinx.serialization.Serializable
 /** M18's camera food: a pack's barcode, and a nutrition label for New food (named [name] so far). */
 @Serializable data object ScanBarcodeRoute
 
-@Serializable data class LabelScanRoute(val name: String = "")
+/** [sharedImage] a label shared to Recomp (M15's picker), read instead of the camera, for [date]'s [slot]. */
+@Serializable data class LabelScanRoute(val name: String = "", val sharedImage: String = "", val date: String = "", val slot: String = "")
 
 @Serializable data object MealSlotsRoute
 
@@ -240,6 +241,12 @@ fun RecompNavHost(main: MainViewModel) {
             composable<ShareRoute> {
                 ShareScreen(
                     onInBody = { image -> nav.navigate(ScanRoute(image = image)) { popUpTo<ShareRoute> { inclusive = true } } },
+                    onLabel = { image, date, slot ->
+                        nav.navigate(LabelScanRoute(sharedImage = image, date = date.toString(), slot = slot)) { popUpTo<ShareRoute> { inclusive = true } }
+                    },
+                    onMealPhoto = { image, date, slot ->
+                        nav.navigate(DescribeRoute(date.toString(), slot, sharedImage = image)) { popUpTo<ShareRoute> { inclusive = true } }
+                    },
                     onDone = { nav.popBackStack() },
                 )
             }
@@ -271,7 +278,7 @@ fun RecompNavHost(main: MainViewModel) {
                     onScanBarcode = if (camera) { { nav.navigate(ScanBarcodeRoute) } } else null,
                     onScanLabel = { name -> nav.navigate(LabelScanRoute(name)) },
                     scannedBarcode = barcode,
-                    labelScanned = label == true,
+                    labelScanned = label == true || entry.toRoute<AddFoodRoute>().labelScanned,
                     onCameraResultShown = {
                         barcodeShown()
                         labelShown()
@@ -284,8 +291,16 @@ fun RecompNavHost(main: MainViewModel) {
             composable<ScanBarcodeRoute> {
                 BarcodeScanScreen(onBack = { nav.popBackStack() }, onCode = { code -> nav.finishWith(CameraKeys.BARCODE, code) })
             }
-            composable<LabelScanRoute> {
-                LabelScanScreen(onBack = { nav.popBackStack() }, onScanned = { nav.finishWith(CameraKeys.LABEL, true) })
+            composable<LabelScanRoute> { entry ->
+                val route = entry.toRoute<LabelScanRoute>()
+                LabelScanScreen(
+                    onBack = { nav.popBackStack() },
+                    onScanned = {
+                        // From the share picker there's no New food waiting below: open Add food with it.
+                        if (route.sharedImage.isEmpty()) nav.finishWith(CameraKeys.LABEL, true)
+                        else nav.navigate(AddFoodRoute(route.date, route.slot, labelScanned = true)) { popUpTo<LabelScanRoute> { inclusive = true } }
+                    },
+                )
             }
             composable<DescribeRoute> {
                 DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })

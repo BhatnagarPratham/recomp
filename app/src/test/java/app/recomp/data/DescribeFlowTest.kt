@@ -88,6 +88,7 @@ class DescribeFlowTest {
         app.foods,
         PhotoStore(ApplicationProvider.getApplicationContext()),
         app.describer,
+        app.scanImages,
     ).also(viewModels::add)
 
     private val phulka = EstimatedItem("Phulka", 2.0, "piece", 70.0, 210.0, 6.5, 42.0, 1.5, 4.0, Confidence.HIGH, "no ghee")
@@ -293,7 +294,7 @@ class DescribeFlowTest {
         assertEquals(AiKind.MEAL_TEXT, first.kind())
         // Invented photo, invented meal: the test's own bitmap, never a real one.
         val handle = SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L, "photo" to path))
-        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, store, app.describer).also(viewModels::add)
+        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, store, app.describer, app.scanImages).also(viewModels::add)
         assertEquals(AiKind.MEAL_PHOTO, vm.kind())
         vm.estimate()
         eventually { vm.outcome.value }
@@ -311,5 +312,21 @@ class DescribeFlowTest {
         eventually { again.outcome.value }
         assertTrue(drafts().isEmpty())
         assertTrue(!java.io.File(path).exists())
+    }
+
+    @Test
+    fun `a meal photo shared to Recomp is taken as the meal photo, and its shared copy goes`() = runBlocking {
+        // An invented image, staged the way M15's share target keeps it.
+        val bytes = java.io.ByteArrayOutputStream().also {
+            android.graphics.Bitmap.createBitmap(40, 30, android.graphics.Bitmap.Config.ARGB_8888).compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it)
+        }.toByteArray()
+        val name = app.scanImages.stage(bytes.inputStream(), "image/jpeg")!!
+        val handle = SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L, "sharedImage" to name))
+        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, PhotoStore(ApplicationProvider.getApplicationContext()), app.describer, app.scanImages)
+            .also(viewModels::add)
+        // Robolectric has no ImageDecoder, so the decode itself is checked on the phone; here, that it was attempted
+        // with the shared file (a photo, or the "couldn't use that photo" line) and that the shared copy is gone.
+        assertTrue(eventually { if (vm.photo.value != null || vm.photoProblem.value) true else null })
+        assertTrue(eventually { if (app.scanImages.file(name) == null) true else null })
     }
 }

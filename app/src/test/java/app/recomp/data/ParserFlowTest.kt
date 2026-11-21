@@ -146,7 +146,7 @@ class ParserFlowTest {
 
     private fun describeVm() = DescribeViewModel(
         SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L)), app.ai, app.foodLog, app.foods,
-        PhotoStore(ApplicationProvider.getApplicationContext()), app.describer,
+        PhotoStore(ApplicationProvider.getApplicationContext()), app.describer, app.scanImages,
     )
 
     // AI-04: Describe it with AI off
