@@ -33,14 +33,18 @@ object BackupRotation {
     fun dateOf(name: String): LocalDate? = NAME.matchEntire(name)?.let { runCatching { LocalDate.parse(it.groupValues[1]) }.getOrNull() }
 
     /**
-     * The backups to delete so that the newest [KEEP] stay (by the date in the name; a folder's later copy of a name ranks above it). Only Recomp's
-     * own backup names count; anything else in the folder is left alone.
+     * The backups to delete: one file per day stays (a second backup on the same day, such as *Back up now*, may land
+     * as "… (1).zip"; the latest copy is kept and the others go, so a day never takes two of the slots), and then only
+     * the newest [KEEP] days. Only Recomp's own backup names count; anything else in the folder is left alone.
      */
-    fun <T> toDelete(files: List<T>, name: (T) -> String, keep: Int = KEEP): List<T> =
-        files.mapNotNull { f -> dateOf(name(f))?.let { f to it } }
-            .sortedWith(compareByDescending<Pair<T, LocalDate>> { it.second }.thenByDescending { copyOf(name(it.first)) })
-            .drop(keep)
-            .map { it.first }
+    fun <T> toDelete(files: List<T>, name: (T) -> String, keep: Int = KEEP): List<T> {
+        val byDay = files.mapNotNull { f -> dateOf(name(f))?.let { f to it } }
+            .groupBy({ it.second }, { it.first })
+            .mapValues { (_, copies) -> copies.sortedByDescending { copyOf(name(it)) } }
+        val sameDay = byDay.values.flatMap { it.drop(1) }
+        val oldDays = byDay.keys.sortedDescending().drop(keep).map { byDay.getValue(it).first() }
+        return sameDay + oldDays
+    }
 
     /** The next Sunday at 22:00 strictly after [now]. */
     fun nextRun(now: LocalDateTime): LocalDateTime {

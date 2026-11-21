@@ -3,6 +3,7 @@ package app.recomp.domain.export
 import java.time.LocalDate
 import java.time.LocalDateTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -40,5 +41,23 @@ class BackupRotationTest {
         assertNull(BackupRotation.dateOf(part))
         val files = (1..9).map { "recomp-backup-2026-11-0$it.zip" } + part
         assertEquals(listOf("recomp-backup-2026-11-01.zip"), BackupRotation.toDelete(files, { it }))
+    }
+
+    @Test
+    fun `a second backup on the same day replaces the first, so each day takes one slot`() {
+        // What the phone showed: Back up now on a day that already had a backup.
+        val files = listOf("recomp-backup-2026-11-21.zip", "recomp-backup-2026-11-21 (1).zip", "recomp-backup-2026-11-14.zip")
+        assertEquals(listOf("recomp-backup-2026-11-21.zip"), BackupRotation.toDelete(files, { it }))
+        // Several copies of one day: only the latest stays.
+        val many = listOf("recomp-backup-2026-11-21.zip", "recomp-backup-2026-11-21 (2).zip", "recomp-backup-2026-11-21 (1).zip")
+        assertEquals(setOf("recomp-backup-2026-11-21.zip", "recomp-backup-2026-11-21 (1).zip"), BackupRotation.toDelete(many, { it }).toSet())
+        // Eight days with copies on some: eight days stay, one file each.
+        val days = (1..10).map { "recomp-backup-2026-11-%02d.zip".format(it) } + listOf("recomp-backup-2026-11-10 (1).zip", "recomp-backup-2026-11-09 (1).zip")
+        val gone = BackupRotation.toDelete(days, { it }).toSet()
+        val kept = days.filter { it !in gone }
+        assertEquals(8, kept.size)
+        assertEquals(8, kept.map { BackupRotation.dateOf(it) }.toSet().size)
+        assertTrue("recomp-backup-2026-11-10 (1).zip" in kept && "recomp-backup-2026-11-10.zip" in gone)
+        assertTrue("recomp-backup-2026-11-01.zip" in gone && "recomp-backup-2026-11-02.zip" in gone)
     }
 }

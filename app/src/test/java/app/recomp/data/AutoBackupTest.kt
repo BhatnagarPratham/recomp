@@ -204,4 +204,71 @@ class AutoBackupTest {
         val refused = runCatching { app.backup.prepare(ByteArrayInputStream(storage.files.values.single())) }.exceptionOrNull()
         assertTrue(refused?.message.orEmpty(), refused?.message.orEmpty().contains("outside the photos folder"))
     }
+
+    /** A scan with an InBody screenshot, as M15 keeps it: a file in files/scan_images named by the scan's image_path. */
+    private suspend fun scanWithImage(): Pair<String, ByteArray> {
+        val name = "0b5a9c2e-1f3d-4a6b-8c7d-2e4f6a8b0c1d.png"
+        val bytes = ByteArray(96) { (it * 3).toByte() }
+        File(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "scan_images").apply { mkdirs() }.resolve(name).writeBytes(bytes)
+        app.db.openHelper.writableDatabase.execSQL(
+            "INSERT INTO body_composition (measured_at, log_date, source, weight_g, skeletal_muscle_g, body_fat_g, body_fat_pct, visceral_fat_level, " +
+                "mins_since_meal, workout_before_scan, protocol_ok, image_path) VALUES (1, '2026-09-01', 'MANUAL', 80000, 33000, 20000, 25.0, 8.0, 180, 0, 1, '$name')",
+        )
+        return name to bytes
+    }
+
+    private fun entries(bytes: ByteArray, prefix: String) =
+        ZipInputStream(ByteArrayInputStream(bytes)).use { z -> generateSequence { z.nextEntry }.map { it.name }.filter { it.startsWith(prefix) }.toList() }
+
+    @Test
+    fun `scan images follow the photos switch and come back on restore`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        val (name, bytes) = scanWithImage()
+        app.clock.instant = sunday(0)
+        backup.run()
+        assertEquals(emptyList<String>(), entries(storage.files.values.single(), "scan_images/"))
+
+        app.device.setBackupPhotos(true)
+        app.clock.instant = sunday(1)
+        backup.run()
+        val withImages = storage.files.getValue(BackupRotation.fileName(LocalDate.of(2026, 9, 13)))
+        assertEquals(listOf("scan_images/$name"), entries(withImages, "scan_images/"))
+        val manifest = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString<app.recomp.data.backup.BackupManifest>(
+            ZipInputStream(ByteArrayInputStream(withImages)).use { z -> generateSequence { z.nextEntry }.first { it.name == "manifest.json" }; z.readBytes().decodeToString() },
+        )
+        assertEquals(1, manifest.scanImages)
+
+        // The file is lost on the phone; restoring the backup brings it back where the scan points.
+        val dir = File(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "scan_images")
+        dir.deleteRecursively()
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(withImages)))
+        assertTrue(File(dir, name).readBytes().contentEquals(bytes))
+        assertTrue(!app.backup.incomingScanImages.exists())
+    }
+
+    @Test
+    fun `a backup whose scan points outside the scan images folder can't be restored`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        app.device.setBackupPhotos(true)
+        scanWithImage()
+        app.db.openHelper.writableDatabase.execSQL("UPDATE body_composition SET image_path = '../datastore/settings.preferences_pb'")
+        app.clock.instant = sunday(0)
+        backup.run()
+        val refused = runCatching { app.backup.prepare(ByteArrayInputStream(storage.files.values.single())) }.exceptionOrNull()
+        assertTrue(refused?.message.orEmpty(), refused?.message.orEmpty().contains("scan image that points outside"))
+    }
+
+    @Test
+    fun `a same-day copy the folder named with (1) is cleaned up, leaving one file for the day`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        // What the phone had: the day's first file and a second one the folder named "(1)".
+        storage.files["recomp-backup-2026-09-06.zip"] = byteArrayOf(1)
+        storage.files["recomp-backup-2026-09-06 (1).zip"] = byteArrayOf(2)
+        app.clock.instant = sunday(1)
+        backup.run()
+        assertEquals(
+            listOf("recomp-backup-2026-09-06 (1).zip", BackupRotation.fileName(LocalDate.of(2026, 9, 13))),
+            storage.files.keys.filter { BackupRotation.dateOf(it) != null }.sorted(),
+        )
+    }
 }
