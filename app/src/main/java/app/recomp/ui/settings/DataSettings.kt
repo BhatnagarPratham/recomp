@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.backup.BackupException
 import app.recomp.data.backup.BackupManager
+import app.recomp.ui.onboarding.SwitchRow
 import app.recomp.data.backup.BackupManifest
 import app.recomp.data.backup.PreparedBackup
 import app.recomp.data.repo.CheckinRepository
@@ -63,6 +64,14 @@ class DataViewModel @Inject constructor(
     private val _safetyCopy = MutableStateFlow<Long?>(null)
     val safetyCopy: StateFlow<Long?> = _safetyCopy
 
+    /** *Include photos* (PRD §12.13): off by default, and off again each time Settings opens. */
+    private val _includePhotos = MutableStateFlow(false)
+    val includePhotos: StateFlow<Boolean> = _includePhotos
+
+    fun setIncludePhotos(on: Boolean) {
+        _includePhotos.value = on
+    }
+
     init {
         viewModelScope.launch { _safetyCopy.value = backups.safetyCopyDate() }
     }
@@ -90,7 +99,7 @@ class DataViewModel @Inject constructor(
                 // "wt" overwrites a file you picked again; a provider without it gets the plain mode. A provider
                 // such as Drive may go over the network, so this stays off the main thread.
                 val out = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull() ?: resolver.openOutputStream(uri) ?: throw IOException("no file")
-                backups.export(out)
+                backups.export(out, includePhotos = _includePhotos.value)
             }
         } catch (e: Throwable) {
             withContext(NonCancellable + Dispatchers.IO) { runCatching { DocumentsContract.deleteDocument(resolver, uri) } }
@@ -138,11 +147,12 @@ class DataViewModel @Inject constructor(
     companion object {
         fun summary(m: BackupManifest): String {
             fun n(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"
-            return listOf(
+            return listOfNotNull(
                 n(m.count("workout_session"), "workout", "workouts"),
                 n(m.count("food_log"), "food entry", "food entries"),
                 n(m.count("body_weight"), "weigh-in", "weigh-ins"),
                 n(m.count("body_composition"), "scan", "scans"),
+                m.photos.takeIf { it > 0 }?.let { n(it, "photo", "photos") },
             ).joinToString(", ")
         }
 
@@ -156,16 +166,23 @@ class DataViewModel @Inject constructor(
 fun DataSettings(viewModel: DataViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val safetyCopy by viewModel.safetyCopy.collectAsStateWithLifecycle()
+    val includePhotos by viewModel.includePhotos.collectAsStateWithLifecycle()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(viewModel::export) }
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::open) }
 
     SettingRow("Export all data", "Save a file") { save.launch(BackupManager.fileName(LocalDate.now())) }
+    SwitchRow(
+        "Include photos",
+        "Progress photos go in the file too. Off, they stay only on this phone.",
+        checked = includePhotos,
+        onChange = viewModel::setIncludePhotos,
+    )
     SettingRow("Import a backup", "Replace") { open.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
     safetyCopy?.let { at ->
         SettingRow("Restore the data from before the import", DataViewModel.dateTime(at), onClick = viewModel::openSafetyCopy)
     }
     Text(
-        "A backup holds every workout, food entry, weigh-in, scan and setting. It never holds an AI key.",
+        "A backup holds every workout, food entry, weigh-in, scan and setting, and your progress photos only when you include them. It never holds an AI key.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

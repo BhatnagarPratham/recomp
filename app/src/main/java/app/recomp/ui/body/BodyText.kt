@@ -1,5 +1,7 @@
 package app.recomp.ui.body
 
+import app.recomp.domain.body.TapeSites
+import app.recomp.domain.body.TapeSite
 import app.recomp.domain.body.ProtocolIssue
 import app.recomp.domain.body.ScanChange
 import app.recomp.domain.body.ScanProtocol
@@ -95,6 +97,23 @@ object BodyText {
 
     fun verdict(issues: Set<ProtocolIssue>, minsFromSlot: Int?): String =
         if (issues.isEmpty()) "On protocol" else "Off protocol: " + issues.sorted().joinToString("; ") { issue(it, minsFromSlot) }
+
+    /** BM-03: "Chest", "Arm"… */
+    fun site(s: TapeSite): String = when (s) {
+        TapeSite.WAIST -> "Waist"
+        TapeSite.CHEST -> "Chest"
+        TapeSite.ARM -> "Arm"
+        TapeSite.THIGH -> "Thigh"
+        TapeSite.HIP -> "Hip"
+    }
+
+    /** Settings' summary: "Waist only", or "Waist, arm and hip". */
+    fun tapeSites(chosen: Set<TapeSite>): String {
+        val names = (listOf(TapeSite.WAIST) + TapeSites.OPTIONAL.filter { it in chosen }).map { site(it).lowercase() }
+        if (names.size == 1) return "Waist only"
+        val list = names.dropLast(1).joinToString(", ") + " and " + names.last()
+        return list.replaceFirstChar { it.uppercase() }
+    }
 
     fun date(d: LocalDate): String = d.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
 
