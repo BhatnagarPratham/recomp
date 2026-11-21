@@ -361,7 +361,7 @@ fun SettingsScreen(
         SectionTitle("Body data")
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
         SettingRow("Usual scan slot", ui.scanSlot?.let(BodyText::slot) ?: "Set by your first scan") { editing = Editing.Slot }
-        SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
+        UnitsSetting() // PR-05: kg and cm or lb and in, with the switch dialog
         // AR-01: steps come from Health Connect, so turning them on happens there, with its permission.
         val stepsOn = HealthFeature.STEPS in healthFeatures
         SettingRow("Steps", if (stepsOn) "Goal ${GoalText.n(stepsGoal)}" else "Off") { if (stepsOn) stepsDialog = true else onOpenHealth() }
