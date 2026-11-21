@@ -573,5 +573,15 @@ class HistoryFlowTest {
         assertTrue(PrType.E1RM in types(second))
         assertNotNull(first)
     }
+
+    // Focus areas (YG-03)
+
+    @Test
+    fun `focus areas are stored in one order and prefill the next log`() = runBlocking {
+        val yoga = app.training.observeExtras().first().single()
+        workouts.logExtra(yoga, ExtraEntry("Hatha", 45, null, null, listOf("core", "hips", "core")), now = clock)
+        assertEquals(listOf("hips", "core"), workouts.lastExtra(yoga.id)!!.focusAreas)
+        assertEquals(listOf("hips", "core"), app.db.backupCheckDao().yogaDetail().single().focusAreas)
+    }
 }
 

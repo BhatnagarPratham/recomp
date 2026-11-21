@@ -146,4 +146,7 @@ object Labels {
     fun assist(grams: Int) = if (grams == 0) "no assistance" else "assist ${kg(grams)}"
 
     fun muscle(key: String) = key.replace('_', ' ').replaceFirstChar { it.uppercase() }
+
+    /** YG-03: "Hips", "Full body". */
+    fun focusArea(key: String) = muscle(key)
 }
