@@ -101,12 +101,12 @@ class BodyEntries(private val body: BodyRepository, private val health: HealthRe
     suspend fun newMeasurements(): TapeDraft {
         val now = System.currentTimeMillis()
         val sites = body.dueTapeSites(health.logDate(now)).map { site ->
-            site to ((body.lastTapeCm(site) ?: defaultCm(site)) * 10).roundToInt()
+            site to (body.lastTapeCm(site) ?: defaultCm(site))
         }
         return TapeDraft(sites, now)
     }
 
-    suspend fun save(d: TapeDraft) = body.logTape(d.sites.associate { (site, tenths) -> site to tenths / 10.0 }, d.at)
+    suspend fun save(d: TapeDraft) = body.logTape(d.sites.toMap(), d.at)
 
     suspend fun save(d: WaistDraft) {
         if (d.id == null) body.logWaist(d.cm, d.at) else body.updateMeasurement(d.id, d.cm, d.at)
@@ -553,6 +553,7 @@ private val TABLE_W: Dp = DATE_W + NUM_W * 5
 @Composable
 private fun TapeCard(rows: List<TapeReading>, onOpen: (TapeSite) -> Unit) {
     if (rows.isEmpty()) return
+    val style = LocalUnitStyle.current
     Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             rows.forEach { r ->
@@ -561,7 +562,7 @@ private fun TapeCard(rows: List<TapeReading>, onOpen: (TapeSite) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(BodyText.site(r.site), Modifier.weight(1f))
-                    Text(BodyText.cm(r.cm) + (r.changeCm?.let { " (${BodyText.signed(it, "cm")})" } ?: ""))
+                    Text(BodyText.length(r.cm, style) + (r.changeCm?.let { " (${BodyText.signedLength(it, style)})" } ?: ""))
                 }
                 Text("Last ${BodyText.date(r.date)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

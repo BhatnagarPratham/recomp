@@ -1,6 +1,8 @@
 package app.recomp.ui
 
+import app.recomp.data.db.MeasurementType
 import app.recomp.data.db.ScanDraftEntity
+import app.recomp.domain.body.MobilityMarker
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.domain.nutrition.NutritionTargets
@@ -12,6 +14,9 @@ import app.recomp.domain.units.UnitMath
 import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.body.BodyEntry
 import app.recomp.ui.body.BodyText
+import app.recomp.ui.body.MobilityDraft
+import app.recomp.ui.body.MobilityText
+import app.recomp.ui.body.ReadingText
 import app.recomp.ui.body.ScanForm
 import app.recomp.ui.onboarding.AboutForm
 import app.recomp.ui.onboarding.GoalForm
@@ -137,6 +142,77 @@ class BodyUnitsTest {
         assertEquals(82.0, BodyEntry.waistStep(81.5, up = true, kg), 1e-9)
         assertEquals(82.3, BodyEntry.typedWaist("82,3", 81.5, kg)!!, 1e-9)
         assertNull(BodyEntry.typedWaist("3", 81.5, lb))
+    }
+
+    // Other tape sites and mobility markers (M17)
+
+    @Test
+    fun `a tape site shows and types in inches and is stored as exact cm`() {
+        assertEquals("13.75 in", BodyText.length(34.925, lb))
+        assertEquals("13,75", BodyEntry.lengthText(34.925, german))
+        // A kg-era reading saved unchanged keeps its cm.
+        assertEquals("13.78", BodyEntry.lengthText(35.0, lb))
+        assertEquals(35.0, BodyEntry.typedLength("13.78", 35.0, lb, BodyEntry.TAPE_CM)!!, 0.0)
+        // A typed quarter inch is its exact cm, which shows back as typed.
+        val typed = BodyEntry.typedLength("13.75", 35.0, lb, BodyEntry.TAPE_CM)!!
+        assertEquals(34.925, typed, 1e-9)
+        assertEquals("13.75 in", BodyText.length(typed, lb))
+        assertEquals(34.925, BodyEntry.typedLength("13,75", 35.0, german, BodyEntry.TAPE_CM)!!, 1e-9)
+        assertNull(BodyEntry.typedLength("3", 35.0, lb, BodyEntry.TAPE_CM))
+        // The card's change is one decimal.
+        assertEquals("+0.3 in", BodyText.signedLength(0.762, lb))
+        assertEquals("−¼" to "+¼", BodyEntry.lengthStepLabels(lb))
+        assertEquals("−½" to "+½", BodyEntry.lengthStepLabels(kg))
+    }
+
+    @Test
+    fun `the measurement sheet's quarter-inch stepper never drifts`() {
+        var cm = BodyEntry.lengthStep(35.0, up = true, lb, BodyEntry.TAPE_CM)
+        assertEquals("14 in", BodyText.length(cm, lb))
+        val start = cm
+        repeat(100) { cm = BodyEntry.lengthStep(cm, up = true, lb, BodyEntry.TAPE_CM) }
+        assertEquals("39 in", BodyText.length(cm, lb))
+        repeat(100) { cm = BodyEntry.lengthStep(cm, up = false, lb, BodyEntry.TAPE_CM) }
+        assertEquals(start, cm, 1e-9)
+        // Edited readings step the same way, and stay in range.
+        assertEquals(UnitMath.inToCm(14.25), ReadingText.step(MeasurementType.ARM, start, up = true, lb), 1e-9)
+        assertEquals(BodyEntry.MIN_TAPE_CM, BodyEntry.lengthStep(BodyEntry.MIN_TAPE_CM, up = false, lb, BodyEntry.TAPE_CM), 0.0)
+        assertEquals(35.5, BodyEntry.lengthStep(35.0, up = true, kg, BodyEntry.TAPE_CM), 1e-9)
+    }
+
+    @Test
+    fun `sit-and-reach is a signed length that converts`() {
+        assertEquals(-6.35, MobilityDraft.typedReach("-2.5", 0.0, lb)!!, 1e-9)
+        assertEquals(-6.35, MobilityDraft.typedReach("\u22122,5", 0.0, german)!!, 1e-9)
+        assertEquals("−2.5 in", BodyText.signedLengthValue(-6.35, lb))
+        assertEquals("+2.5 in", BodyText.signedLengthValue(6.35, lb))
+        assertEquals("0 in", BodyText.signedLengthValue(0.0, lb))
+        assertEquals("2.5 in short", MobilityText.value(MobilityMarker.SIT_AND_REACH, -6.35, lb))
+        assertEquals("2.5 in past your toes", MobilityText.value(MobilityMarker.SIT_AND_REACH, 6.35, lb))
+        assertEquals("At your toes", MobilityText.value(MobilityMarker.SIT_AND_REACH, 0.0, lb))
+        // Unchanged text keeps a kg-era reading; the stepper moves by quarter inches through zero.
+        assertEquals("-1.77", BodyEntry.lengthText(-4.5, lb))
+        assertEquals(-4.5, MobilityDraft.typedReach("-1.77", -4.5, lb)!!, 0.0)
+        var reach = UnitMath.inToCm(-0.5)
+        repeat(4) { reach = MobilityDraft.reachStep(reach, up = true, lb) }
+        assertEquals("+0.5 in", BodyText.signedLengthValue(reach, lb))
+        assertEquals(UnitMath.inToCm(0.5), reach, 1e-9)
+        assertNull(MobilityDraft.typedReach("30", 0.0, lb))
+        assertEquals(mapOf(MobilityMarker.SIT_AND_REACH to -6.35), MobilityDraft(-6.35, null, null, 0).values())
+        // An edited reading types the same way.
+        assertEquals(-6.35, ReadingText.typed(MeasurementType.SIT_AND_REACH, "-2.5", 0.0, lb)!!, 1e-9)
+    }
+
+    @Test
+    fun `the squat hold and toe touch don't convert in lb`() {
+        assertEquals("45 s", MobilityText.value(MobilityMarker.SQUAT_HOLD, 45.0, lb))
+        assertEquals("1:05", MobilityText.value(MobilityMarker.SQUAT_HOLD, 65.0, lb))
+        assertEquals("Yes", MobilityText.value(MobilityMarker.TOE_TOUCH, 1.0, lb))
+        assertEquals("Not yet", MobilityText.value(MobilityMarker.TOE_TOUCH, 0.0, lb))
+        assertEquals(50.0, ReadingText.step(MeasurementType.SQUAT_HOLD, 45.0, up = true, lb), 0.0)
+        assertEquals("45", ReadingText.text(MeasurementType.SQUAT_HOLD, 45.0, lb))
+        assertEquals(60.0, ReadingText.typed(MeasurementType.SQUAT_HOLD, "60", 45.0, lb)!!, 0.0)
+        assertEquals(mapOf(MobilityMarker.SQUAT_HOLD to 45.0, MobilityMarker.TOE_TOUCH to 1.0), MobilityDraft(null, 45, true, 0).values())
     }
 
     // Scan form

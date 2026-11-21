@@ -53,8 +53,11 @@ data class WeighInDraft(
 /** A waist measurement being logged or edited, in exact cm (PR-05: never via tenths, so ¼ in readings don't drift). */
 data class WaistDraft(val id: Long?, val cm: Double, val at: Long)
 
-/** *Log measurements* (BM-03): the sites due today, waist first, each in tenths of a cm, prefilled from last time. */
-data class TapeDraft(val sites: List<Pair<TapeSite, Int>>, val at: Long)
+/**
+ * *Log measurements* (BM-03): the sites due today, waist first, each in exact cm, prefilled from last time
+ * (PR-05: never via tenths, so ¼ in readings don't drift).
+ */
+data class TapeDraft(val sites: List<Pair<TapeSite, Double>>, val at: Long)
 
 /**
  * The weigh-in and waist sheets' maths in the persona's units (PR-05), kept out of composition so it's tested.
@@ -80,19 +83,38 @@ object BodyEntry {
         if (text.trim() == weightText(grams, style)) grams else BodyText.parseWeight(text, style)?.takeIf { it in MIN_G..MAX_G }
 
     /** One press of the waist stepper: 0.5 cm, or ¼ in. */
-    fun waistStep(cm: Double, up: Boolean, style: UnitStyle): Double = BodyText.lengthStep(cm, up, style).coerceIn(MIN_WAIST_CM, MAX_WAIST_CM)
+    fun waistStep(cm: Double, up: Boolean, style: UnitStyle): Double = lengthStep(cm, up, style, MIN_WAIST_CM..MAX_WAIST_CM)
 
-    fun waistText(cm: Double, style: UnitStyle): String = BodyText.lengthNumber(cm, style)
+    fun waistText(cm: Double, style: UnitStyle): String = lengthText(cm, style)
+
+    /** A typed waist in exact cm; see [typedLength]. Null when it's not a waist in range. */
+    fun typedWaist(text: String, cm: Double, style: UnitStyle): Double? = typedLength(text, cm, style, MIN_WAIST_CM..MAX_WAIST_CM)
+
+    // Any length entry: the other tape sites (BM-03) and sit-and-reach (YG-04), which may be negative.
+
+    /** An arm can be far smaller than any waist; the range `validReading` takes for a tape site. */
+    const val MIN_TAPE_CM = 10.0
+    val TAPE_CM = MIN_TAPE_CM..MAX_WAIST_CM
+
+    /** One press of a length stepper: 0.5 cm, or ¼ in, kept in [range]. */
+    fun lengthStep(cm: Double, up: Boolean, style: UnitStyle, range: ClosedFloatingPointRange<Double>): Double =
+        BodyText.lengthStep(cm, up, style).coerceIn(range)
+
+    /** The stepper's button labels: "−½" and "+½", or "−¼" and "+¼" in inches. */
+    fun lengthStepLabels(style: UnitStyle): Pair<String, String> = (if (style.imperial) "¼" else "½").let { "−$it" to "+$it" }
+
+    /** A typed-length dialog's prefill: the number alone, in the style's unit. */
+    fun lengthText(cm: Double, style: UnitStyle): String = BodyText.lengthNumber(cm, style)
 
     /**
-     * A typed waist in exact cm: cm to 0.1, or inches to 0.01 then × 2.54. The prefill left unchanged keeps [cm].
-     * Null when it's not a waist in range.
+     * A typed length in exact cm: cm to 0.1, or inches to 0.01 then × 2.54; a minus sign or hyphen makes it negative.
+     * The prefill left unchanged keeps [cm]. Null when it's not a number in [range].
      */
-    fun typedWaist(text: String, cm: Double, style: UnitStyle): Double? {
-        if (text.trim() == waistText(cm, style)) return cm
-        val value = BodyText.parse(text) ?: return null
+    fun typedLength(text: String, cm: Double, style: UnitStyle, range: ClosedFloatingPointRange<Double>): Double? {
+        if (text.trim() == lengthText(cm, style)) return cm
+        val value = BodyText.parseSigned(text) ?: return null
         val typed = if (style.imperial) UnitMath.inToCm(Math.round(value * 100) / 100.0) else Math.round(value * 10) / 10.0
-        return typed.takeIf { it in MIN_WAIST_CM..MAX_WAIST_CM }
+        return typed.takeIf { it in range }
     }
 }
 
@@ -170,8 +192,8 @@ fun WaistSheet(draft: WaistDraft, onDismiss: () -> Unit, onDelete: (() -> Unit)?
                 onPlus = { cm = BodyEntry.waistStep(cm, up = true, style) },
                 onValueClick = { typing = true },
                 modifier = Modifier.fillMaxWidth(),
-                minusLabel = if (style.imperial) "−¼" else "−½",
-                plusLabel = if (style.imperial) "+¼" else "+½",
+                minusLabel = BodyEntry.lengthStepLabels(style).first,
+                plusLabel = BodyEntry.lengthStepLabels(style).second,
             )
             WhenRow(at, BodyText::dateTime, { at = it })
             Button(onClick = { onSave(WaistDraft(draft.id, cm, at)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
@@ -187,19 +209,15 @@ fun WaistSheet(draft: WaistDraft, onDismiss: () -> Unit, onDelete: (() -> Unit)?
     }
 }
 
-private const val STEP_G = 100
-private const val MIN_G = 20_000
-private const val MAX_G = 300_000
-private const val MIN_WAIST = 300
-private const val MAX_WAIST = 2500
-
 /**
  * *Log measurements* (PRD §12.13): waist first, then the other chosen sites once they're 4 weeks old. Each has
- * its how-to and a 0.5 cm stepper, prefilled from last time.
+ * its how-to and a 0.5 cm or ¼ in stepper, prefilled from last time.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeasurementsSheet(draft: TapeDraft, onDismiss: () -> Unit, onSave: (TapeDraft) -> Unit) {
+    val style = LocalUnitStyle.current
+    val (minus, plus) = BodyEntry.lengthStepLabels(style)
     var values by remember { mutableStateOf(draft.sites.toMap()) }
     var at by remember { mutableLongStateOf(draft.at) }
     var typing by remember { mutableStateOf<TapeSite?>(null) }
@@ -211,17 +229,17 @@ fun MeasurementsSheet(draft: TapeDraft, onDismiss: () -> Unit, onSave: (TapeDraf
         ) {
             Text("Log measurements", style = MaterialTheme.typography.titleLarge)
             draft.sites.forEach { (site, _) ->
-                val tenths = values.getValue(site)
+                val cm = values.getValue(site)
                 Text(TapeSites.how(site), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 Stepper(
                     BodyText.site(site),
-                    BodyText.cm(tenths / 10.0),
-                    onMinus = { values = values + (site to (tenths - 5).coerceAtLeast(MIN_TAPE)) },
-                    onPlus = { values = values + (site to (tenths + 5).coerceAtMost(MAX_WAIST)) },
+                    BodyText.length(cm, style),
+                    onMinus = { values = values + (site to BodyEntry.lengthStep(cm, up = false, style, BodyEntry.TAPE_CM)) },
+                    onPlus = { values = values + (site to BodyEntry.lengthStep(cm, up = true, style, BodyEntry.TAPE_CM)) },
                     onValueClick = { typing = site },
                     modifier = Modifier.fillMaxWidth(),
-                    minusLabel = "−½",
-                    plusLabel = "+½",
+                    minusLabel = minus,
+                    plusLabel = plus,
                 )
             }
             WhenRow(at, BodyText::dateTime, { at = it })
@@ -230,13 +248,10 @@ fun MeasurementsSheet(draft: TapeDraft, onDismiss: () -> Unit, onSave: (TapeDraf
     }
 
     typing?.let { site ->
-        NumberEntryDialog(BodyText.site(site), BodyText.oneDecimal(values.getValue(site) / 10.0), decimal = true, onDismiss = { typing = null }, suffix = "cm") { text ->
+        val cm = values.getValue(site)
+        NumberEntryDialog(BodyText.site(site), BodyEntry.lengthText(cm, style), decimal = true, onDismiss = { typing = null }, suffix = style.length) { text ->
             typing = null
-            BodyText.parse(text)?.let { (it * 10).roundToInt() }?.takeIf { it in MIN_TAPE..MAX_WAIST }?.let { values = values + (site to it) }
+            BodyEntry.typedLength(text, cm, style, BodyEntry.TAPE_CM)?.let { values = values + (site to it) }
         }
     }
 }
-
-/** An arm can be far smaller than any waist. */
-private const val MIN_TAPE = 100
-

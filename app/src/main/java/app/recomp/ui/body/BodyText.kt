@@ -217,8 +217,17 @@ object BodyText {
     /** A number that may be negative, typed with a hyphen or a minus sign (YG-04's sit-and-reach). */
     fun parseSigned(text: String): Double? = parse(text.trim().replace('\u2212', '-'))
 
-    /** "+3.5 cm", "−4 cm", "0 cm". */
-    fun signedCm(value: Double): String = if (value == 0.0) "0 cm" else signed(value, "cm")
+    /**
+     * A signed length from cm, at the length's own precision (YG-04's sit-and-reach): "+3.5 cm", "−2.5 in", and
+     * "0 cm" or "0 in" for one that shows as zero.
+     */
+    fun signedLengthValue(cm: Double, style: UnitStyle): String {
+        if (lengthShowsZero(cm, style)) return "0 ${style.length}"
+        return (if (cm > 0) "+" else "−") + "${lengthNumber(abs(cm), style)} ${style.length}"
+    }
+
+    /** True when [cm] shows as zero in the style's unit. */
+    fun lengthShowsZero(cm: Double, style: UnitStyle): Boolean = parse(lengthNumber(abs(cm), style)) == 0.0
 
     /** "45 s", "1:05". */
     fun minutesSeconds(seconds: Int): String = if (seconds < 60) "$seconds s" else "%d:%02d".format(seconds / 60, seconds % 60)
