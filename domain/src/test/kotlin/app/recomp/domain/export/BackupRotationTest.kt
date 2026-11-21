@@ -20,6 +20,14 @@ class BackupRotationTest {
     }
 
     @Test
+    fun `a part a crashed run left is recognised, of any day, and nothing else is`() {
+        assertTrue(BackupRotation.isPart(BackupRotation.partName(BackupRotation.fileName(LocalDate.of(2026, 9, 6)))))
+        assertTrue(BackupRotation.isPart("recomp-backup-2026-09-06 (1).zip.part"))
+        listOf("recomp-backup-2026-09-06.zip", "notes.zip.part", "recomp-backup-2026-09-06.zip.partial", "recomp-csv-2026-09-06.zip.part")
+            .forEach { assertTrue(it, !BackupRotation.isPart(it)) }
+    }
+
+    @Test
     fun `a copy the folder made of a taken name counts, and as the later file it outranks the original`() {
         assertEquals(LocalDate.of(2026, 11, 22), BackupRotation.dateOf("recomp-backup-2026-11-22 (1).zip"))
         assertNull(BackupRotation.dateOf("recomp-backup-2026-11-22.zip.partial"))

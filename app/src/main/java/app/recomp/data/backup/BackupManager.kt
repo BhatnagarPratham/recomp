@@ -399,8 +399,15 @@ class BackupManager @Inject constructor(
     internal fun readPending(): PendingRestore? =
         pendingFile.takeIf { it.isFile }?.let { runCatching { json.decodeFromString<PendingRestore>(it.readText()) }.getOrNull() ?: run { it.delete(); null } }
 
-    /** Where the automatic backup (M16) builds its file before copying it out: app-private cache, deleted after. */
-    val autoBackupScratch: File get() = File(context.cacheDir, "backups/automatic.zip")
+    /** Where the automatic backup (M16) builds its files before copying them out: app-private cache. */
+    val autoBackupScratchDir: File get() = File(context.cacheDir, "backups")
+
+    /** A new scratch file for one automatic run, never shared with another run (M17 review R3); the run deletes it. */
+    fun newAutoBackupScratch(): File = File.createTempFile(SCRATCH_PREFIX, ".zip", autoBackupScratchDir.apply { mkdirs() })
+
+    /** Deletes the scratch files runs that were killed left behind (with photos, if they were included). Returns how many. */
+    fun clearAutoBackupScratch(): Int =
+        autoBackupScratchDir.listFiles().orEmpty().count { it.isFile && it.name.startsWith(SCRATCH_PREFIX) && it.name.endsWith(".zip") && it.delete() }
 
     /** Whether an import is between its database commit and its photos and settings, so photos must be left alone. */
     fun importInProgress(): Boolean = pendingFile.isFile || incomingPhotos.exists() || incomingScanImages.exists()
@@ -656,6 +663,8 @@ class BackupManager @Inject constructor(
 
     companion object {
         const val FORMAT = "recomp-backup"
+        /** The automatic backup's scratch files: `automatic-<random>.zip`, and the older fixed `automatic.zip`. */
+        private const val SCRATCH_PREFIX = "automatic"
         /** Format 2 (M17) can carry `photos/<name>` entries; a backup without photos is still written as format 1. */
         const val FORMAT_VERSION = 2
         const val FORMAT_VERSION_WITHOUT_MEDIA = 1

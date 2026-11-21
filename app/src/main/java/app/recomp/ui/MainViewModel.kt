@@ -80,6 +80,7 @@ class MainViewModel @Inject constructor(
     private val healthScheduler: HealthSyncScheduler,
     private val healthWrites: app.recomp.healthconnect.HealthWriteSync,
     private val autoBackup: app.recomp.data.backup.AutoBackupScheduler,
+    private val autoBackupRun: app.recomp.data.backup.AutoBackup,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -125,6 +126,8 @@ class MainViewModel @Inject constructor(
             healthWrites.start()
             runCatching { autoBackup.ensureScheduled() }
         }
+        // A scratch file an automatic backup that was killed left in the cache (M17 review R3).
+        viewModelScope.launch { runCatching { autoBackupRun.clearStaleScratch() } }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         // A shared image you backed out of is kept a day, then goes (IB-03).
         viewModelScope.launch { body.cleanImages() }

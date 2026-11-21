@@ -35,6 +35,8 @@ import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** A file in the backup folder: its name and its address. */
@@ -56,6 +58,9 @@ interface BackupStorage {
     suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile
 
     suspend fun delete(file: StoredFile)
+
+    /** Whether two addresses are the same document; a provider may spell one document's address more than one way. */
+    fun same(a: String, b: String): Boolean = a == b
 }
 
 /** How a run ended. [retry] is true when trying again later may work (a slow or offline Drive). */
@@ -78,25 +83,51 @@ class AutoBackup @Inject constructor(
     private val days: DayBoundary,
     private val clock: Clock,
 ) {
-    suspend fun run(): BackupRun {
+    /**
+     * One run at a time: *Back up now* and the weekly job can both call [run], and two runs at once would write the
+     * same `.part` in the folder (M17 review R3).
+     */
+    private val running = Mutex()
+
+    suspend fun run(): BackupRun = running.withLock { runAlone() }
+
+    /**
+     * At launch: deletes scratch files a run that was killed left in the cache. Skipped while a run is going, since
+     * that run's scratch is in use. Returns how many went.
+     */
+    suspend fun clearStaleScratch(): Int {
+        if (!running.tryLock()) return 0
+        return try {
+            withContext(Dispatchers.IO) { backups.clearAutoBackupScratch() }
+        } finally {
+            running.unlock()
+        }
+    }
+
+    private suspend fun runAlone(): BackupRun {
         val state = device.autoBackup.first()
         val target = state.target ?: return BackupRun.NoTarget
-        val scratch = backups.autoBackupScratch
+        var scratch: File? = null
         return try {
             val now = clock.millis()
+            if (target.folder) {
+                // A part a crashed run left goes first. A complete backup always exists beside any part (it's written
+                // before the day's file is touched), so this never deletes the only copy.
+                storage.files(target).filter { BackupRotation.isPart(it.name) }.forEach { runCatching { storage.delete(it) } }
+            }
             // The whole backup is built first (in app-private cache, streamed, so photos never sit in memory), so a
-            // failure while exporting never leaves a half-written file.
-            scratch.parentFile?.mkdirs()
-            backups.export(scratch.outputStream(), now, includePhotos = state.includePhotos)
+            // failure while exporting never leaves a half-written file. Each run has its own scratch file.
+            val file = withContext(Dispatchers.IO) { backups.newAutoBackupScratch() }.also { scratch = it }
+            backups.export(file.outputStream(), now, includePhotos = state.includePhotos)
             val result = if (target.folder) {
                 val name = BackupRotation.fileName(days.of(now))
-                val written = storage.write(target, name, scratch)
+                val written = storage.write(target, name, file)
                 // The file just written is known by its address, never its name: the provider may have renamed it.
-                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name) { it.uri == written.uri }
+                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name) { storage.same(it.uri, written.uri) }
                 old.forEach { runCatching { storage.delete(it) } }
                 BackupRun.Done(name, old.size)
             } else {
-                storage.write(target, null, scratch)
+                storage.write(target, null, file)
                 BackupRun.Done(target.label, 0)
             }
             device.setBackedUp(now)
@@ -112,7 +143,7 @@ class AutoBackup @Inject constructor(
         } catch (e: Exception) {
             failed(BackupRun.Failed("Couldn't back up: ${e.message ?: e.javaClass.simpleName}.", retry = false))
         } finally {
-            scratch.delete()
+            scratch?.delete()
         }
     }
 
@@ -201,11 +232,13 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
         return DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
     }
 
-    override suspend fun files(target: BackupTarget): List<StoredFile> = withContext(Dispatchers.IO) {
+    override suspend fun files(target: BackupTarget): List<StoredFile> = withContext(Dispatchers.IO) { list(target) }
+
+    private fun list(target: BackupTarget): List<StoredFile> {
         val tree = Uri.parse(target.uri)
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         val columns = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE)
-        resolver.query(children, columns, null, null, null)?.use { c ->
+        return resolver.query(children, columns, null, null, null)?.use { c ->
             buildList {
                 while (c.moveToNext()) {
                     if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) continue
@@ -216,10 +249,10 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
     }
 
     /**
-     * In a folder, the backup is written to `<name>.part`, checked, and only then renamed over the day's file, so a
-     * write that fails or is cut short never destroys the backup already there. A provider that can't rename gets
-     * the file written in place. The single file (Google Drive) can't be renamed, so it's overwritten in place and
-     * its size checked afterwards; a cut-short write is reported, and the next run writes it again.
+     * In a folder, [FolderWrite] puts the backup in `<name>.part`, checks it, renames it to the day's name and only
+     * then deletes the old file, so a complete backup exists at every step. The single file (Google Drive) can't be
+     * renamed, so it's overwritten in place and its size checked afterwards; a cut-short write is reported, and the
+     * next run writes it again.
      */
     override suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile = withContext(Dispatchers.IO) {
         val size = source.length()
@@ -230,35 +263,21 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
             check(uri, size)
             return@withContext StoredFile(target.label, uri.toString())
         }
-        val before = files(target)
-        // A part left by an earlier run that didn't finish goes first.
-        before.filter { it.name == BackupRotation.partName(name) }.forEach { runCatching { delete(it) } }
-        val part = DocumentsContract.createDocument(resolver, folderDocument(target), "application/octet-stream", BackupRotation.partName(name))
-            ?: throw IOException("The folder didn't take a new file")
-        try {
-            copyTo(part)
-            check(part, size)
-        } catch (e: Exception) {
-            runCatching { DocumentsContract.deleteDocument(resolver, part) }
-            throw e
+        val folder = folderDocument(target)
+        val docs = object : FolderDocuments {
+            override fun list() = list(target)
+            override fun create(mimeType: String, name: String) = DocumentsContract.createDocument(resolver, folder, mimeType, name)?.toString()
+            override fun copyInto(uri: String) = Uri.parse(uri).let { copyTo(it); check(it, size) }
+            override fun rename(uri: String, name: String) = DocumentsContract.renameDocument(resolver, Uri.parse(uri), name)?.toString()
+            override fun delete(uri: String) {
+                DocumentsContract.deleteDocument(resolver, Uri.parse(uri))
+            }
+            override fun same(a: String, b: String) = sameDocument(a, b)
         }
-        val existing = before.firstOrNull { it.name == name }?.let { Uri.parse(it.uri) }
-        val renamed = runCatching {
-            existing?.let { DocumentsContract.deleteDocument(resolver, it) }
-            DocumentsContract.renameDocument(resolver, part, name)
-        }.getOrNull()
-        if (renamed != null) return@withContext StoredFile(name, renamed.toString())
-        run {
-            // No rename here: write the day's file in place, as before, and drop the part.
-            runCatching { DocumentsContract.deleteDocument(resolver, part) }
-            val uri = (if (existing != null && runCatching { resolver.openFileDescriptor(existing, "r")?.close() }.isSuccess) existing else null)
-                ?: DocumentsContract.createDocument(resolver, folderDocument(target), "application/zip", name)
-                ?: throw IOException("The folder didn't take a new file")
-            copyTo(uri)
-            check(uri, size)
-            StoredFile(name, uri.toString())
-        }
+        FolderWrite.write(docs, name)
     }
+
+    override fun same(a: String, b: String) = sameDocument(a, b)
 
     /** The provider's size for the file, where it reports one, must be what was written. */
     private fun check(uri: Uri, expected: Long) {
@@ -281,6 +300,21 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
 
     /** Gives access back when you choose somewhere else. */
     fun release(uri: Uri) = runCatching { resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+
+    companion object {
+        /**
+         * Whether two addresses name one document, by the provider and its document id rather than the address's
+         * spelling (#27 N3): a tree address and a plain one, or `%3A` and `:`, are the same document. Addresses that
+         * aren't documents are compared as they are.
+         */
+        fun sameDocument(a: String, b: String): Boolean {
+            if (a == b) return true
+            val ua = Uri.parse(a)
+            val ub = Uri.parse(b)
+            val ids = runCatching { DocumentsContract.getDocumentId(ua) to DocumentsContract.getDocumentId(ub) }.getOrNull() ?: return false
+            return ua.authority == ub.authority && ids.first == ids.second
+        }
+    }
 
     /** What Settings calls it: the folder's or the file's name. */
     fun label(uri: Uri, folder: Boolean): String {

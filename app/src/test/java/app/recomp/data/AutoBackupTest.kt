@@ -18,6 +18,8 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.TimeZone
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -42,9 +44,25 @@ class FakeBackupStorage : BackupStorage {
     /** Like a provider that won't replace a taken name: the new file gets the next free "(n)". */
     var renameTaken = false
 
+    /** Runs in the middle of each write, after the source is read once; the source is read again after it. */
+    var during: (suspend () -> Unit)? = null
+    var writing = 0
+    var mostAtOnce = 0
+    val sourcesChanged = mutableListOf<String>()
+
     override suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile {
         fail?.let { throw it }
-        val bytes = source.readBytes()
+        writing++
+        mostAtOnce = maxOf(mostAtOnce, writing)
+        val bytes = try {
+            val first = source.readBytes()
+            during?.invoke()
+            // Another run must not have touched this run's scratch file meanwhile.
+            if (!source.isFile || !source.readBytes().contentEquals(first)) sourcesChanged += source.name
+            first
+        } finally {
+            writing--
+        }
         if (name == null) {
             single = bytes
             return StoredFile(target.label, target.uri)
@@ -197,7 +215,7 @@ class AutoBackupTest {
         val withPhotos = storage.files.getValue(BackupRotation.fileName(LocalDate.of(2026, 9, 13)))
         assertEquals(listOf("photos/${front.name}"), photoEntries(withPhotos))
         // The scratch file in the cache is gone once the backup is written.
-        assertTrue(!app.backup.autoBackupScratch.exists())
+        assertTrue(app.backup.autoBackupScratchDir.listFiles().orEmpty().isEmpty())
 
         // Restoring that backup brings the photo back, through the import's checks.
         val bytes = front.readBytes()
@@ -295,6 +313,63 @@ class AutoBackupTest {
         assertEquals("recomp-backup-2026-09-13.zip", run.name)
         assertEquals(listOf("recomp-backup-2026-09-13.zip"), storage.files.keys.filter { BackupRotation.dateOf(it) != null })
         assertTrue(storage.files.getValue(run.name).size > 2)
+    }
+
+    @Test
+    fun `two runs at once, Back up now during the weekly job, don't share or corrupt a scratch file`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        app.clock.instant = sunday(0)
+        storage.during = { kotlinx.coroutines.delay(200) }
+        val runs = (1..2).map { async(kotlinx.coroutines.Dispatchers.Default) { backup.run() } }.awaitAll()
+        assertTrue(runs.all { it is BackupRun.Done })
+        assertEquals("one run at a time", 1, storage.mostAtOnce)
+        assertEquals(emptyList<String>(), storage.sourcesChanged)
+        // The day's file is a whole backup the import accepts, and no scratch file is left.
+        val prepared = app.backup.prepare(ByteArrayInputStream(storage.files.values.single()))
+        app.backup.discard(prepared)
+        assertTrue(app.backup.autoBackupScratchDir.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `each run builds in its own scratch file`() {
+        val a = app.backup.newAutoBackupScratch()
+        val b = app.backup.newAutoBackupScratch()
+        assertTrue(a != b && a.isFile && b.isFile)
+    }
+
+    @Test
+    fun `scratch files a killed run left are cleared at launch, but never while a run is going`() = runBlocking {
+        val dir = app.backup.autoBackupScratchDir.apply { mkdirs() }
+        File(dir, "automatic.zip").writeBytes(byteArrayOf(1))
+        app.backup.newAutoBackupScratch().writeBytes(byteArrayOf(2))
+        File(dir, "other.txt").writeBytes(byteArrayOf(3))
+        assertEquals(2, backup.clearStaleScratch())
+        assertEquals(listOf("other.txt"), dir.listFiles().orEmpty().map { it.name })
+
+        // While a run is writing, its scratch file is in use and stays.
+        app.device.setBackupTarget(folder)
+        app.clock.instant = sunday(0)
+        val writing = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        storage.during = { writing.complete(Unit); release.await() }
+        val run = async(kotlinx.coroutines.Dispatchers.Default) { backup.run() }
+        writing.await()
+        assertEquals(0, backup.clearStaleScratch())
+        release.complete(Unit)
+        assertTrue(run.await() is BackupRun.Done)
+        assertEquals(emptyList<String>(), storage.sourcesChanged)
+    }
+
+    @Test
+    fun `a run first deletes the parts crashed runs left, of any day, and nothing else`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        storage.files["recomp-backup-2026-09-06.zip.part"] = byteArrayOf(1)
+        storage.files["recomp-backup-2026-09-13.zip.part"] = byteArrayOf(2)
+        storage.files["recomp-backup-2026-09-13.zip"] = byteArrayOf(3)
+        storage.files["notes.zip.part"] = byteArrayOf(4)
+        app.clock.instant = sunday(1)
+        assertTrue(backup.run() is BackupRun.Done)
+        assertEquals(listOf("notes.zip.part", "recomp-backup-2026-09-13.zip"), storage.files.keys.sorted())
     }
 
     @Test
