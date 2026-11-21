@@ -79,4 +79,20 @@ class PhotoFlowTest {
         assertFalse(PhotoRepository.suggest(today.minusDays(27), today))
         assertTrue(PhotoRepository.suggest(today.minusDays(28), today))
     }
+
+    @Test
+    fun `compare lists one pose's dates, newest first, once each`() = runBlocking {
+        val day = 86_400_000L
+        photos.saveCapture(capture(PhotoPose.FRONT, 1_000), PhotoPose.FRONT, takenAt = 1_000)
+        photos.saveCapture(capture(PhotoPose.SIDE, 1_001), PhotoPose.SIDE, takenAt = 1_001)
+        photos.saveCapture(capture(PhotoPose.FRONT, 1_000 + 30 * day), PhotoPose.FRONT, takenAt = 1_000 + 30 * day)
+        photos.saveCapture(capture(PhotoPose.FRONT, 1_002 + 30 * day), PhotoPose.FRONT, takenAt = 1_002 + 30 * day)
+        val all = photos.observe().first()
+        val fronts = PhotoRepository.datesFor(all, PhotoPose.FRONT)
+        assertEquals(2, fronts.size)
+        assertTrue(fronts[0].isAfter(fronts[1]))
+        assertEquals(1, PhotoRepository.datesFor(all, PhotoPose.SIDE).size)
+        assertTrue(PhotoRepository.datesFor(all, PhotoPose.BACK).isEmpty())
+        assertEquals(fronts[0], photos.observeLatestDate().first())
+    }
 }

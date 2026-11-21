@@ -1,5 +1,6 @@
 package app.recomp.ui.body
 
+import app.recomp.data.repo.PhotoRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.domain.body.MobilityMarker
 import kotlinx.coroutines.flow.map
@@ -131,7 +132,11 @@ class BodyViewModel @Inject constructor(
     private val health: HealthRepository,
     days: DayBoundary,
     training: TrainingRepository,
+    photos: PhotoRepository,
 ) : ViewModel() {
+    /** BM-04: the latest photo's date, for the 4-week suggestion (no notification). */
+    val lastPhoto: StateFlow<LocalDate?> = photos.observeLatestDate().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** YG-04: the mobility card, while Settings → Training → *Mobility markers* is on. */
     val mobilityOn: StateFlow<Boolean> = body.observeMobilityOn(training.observeExtras().map { rows -> rows.map { it.kind } })
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -191,7 +196,8 @@ private fun rangeLabel(days: Long?) = when (days) {
  * weigh-in, the weekly waist, and the scan table (HM-02).
  */
 @Composable
-fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewModel: BodyViewModel = hiltViewModel()) {
+fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenPhotos: () -> Unit = {}, viewModel: BodyViewModel = hiltViewModel()) {
+    val lastPhoto by viewModel.lastPhoto.collectAsStateWithLifecycle()
     val drafts by viewModel.drafts.collectAsStateWithLifecycle()
     val activity by viewModel.activity.collectAsStateWithLifecycle()
     val trend by viewModel.trend.collectAsStateWithLifecycle()
@@ -262,6 +268,24 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
                     SectionTitle("Waist")
                     WaistCard(waist, today, onLog = { scope.launch { tapeDraft = viewModel.entries.newMeasurements() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
                     TapeCard(tape)
+                }
+            }
+
+            item {
+                Column {
+                    SectionTitle("Photos")
+                    Card(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Open photos", onClick = onOpenPhotos)) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                when {
+                                    lastPhoto == null -> "Front, side and back, kept only on this phone."
+                                    PhotoRepository.suggest(lastPhoto, today) -> "Last taken ${BodyText.date(lastPhoto!!)}. Time for new ones."
+                                    else -> "Last taken ${BodyText.date(lastPhoto!!)}."
+                                },
+                            )
+                            Text("Take and compare photos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
                 }
             }
 

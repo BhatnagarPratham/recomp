@@ -30,6 +30,7 @@ import app.recomp.ui.MainViewModel
 import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.body.BodyScreen
+import app.recomp.ui.body.PhotosScreen
 import app.recomp.ui.body.ScanScreen
 import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
@@ -74,6 +75,9 @@ import kotlinx.serialization.Serializable
 
 /** A scan's form (IB-01); 0 is a new scan. */
 @Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0)
+
+/** Body → Photos (BM-04). */
+@Serializable data object PhotosRoute
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
@@ -207,7 +211,10 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
-            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }, onOpenDraft = { nav.navigate(ScanRoute(draftId = it)) }) }
+            composable<BodyRoute> {
+                BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }, onOpenDraft = { nav.navigate(ScanRoute(draftId = it)) }, onOpenPhotos = { nav.navigate(PhotosRoute) })
+            }
+            composable<PhotosRoute> { PhotosScreen(onBack = { nav.popBackStack() }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()

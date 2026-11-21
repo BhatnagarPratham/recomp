@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Progress photos (BM-04): the camera app may write only into files/photos/, through a content URI granted for
+  that one capture. Nothing else in app storage is reachable this way.
+-->
+<paths>
+    <files-path name="photos" path="photos/" />
+</paths>
