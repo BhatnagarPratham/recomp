@@ -1,5 +1,8 @@
 package app.recomp.ui.body
 
+import kotlinx.coroutines.flow.map
+import app.recomp.domain.body.TapeSite
+import app.recomp.domain.body.TapeReading
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -89,6 +92,17 @@ class BodyEntries(private val body: BodyRepository, private val health: HealthRe
 
     fun edit(row: MeasurementEntity) = WaistDraft(row.id, (row.value * 10).roundToInt(), row.measuredAt)
 
+    /** BM-03: the sites due today, prefilled from each one's last reading. */
+    suspend fun newMeasurements(): TapeDraft {
+        val now = System.currentTimeMillis()
+        val sites = body.dueTapeSites(health.logDate(now)).map { site ->
+            site to ((body.lastTapeCm(site) ?: defaultCm(site)) * 10).roundToInt()
+        }
+        return TapeDraft(sites, now)
+    }
+
+    suspend fun save(d: TapeDraft) = body.logTape(d.sites.associate { (site, tenths) -> site to tenths / 10.0 }, d.at)
+
     suspend fun save(d: WaistDraft) {
         if (d.id == null) body.logWaist(d.tenthsCm / 10.0, d.at) else body.updateMeasurement(d.id, d.tenthsCm / 10.0, d.at)
     }
@@ -97,6 +111,15 @@ class BodyEntries(private val body: BodyRepository, private val health: HealthRe
         /** Only before any weigh-in or typed weight; the steppers and typing take it from there. */
         const val DEFAULT_WEIGHT_G = 70_000
         const val DEFAULT_WAIST_CM = 85.0
+
+        /** Starting points for a first reading only; the stepper and typing take it from there. */
+        fun defaultCm(site: TapeSite) = when (site) {
+            TapeSite.WAIST -> DEFAULT_WAIST_CM
+            TapeSite.CHEST -> 100.0
+            TapeSite.ARM -> 33.0
+            TapeSite.THIGH -> 55.0
+            TapeSite.HIP -> 100.0
+        }
     }
 }
 
@@ -125,6 +148,12 @@ class BodyViewModel @Inject constructor(private val body: BodyRepository, privat
 
     fun save(d: WeighInDraft) = viewModelScope.launch { entries.save(d) }
     fun save(d: WaistDraft) = viewModelScope.launch { entries.save(d) }
+
+    fun save(d: TapeDraft) = viewModelScope.launch { entries.save(d) }
+
+    /** BM-03: every site's latest reading and its change; the waist has its own card. */
+    val tape: StateFlow<List<TapeReading>> = body.observeTape().map { rows -> rows.filter { it.site != TapeSite.WAIST } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     suspend fun deleteWeighIn(id: Long) = body.deleteWeighIn(id)
     suspend fun restore(row: BodyWeightEntity) = body.restoreWeighIn(row)
     suspend fun deleteWaist(id: Long) = body.deleteMeasurement(id)
@@ -158,6 +187,8 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
     val scope = rememberCoroutineScope()
     var weighIn by remember { mutableStateOf<WeighInDraft?>(null) }
     var waistDraft by remember { mutableStateOf<WaistDraft?>(null) }
+    var tapeDraft by remember { mutableStateOf<TapeDraft?>(null) }
+    val tape by viewModel.tape.collectAsStateWithLifecycle()
     var allWeighIns by remember { mutableStateOf(false) }
 
     fun undoable(message: String, undo: suspend () -> Unit) = scope.launch {
@@ -210,7 +241,8 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
             item {
                 Column {
                     SectionTitle("Waist")
-                    WaistCard(waist, today, onLog = { scope.launch { waistDraft = viewModel.entries.newWaist() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
+                    WaistCard(waist, today, onLog = { scope.launch { tapeDraft = viewModel.entries.newMeasurements() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
+                    TapeCard(tape)
                 }
             }
 
@@ -272,6 +304,12 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
             },
         ) { saved ->
             weighIn = null
+            viewModel.save(saved)
+        }
+    }
+    tapeDraft?.let { d ->
+        MeasurementsSheet(d, onDismiss = { tapeDraft = null }) { saved ->
+            tapeDraft = null
             viewModel.save(saved)
         }
     }
@@ -352,7 +390,7 @@ private fun WaistCard(rows: List<MeasurementEntity>, today: LocalDate, onLog: ()
                 )
             }
             Button(onClick = onLog, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text(if (latest != null && latest.logDate.isAfter(today.minusDays(7))) "Log waist again" else "Log waist")
+                Text(if (latest != null && latest.logDate.isAfter(today.minusDays(7))) "Log measurements again" else "Log measurements")
             }
             rows.asReversed().take(8).forEach { row ->
                 HorizontalDivider()
@@ -421,3 +459,21 @@ private fun Cell(text: String) = Text(text, Modifier.width(NUM_W), style = Mater
 private val DATE_W: Dp = 64.dp
 private val NUM_W: Dp = 52.dp
 private val TABLE_W: Dp = DATE_W + NUM_W * 5
+
+/** BM-03: each chosen site's latest reading and its change since the one before. Hidden until there is one. */
+@Composable
+private fun TapeCard(rows: List<TapeReading>) {
+    if (rows.isEmpty()) return
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            rows.forEach { r ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(BodyText.site(r.site), Modifier.weight(1f))
+                    Text(BodyText.cm(r.cm) + (r.changeCm?.let { " (${BodyText.signed(it, "cm")})" } ?: ""))
+                }
+                Text("Last ${BodyText.date(r.date)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
