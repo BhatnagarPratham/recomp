@@ -66,8 +66,8 @@ class GeminiProvider @Inject constructor() : HttpProvider() {
                         put("schema", call.schema.element)
                     }
                 }
-                put("maxOutputTokens", MAX_TOKENS)
-                putJsonObject("thinkingConfig") { put("thinkingLevel", "LOW") }
+                put("maxOutputTokens", call.maxTokens)
+                putJsonObject("thinkingConfig") { put("thinkingLevel", call.effort.wire.uppercase()) }
             }
         }
         val model = call.target.model

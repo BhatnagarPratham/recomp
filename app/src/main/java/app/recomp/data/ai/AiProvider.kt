@@ -4,6 +4,7 @@ import app.recomp.domain.ai.AiImage
 import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.AiTarget
+import app.recomp.domain.ai.MealRequest
 import app.recomp.domain.ai.TokenUsage
 import java.io.InterruptedIOException
 import java.net.ConnectException
@@ -42,9 +43,13 @@ class AiSchema(val name: String, val json: Map<String, Any>) {
     }
 }
 
+/** How hard a provider thinks (TRD §6.2): a meal at [LOW]; the weekly programme review at [MEDIUM] (M11). */
+enum class AiEffort(val wire: String) { LOW("low"), MEDIUM("medium") }
+
 /**
  * One request to a provider (AI-05): the system prompt, the user message, any photos and the reply's schema.
- * [upperBound] is what it could cost at most, used for a request that was sent but never answered.
+ * [upperBound] is what it could cost at most, used for a request that was sent but never answered. [effort],
+ * [timeout] and [maxTokens] are a meal's unless the caller asks for more, as the programme review does.
  */
 class AiCall(
     val target: AiTarget,
@@ -53,6 +58,9 @@ class AiCall(
     val schema: AiSchema,
     val upperBound: TokenUsage,
     val images: List<AiImage> = emptyList(),
+    val effort: AiEffort = AiEffort.LOW,
+    val timeout: Duration = AiWire.TIMEOUT,
+    val maxTokens: Long = MealRequest.MAX_OUTPUT_TOKENS,
 ) {
     override fun toString() = "AiCall($target)"
 }
