@@ -1,5 +1,7 @@
 package app.recomp.ui.body
 
+import app.recomp.domain.body.TapeSites
+import app.recomp.domain.body.TapeSite
 import app.recomp.domain.body.ProtocolIssue
 import app.recomp.domain.body.ScanChange
 import app.recomp.domain.body.ScanProtocol
@@ -96,6 +98,23 @@ object BodyText {
     fun verdict(issues: Set<ProtocolIssue>, minsFromSlot: Int?): String =
         if (issues.isEmpty()) "On protocol" else "Off protocol: " + issues.sorted().joinToString("; ") { issue(it, minsFromSlot) }
 
+    /** BM-03: "Chest", "Arm"… */
+    fun site(s: TapeSite): String = when (s) {
+        TapeSite.WAIST -> "Waist"
+        TapeSite.CHEST -> "Chest"
+        TapeSite.ARM -> "Arm"
+        TapeSite.THIGH -> "Thigh"
+        TapeSite.HIP -> "Hip"
+    }
+
+    /** Settings' summary: "Waist only", or "Waist, arm and hip". */
+    fun tapeSites(chosen: Set<TapeSite>): String {
+        val names = (listOf(TapeSite.WAIST) + TapeSites.OPTIONAL.filter { it in chosen }).map { site(it).lowercase() }
+        if (names.size == 1) return "Waist only"
+        val list = names.dropLast(1).joinToString(", ") + " and " + names.last()
+        return list.replaceFirstChar { it.uppercase() }
+    }
+
     fun date(d: LocalDate): String = d.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
 
     fun shortDate(d: LocalDate): String = d.format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault()))
@@ -140,4 +159,13 @@ object BodyText {
 
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+
+    /** A number that may be negative, typed with a hyphen or a minus sign (YG-04's sit-and-reach). */
+    fun parseSigned(text: String): Double? = parse(text.trim().replace('\u2212', '-'))
+
+    /** "+3.5 cm", "−4 cm", "0 cm". */
+    fun signedCm(value: Double): String = if (value == 0.0) "0 cm" else signed(value, "cm")
+
+    /** "45 s", "1:05". */
+    fun minutesSeconds(seconds: Int): String = if (seconds < 60) "$seconds s" else "%d:%02d".format(seconds / 60, seconds % 60)
 }

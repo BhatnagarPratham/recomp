@@ -22,7 +22,7 @@ import app.recomp.domain.export.BackupRotation
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
@@ -48,8 +48,11 @@ interface BackupStorage {
     /** The files directly in the folder. */
     suspend fun files(target: BackupTarget): List<StoredFile>
 
-    /** Writes [bytes] to [name] in the folder, replacing a file of that name, or to the single file when [name] is null. */
-    suspend fun write(target: BackupTarget, name: String?, bytes: ByteArray)
+    /**
+     * Copies [source] to [name] in the folder, replacing a file of that name, or to the single file when [name] is
+     * null. It streams, so a backup with photos is never held in memory.
+     */
+    suspend fun write(target: BackupTarget, name: String?, source: File)
 
     suspend fun delete(file: StoredFile)
 }
@@ -75,19 +78,23 @@ class AutoBackup @Inject constructor(
     private val clock: Clock,
 ) {
     suspend fun run(): BackupRun {
-        val target = device.autoBackup.first().target ?: return BackupRun.NoTarget
+        val state = device.autoBackup.first()
+        val target = state.target ?: return BackupRun.NoTarget
+        val scratch = backups.autoBackupScratch
         return try {
             val now = clock.millis()
-            // The whole backup is built first, so a failure while exporting never leaves a half-written file.
-            val bytes = ByteArrayOutputStream().also { backups.export(it, now) }.toByteArray()
+            // The whole backup is built first (in app-private cache, streamed, so photos never sit in memory), so a
+            // failure while exporting never leaves a half-written file.
+            scratch.parentFile?.mkdirs()
+            backups.export(scratch.outputStream(), now, includePhotos = state.includePhotos)
             val result = if (target.folder) {
                 val name = BackupRotation.fileName(days.of(now))
-                storage.write(target, name, bytes)
+                storage.write(target, name, scratch)
                 val old = BackupRotation.toDelete(storage.files(target), StoredFile::name)
                 old.forEach { runCatching { storage.delete(it) } }
                 BackupRun.Done(name, old.size)
             } else {
-                storage.write(target, null, bytes)
+                storage.write(target, null, scratch)
                 BackupRun.Done(target.label, 0)
             }
             device.setBackedUp(now)
@@ -102,6 +109,8 @@ class AutoBackup @Inject constructor(
             failed(BackupRun.Failed("Couldn't write the backup (${e.message ?: e.javaClass.simpleName}). It will try again.", retry = true))
         } catch (e: Exception) {
             failed(BackupRun.Failed("Couldn't back up: ${e.message ?: e.javaClass.simpleName}.", retry = false))
+        } finally {
+            scratch.delete()
         }
     }
 
@@ -210,11 +219,13 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
      * the file written in place. The single file (Google Drive) can't be renamed, so it's overwritten in place and
      * its size checked afterwards; a cut-short write is reported, and the next run writes it again.
      */
-    override suspend fun write(target: BackupTarget, name: String?, bytes: ByteArray) = withContext(Dispatchers.IO) {
+    override suspend fun write(target: BackupTarget, name: String?, source: File) = withContext(Dispatchers.IO) {
+        val size = source.length()
+        fun copyTo(uri: Uri) = open(uri).use { out -> source.inputStream().use { it.copyTo(out) } }
         if (name == null) {
             val uri = Uri.parse(target.uri)
-            open(uri).use { it.write(bytes) }
-            check(uri, bytes.size.toLong())
+            copyTo(uri)
+            check(uri, size)
             return@withContext
         }
         val before = files(target)
@@ -223,8 +234,8 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
         val part = DocumentsContract.createDocument(resolver, folderDocument(target), "application/octet-stream", BackupRotation.partName(name))
             ?: throw IOException("The folder didn't take a new file")
         try {
-            open(part).use { it.write(bytes) }
-            check(part, bytes.size.toLong())
+            copyTo(part)
+            check(part, size)
         } catch (e: Exception) {
             runCatching { DocumentsContract.deleteDocument(resolver, part) }
             throw e
@@ -240,8 +251,8 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
             val uri = (if (existing != null && runCatching { resolver.openFileDescriptor(existing, "r")?.close() }.isSuccess) existing else null)
                 ?: DocumentsContract.createDocument(resolver, folderDocument(target), "application/zip", name)
                 ?: throw IOException("The folder didn't take a new file")
-            open(uri).use { it.write(bytes) }
-            check(uri, bytes.size.toLong())
+            copyTo(uri)
+            check(uri, size)
         }
     }
 

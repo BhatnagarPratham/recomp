@@ -333,6 +333,7 @@ fun SettingsScreen(
             }
         }
         VolumeBandSetting()
+        MobilitySetting()
 
         SectionTitle("Food")
         SettingRow("Diet", ui.stored.diet?.let(Labels::diet) ?: "Not set") { editing = Editing.Diet }
@@ -354,6 +355,7 @@ fun SettingsScreen(
         SectionTitle("Body data")
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
         SettingRow("Usual scan slot", ui.scanSlot?.let(BodyText::slot) ?: "Set by your first scan") { editing = Editing.Slot }
+        TapeSitesSetting()
         SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
         // AR-01: steps come from Health Connect, so turning them on happens there, with its permission.
         val stepsOn = HealthFeature.STEPS in healthFeatures

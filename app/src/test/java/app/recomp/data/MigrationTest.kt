@@ -1,6 +1,8 @@
 package app.recomp.data
 
+import app.recomp.data.db.PhotoPose
 import app.recomp.data.db.ProgrammeReviewEntity
+import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.data.db.ScanDraftEntity
 import app.recomp.data.db.SleepSource
 import android.database.sqlite.SQLiteDatabase
@@ -600,6 +602,37 @@ class MigrationTest {
         runBlocking {
             assertEquals(1L, room.workoutDao().session(1)!!.id)
             assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `13 to 14 adds progress photos and keeps M13's scan drafts and M14's recipes`() {
+        val file = File(tmp.root, "v13.db")
+        createAt(13, file).use { db ->
+            db.execSQL("INSERT INTO scan_draft (id, measured_at, weight_g, hc_ids) VALUES (1, 100, 80000, '[]')")
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-11-10')")
+            db.execSQL("INSERT INTO measurement (id, log_date, measured_at, type, value) VALUES (1, '2026-11-10', 5, 'WAIST', 88.5)")
+            db.execSQL(
+                "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, archived, created_at) " +
+                    "VALUES (1, 'Test dal', 'CUSTOM', 'VEGAN', 120, 7, 18, 2, 4, 0, 0, 1), (2, 'Test khichdi', 'RECIPE', 'VEGAN', 110, 5, 20, 1, 3, 0, 0, 1)",
+            )
+            db.execSQL("INSERT INTO recipe (food_id, servings, cooked_weight_g) VALUES (2, 2, 400)")
+            db.execSQL("INSERT INTO recipe_ingredient (recipe_id, position, food_id, grams) VALUES (2, 0, 1, 250)")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(80_000, room.healthDao().draft(1)!!.weightG)
+            assertEquals(RecipeEntity(2, 2.0, 400.0), room.recipeDao().get(2))
+            assertEquals(listOf(1L to 250.0), room.recipeDao().ingredients(2).map { it.foodId to it.grams })
+            assertEquals(88.5, room.backupCheckDao().measurement().single().value, 0.0)
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            val photos = room.photoDao()
+            assertTrue(photos.all().isEmpty())
+            val id = photos.insert(ProgressPhotoEntity(logDate = LocalDate.of(2026, 11, 21), takenAt = 5, pose = PhotoPose.SIDE, filePath = "photos/a.jpg"))
+            assertEquals(PhotoPose.SIDE, photos.get(id)!!.pose)
+            assertEquals("photos/a.jpg", photos.get(id)!!.filePath)
         }
         assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()

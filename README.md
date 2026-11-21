@@ -31,6 +31,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M15: share an InBody screenshot to Recomp and type the scan with it pinned above the form (it stays on the phone, never sent to AI); with a recent on-protocol scan, BMR uses your lean mass, Body offers to preview targets with it, and a target body-fat % becomes a finish line.
 > - M19: goals: *What to expect* when you change goal, a Goal reached card, a suggested maintenance break after 12 weeks in a deficit that resumes on its own, *Describe your goal* read by AI (only the text you type is sent), a pregnancy and breastfeeding switch that turns off deficits, and presets as data files a fork can add to.
 > - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
+> - M17: body extras: tape measurements beyond the waist, progress photos that stay in the app (never the gallery, never AI, in a backup only when you include them), focus areas on classes, and monthly mobility tests.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >

@@ -84,6 +84,9 @@ interface BackupCheckDao {
 
     @Query("SELECT * FROM recipe_ingredient")
     suspend fun recipeIngredient(): List<RecipeIngredientEntity>
+
+    @Query("SELECT * FROM progress_photo")
+    suspend fun progressPhoto(): List<ProgressPhotoEntity>
 }
 
 /** Every table's reader, by table name. */
@@ -113,4 +116,5 @@ fun BackupCheckDao.readers(): Map<String, suspend () -> List<Any>> = mapOf(
     "scan_draft" to { scanDraft() },
     "recipe" to { recipe() },
     "recipe_ingredient" to { recipeIngredient() },
+    "progress_photo" to { progressPhoto() },
 )

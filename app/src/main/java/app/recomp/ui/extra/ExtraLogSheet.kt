@@ -24,6 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.recomp.data.db.RoutineEntity
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
+import app.recomp.domain.training.FocusAreas
+import app.recomp.ui.components.Labels
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.Stepper
@@ -39,6 +44,7 @@ fun ExtraLogSheet(routine: RoutineEntity, initial: ExtraEntry, onDismiss: () -> 
     var duration by remember { mutableStateOf(initial.durationMin) }
     var intensity by remember { mutableStateOf(initial.intensity) }
     var notes by remember { mutableStateOf(initial.notes.orEmpty()) }
+    var focus by remember { mutableStateOf(initial.focusAreas) }
     var typing by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -59,9 +65,11 @@ fun ExtraLogSheet(routine: RoutineEntity, initial: ExtraEntry, onDismiss: () -> 
             )
             Text("Intensity (optional)", style = MaterialTheme.typography.labelLarge)
             ChoiceChips((1..5).toList(), intensity, { "$it" }, { intensity = if (intensity == it) null else it })
+            Text("Focus (optional)", style = MaterialTheme.typography.labelLarge)
+            FocusChips(focus, onToggle = { focus = FocusAreas.toggle(focus, it) })
             OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
             Button(
-                onClick = { onSave(ExtraEntry(style.trim().ifEmpty { routine.name }, duration, intensity, notes.trim().ifEmpty { null })) },
+                onClick = { onSave(ExtraEntry(style.trim().ifEmpty { routine.name }, duration, intensity, notes.trim().ifEmpty { null }, focus)) },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Save") }
         }
@@ -71,6 +79,17 @@ fun ExtraLogSheet(routine: RoutineEntity, initial: ExtraEntry, onDismiss: () -> 
         NumberEntryDialog("Minutes", "$duration", decimal = false, onDismiss = { typing = false }) { text ->
             typing = false
             text.trim().toIntOrNull()?.takeIf { it in 1..600 }?.let { duration = it }
+        }
+    }
+}
+
+/** YG-03's focus areas as multi-select chips that wrap at large font sizes. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun FocusChips(selected: List<String>, onToggle: (String) -> Unit, modifier: Modifier = Modifier) {
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FocusAreas.ALL.forEach { area ->
+            FilterChip(selected = area in selected, onClick = { onToggle(area) }, label = { Text(Labels.focusArea(area)) }, modifier = Modifier.heightIn(min = 48.dp))
         }
     }
 }

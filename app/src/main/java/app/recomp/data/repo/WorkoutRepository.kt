@@ -18,6 +18,7 @@ import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
 import app.recomp.domain.progression.Targets
+import app.recomp.domain.training.FocusAreas
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.PlanRow
 import app.recomp.domain.training.PlanSession
@@ -306,13 +307,14 @@ class WorkoutRepository @Inject constructor(
 
     // Extra sessions (YG-01)
 
-    data class ExtraEntry(val style: String, val durationMin: Int, val intensity: Int?, val notes: String?)
+    /** [focusAreas] are YG-03's keys ([FocusAreas]), prefilled from last time. */
+    data class ExtraEntry(val style: String, val durationMin: Int, val intensity: Int?, val notes: String?, val focusAreas: List<String> = emptyList())
 
     /** Prefill for "Log class": the last session of this kind that you logged, never one imported from another app (AR-04). */
     suspend fun lastExtra(routineId: Long): ExtraEntry? {
         val session = workoutDao.lastLoggedOfRoutine(routineId) ?: return null
         val detail = workoutDao.yogaDetail(session.id) ?: return null
-        return ExtraEntry(detail.style, detail.durationMin, detail.intensity, session.notes)
+        return ExtraEntry(detail.style, detail.durationMin, detail.intensity, session.notes, FocusAreas.normalize(detail.focusAreas))
     }
 
     suspend fun logExtra(routine: RoutineEntity, entry: ExtraEntry, now: Long = System.currentTimeMillis()): Long =
@@ -326,7 +328,7 @@ class WorkoutRepository @Inject constructor(
                 logDate = days.of(now),
                 notes = entry.notes?.ifBlank { null },
             ),
-            YogaDetailEntity(sessionId = 0, style = entry.style, durationMin = entry.durationMin, intensity = entry.intensity),
+            YogaDetailEntity(sessionId = 0, style = entry.style, durationMin = entry.durationMin, intensity = entry.intensity, focusAreas = FocusAreas.normalize(entry.focusAreas)),
         )
 }
 

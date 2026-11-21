@@ -52,6 +52,13 @@ class BackupRulesTest {
         assertTrue(manifest.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""))
     }
 
+    /** PRD §12.13, TRD §10 M17: progress photos are never in Android's own backup or device transfer. */
+    @Test
+    fun `progress photos are left out of cloud backup and device transfer`() {
+        val photo = "file" to "${app.recomp.data.repo.PhotoRepository.PHOTO_DIR}/front-1.jpg"
+        listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $photo", leftOut(section, photo)) }
+    }
+
     @Test
     fun `shared InBody images are left out of cloud backup and device transfer`() {
         // IB-03: an image kept with a scan, in app-private files (TRD §10 M15's risks).
@@ -59,3 +66,4 @@ class BackupRulesTest {
         listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $image", leftOut(section, image)) }
     }
 }
+

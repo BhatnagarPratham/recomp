@@ -11,6 +11,9 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- BM-04: progress photos. Once declared, the camera intent needs it granted, so Recomp asks first (M18 declares it too). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Reminders are set again after a restart (RM-01, TRD §6.6). They use inexact alarms, so no exact-alarm permission. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -101,6 +104,17 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+
+        <!-- BM-04: the camera app writes each progress photo straight into files/photos/, never the gallery. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.photos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/photo_paths" />
+        </provider>
 
         <!-- WorkManager starts on demand with Hilt's worker factory (RecompApp), not from androidx.startup. -->
         <provider

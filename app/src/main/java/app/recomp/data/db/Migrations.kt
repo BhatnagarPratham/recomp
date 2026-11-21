@@ -289,4 +289,15 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_food_id` ON `recipe_ingredient` (`food_id`)")
         }
     }
+
+    /** M17: progress photos (BM-04). The images are files; the table only points at them. */
+    val MIGRATION_13_14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `progress_photo` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, " +
+                    "`taken_at` INTEGER NOT NULL, `pose` TEXT NOT NULL, `file_path` TEXT NOT NULL)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_progress_photo_log_date` ON `progress_photo` (`log_date`)")
+        }
+    }
 }

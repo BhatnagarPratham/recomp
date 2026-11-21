@@ -4,6 +4,13 @@ import app.recomp.data.body.ScanImages
 import java.time.LocalDate
 import app.recomp.domain.body.ScanTargets
 import app.recomp.domain.body.LeanScan
+import kotlinx.coroutines.flow.map
+import app.recomp.domain.model.SessionKind
+import app.recomp.domain.body.TapeSites
+import app.recomp.domain.body.TapeSite
+import app.recomp.domain.body.TapeReading
+import app.recomp.domain.body.MobilityMarkers
+import app.recomp.domain.body.MobilityMarker
 import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyCompositionEntity
@@ -169,8 +176,64 @@ class BodyRepository @Inject constructor(
 
     suspend fun deleteMeasurement(id: Long): MeasurementEntity? = bodyDao.measurement(id)?.also { bodyDao.delete(it) }
 
+    /** A tape site's or mobility marker's readings, newest first, for editing and deleting them (M17). */
+    fun observeReadings(type: MeasurementType): Flow<List<MeasurementEntity>> =
+        bodyDao.observeAllMeasurements().map { rows -> rows.filter { it.type == type }.sortedByDescending { it.measuredAt } }
+
+    /** Changes a tape or mobility reading; refuses a value out of its range. Returns whether it saved. */
+    suspend fun updateReading(id: Long, value: Double, measuredAt: Long): Boolean {
+        val old = bodyDao.measurement(id) ?: return false
+        if (!validReading(old.type, value)) return false
+        updateMeasurement(id, value, measuredAt)
+        return true
+    }
+
     suspend fun restoreMeasurement(row: MeasurementEntity) {
         bodyDao.insert(row)
+    }
+
+    // Other tape sites (BM-03) and mobility markers (YG-04)
+
+    val tapeSites: Flow<Set<TapeSite>> = prefs.tapeSites
+
+    suspend fun setTapeSites(sites: Set<TapeSite>) = prefs.setTapeSites(sites)
+
+    /** Every tape site's latest reading and its change, waist included. */
+    fun observeTape(): Flow<List<TapeReading>> = bodyDao.observeAllMeasurements().map { rows ->
+        TapeSites.latest(rows.mapNotNull { row -> row.type.tapeSite()?.let { Triple(it, row.logDate, row.value) } })
+    }
+
+    /** The sites the *Log measurements* sheet asks for today: waist, then chosen sites 4+ weeks old (PRD §12.13). */
+    suspend fun dueTapeSites(today: LocalDate): List<TapeSite> {
+        val last = TapeSite.entries.mapNotNull { site -> bodyDao.lastMeasurement(site.type())?.let { site to it.logDate } }.toMap()
+        return TapeSites.due(prefs.tapeSites.first(), last, today)
+    }
+
+    suspend fun lastTapeCm(site: TapeSite): Double? = bodyDao.lastMeasurement(site.type())?.value
+
+    /** Saves one sheet's readings together, all at [measuredAt]. */
+    suspend fun logTape(readings: Map<TapeSite, Double>, measuredAt: Long) = db.withTransaction {
+        readings.forEach { (site, cm) ->
+            bodyDao.insert(MeasurementEntity(logDate = days.of(measuredAt), measuredAt = measuredAt, type = site.type(), value = cm))
+        }
+    }
+
+    /** YG-04: the mobility card's switch, defaulting to on when you have a yoga or mobility session. */
+    fun observeMobilityOn(extras: Flow<List<SessionKind>>): Flow<Boolean> =
+        combine(prefs.mobilityChoice, extras) { choice, kinds -> MobilityMarkers.enabled(choice, kinds) }
+
+    suspend fun setMobilityMarkers(on: Boolean) = prefs.setMobilityMarkers(on)
+
+    /** Each marker's readings, newest first. */
+    fun observeMobility(): Flow<Map<MobilityMarker, List<MeasurementEntity>>> = bodyDao.observeAllMeasurements().map { rows ->
+        MobilityMarker.entries.associateWith { m -> rows.filter { it.type == m.type() }.sortedByDescending { it.measuredAt } }
+    }
+
+    /** Saves the markers taken in one go; a marker left out wasn't taken. */
+    suspend fun logMobility(values: Map<MobilityMarker, Double>, measuredAt: Long) = db.withTransaction {
+        values.forEach { (marker, value) ->
+            bodyDao.insert(MeasurementEntity(logDate = days.of(measuredAt), measuredAt = measuredAt, type = marker.type(), value = value))
+        }
     }
 
     // Scans (IB-01, IB-02)
@@ -264,3 +327,31 @@ class BodyRepository @Inject constructor(
 
 /** A scan as scan-informed targets see it (IB-05). */
 fun BodyCompositionEntity.toLeanScan() = LeanScan(logDate, measuredAt, weightG, bodyFatG, protocolOk)
+
+/** The measurement type a tape site is stored as. */
+fun TapeSite.type(): MeasurementType = when (this) {
+    TapeSite.WAIST -> MeasurementType.WAIST
+    TapeSite.CHEST -> MeasurementType.CHEST
+    TapeSite.ARM -> MeasurementType.ARM
+    TapeSite.THIGH -> MeasurementType.THIGH
+    TapeSite.HIP -> MeasurementType.HIP
+}
+
+fun MeasurementType.tapeSite(): TapeSite? = TapeSite.entries.firstOrNull { it.type() == this }
+
+fun MeasurementType.mobilityMarker(): MobilityMarker? = MobilityMarker.entries.firstOrNull { it.type() == this }
+
+/** Tape readings are 10 to 250 cm; mobility values keep the ranges their sheet allows (YG-04). */
+fun validReading(type: MeasurementType, value: Double): Boolean = when {
+    type.tapeSite() != null -> value in 10.0..250.0
+    type == MeasurementType.SIT_AND_REACH -> MobilityMarkers.validReach(value)
+    type == MeasurementType.SQUAT_HOLD -> value == Math.floor(value) && MobilityMarkers.validHold(value.toInt())
+    type == MeasurementType.TOE_TOUCH -> value == 0.0 || value == 1.0
+    else -> true
+}
+
+fun MobilityMarker.type(): MeasurementType = when (this) {
+    MobilityMarker.SIT_AND_REACH -> MeasurementType.SIT_AND_REACH
+    MobilityMarker.SQUAT_HOLD -> MeasurementType.SQUAT_HOLD
+    MobilityMarker.TOE_TOUCH -> MeasurementType.TOE_TOUCH
+}
