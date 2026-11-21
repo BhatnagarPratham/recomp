@@ -1,3 +1,6 @@
+// The platform ExifInterface's bugs that lint warns about were fixed in API 25; minSdk is 34, so no extra library.
+@file:Suppress("ExifInterface")
+
 package app.recomp.data.repo
 
 import android.content.Context
