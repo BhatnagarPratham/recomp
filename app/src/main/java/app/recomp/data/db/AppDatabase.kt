@@ -36,8 +36,9 @@ import kotlinx.serialization.json.Json
         WeeklyCheckinEntity::class,
         DailyActivityEntity::class,
         ProgrammeReviewEntity::class,
+        ScanDraftEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -54,6 +55,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun checkinDao(): CheckinDao
     abstract fun reviewDao(): ReviewDao
     abstract fun programmeReviewDao(): ProgrammeReviewDao
+    abstract fun healthDao(): HealthDao
     abstract fun backupCheckDao(): BackupCheckDao
 
     companion object {
@@ -69,6 +71,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_8_9,
             Migrations.MIGRATION_9_10,
             Migrations.MIGRATION_10_11,
+            Migrations.MIGRATION_11_12,
         )
     }
 }

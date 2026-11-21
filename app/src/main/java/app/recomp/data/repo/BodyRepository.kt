@@ -74,6 +74,8 @@ data class ScanInput(
     val score: Int? = null,
     val segmental: SegmentalLean? = null,
     val notes: String? = null,
+    /** Set when the scan starts from an InBody draft (IB-07); null keeps what the scan already has. */
+    val source: ScanSource? = null,
 )
 
 /** What saving a scan did. [slotSet] is true when this first scan set the usual slot (PRD §7.9). */
@@ -195,6 +197,7 @@ class BodyRepository @Inject constructor(
             visceralFatLevel = 0.0, minsSinceMeal = 0, workoutBeforeScan = false, minsFromSlot = null, protocolOk = false,
         )
         val row = base.copy(
+            source = input.source ?: base.source,
             measuredAt = input.measuredAt,
             logDate = logDate,
             weightG = input.weightG,

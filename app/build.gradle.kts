@@ -203,6 +203,10 @@ dependencies {
 
     implementation(libs.datastore.preferences)
     implementation(libs.health.connect)
+    // The daily Health Connect sync (M13); M16's backups use it too. Workers are built by Hilt.
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
     implementation(libs.anthropic.java)
     // OpenAI, Gemini and OpenAI-compatible servers (AI-05): plain HTTP with kotlinx.serialization, no SDKs. The Anthropic SDK already brings OkHttp.
     implementation(libs.okhttp)

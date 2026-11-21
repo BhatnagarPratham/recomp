@@ -15,6 +15,18 @@ import app.recomp.data.ai.SecretCipher
 import app.recomp.data.backup.BackupManager
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.food.FoodFiles
+import app.recomp.data.health.BackgroundRead
+import app.recomp.data.health.ExternalWorkout
+import app.recomp.data.health.HealthAvailability
+import app.recomp.data.health.HealthChanges
+import app.recomp.data.health.HealthFeature
+import app.recomp.data.health.HealthSource
+import app.recomp.data.prefs.DevicePrefs
+import app.recomp.data.repo.HealthRepository
+import app.recomp.domain.health.BodyReading
+import app.recomp.domain.health.SleepSession
+import app.recomp.domain.health.Span
+import java.time.LocalDate
 import app.recomp.data.food.FoodSeeder
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.LegacyTrainingMigration
@@ -183,6 +195,112 @@ class FlakyStore(private val inner: DataStore<Preferences>) : DataStore<Preferen
     }
 }
 
+/**
+ * Health Connect, scripted (TRD §6.3). A test fills in what each app wrote; [edit] records a change the way Health
+ * Connect would, so the next `changes` call reports it. [reads] counts the full reads per feature.
+ */
+class FakeHealthSource : HealthSource {
+    var availability = HealthAvailability.AVAILABLE
+    var granted: Set<HealthFeature> = HealthFeature.entries.toSet()
+    var background = BackgroundRead.GRANTED
+    val steps = mutableMapOf<LocalDate, Long>()
+    val sleep = mutableListOf<SleepSession>()
+    val workouts = mutableMapOf<String, ExternalWorkout>()
+    val body = mutableListOf<BodyReading>()
+    val reads = mutableMapOf<HealthFeature, Int>()
+    var stepRequests = mutableListOf<Pair<LocalDate, LocalDate>>()
+    var failing: HealthFeature? = null
+    var foreground = true
+    /** Where each sleep read started, to check it never reaches past Health Connect's 30 days. */
+    val sleepReadFrom = mutableListOf<Long>()
+
+    private var tokens = 0
+    private val pending = mutableMapOf<HealthFeature, MutableList<Pair<ExternalWorkout?, String?>>>()
+    private val expired = mutableSetOf<String>()
+
+    /** Every token handed out so far stops working, as after 30 days without a sync. */
+    fun expireTokens() {
+        (1..tokens).forEach { n -> HealthFeature.entries.forEach { expired += "${it.name}-$n" } }
+    }
+
+    fun put(workout: ExternalWorkout) {
+        workouts[workout.id] = workout
+        pending.getOrPut(HealthFeature.WORKOUTS) { mutableListOf() } += workout to null
+    }
+
+    fun delete(workoutId: String) {
+        workouts.remove(workoutId)
+        pending.getOrPut(HealthFeature.WORKOUTS) { mutableListOf() } += null to workoutId
+    }
+
+    /** Something of [feature] changed, with no detail: what sleep and InBody syncs get. */
+    fun touch(feature: HealthFeature) {
+        pending.getOrPut(feature) { mutableListOf() } += null to null
+    }
+
+    private fun read(feature: HealthFeature) {
+        if (failing == feature) throw IOException("Health Connect is busy")
+        reads.merge(feature, 1, Int::plus)
+    }
+
+    override fun availability() = availability
+    override suspend fun granted() = granted
+    override suspend fun backgroundRead() = background
+
+    override fun foreground() = foreground
+
+    override suspend fun stepsByDay(from: LocalDate, to: LocalDate): Map<LocalDate, Long> {
+        read(HealthFeature.STEPS)
+        stepRequests += from to to
+        return steps.filterKeys { !it.isBefore(from) && !it.isAfter(to) }
+    }
+
+    override suspend fun sleepSessions(endingIn: Span, readFrom: Long): List<SleepSession> {
+        read(HealthFeature.SLEEP)
+        sleepReadFrom += maxOf(endingIn.start - 24 * 3_600_000L, readFrom)
+        return sleep.filter { it.span.end > endingIn.start && it.span.end <= endingIn.end }
+    }
+
+    override suspend fun workouts(span: Span): List<ExternalWorkout> {
+        read(HealthFeature.WORKOUTS)
+        return workouts.values.filter { it.start in span.start..span.end && it.origin != OWN_PACKAGE }
+    }
+
+    override suspend fun bodyReadings(span: Span): List<BodyReading> {
+        read(HealthFeature.INBODY)
+        return body.filter { it.at in span.start..span.end }
+    }
+
+    override suspend fun token(feature: HealthFeature): String {
+        pending.remove(feature)
+        return "${feature.name}-${++tokens}"
+    }
+
+    override suspend fun changes(feature: HealthFeature, token: String): HealthChanges {
+        if (failing == feature) throw IOException("Health Connect is busy")
+        if (token in expired) return HealthChanges(nextToken = token, expired = true)
+        val changes = pending.remove(feature).orEmpty()
+        return HealthChanges(
+            nextToken = "${feature.name}-${++tokens}",
+            changed = changes.isNotEmpty(),
+            workouts = changes.mapNotNull { it.first }.filter { it.origin != OWN_PACKAGE },
+            deletedIds = changes.mapNotNull { it.second },
+        )
+    }
+
+    override fun appName(packageName: String): String = when (packageName) {
+        FIT -> "Google Fit"
+        SAMSUNG -> "Samsung Health"
+        else -> packageName
+    }
+
+    companion object {
+        const val OWN_PACKAGE = "app.recomp"
+        const val FIT = "com.google.android.apps.fitness"
+        const val SAMSUNG = "com.sec.android.app.shealth"
+    }
+}
+
 /** A file-backed database and settings store, so a test can "kill the app" by closing and reopening. */
 class TestApp(private val dir: File) {
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -202,6 +320,10 @@ class TestApp(private val dir: File) {
     val estimator = FakeEstimator()
     val sender = FakeSender()
     val clock = TestClock()
+    /** Device state (TRD §4): its own file, which a test can delete to stand for a restored phone. */
+    val deviceFile = File(dir, "device.preferences_pb")
+    val device = DevicePrefs(PreferenceDataStoreFactory.create { deviceFile })
+    val healthSource = FakeHealthSource()
 
     lateinit var db: AppDatabase
         private set
@@ -233,6 +355,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var programmeReviews: ProgrammeReviewRepository
         private set
+    lateinit var health: HealthRepository
+        private set
 
     init {
         open()
@@ -257,6 +381,7 @@ class TestApp(private val dir: File) {
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
         programmeReviews = ProgrammeReviewRepository(db, db.programmeReviewDao(), db.exerciseDao(), db.routineDao(), db.nutritionDao(), prefs, days, personas, training, progression, reviews, ai)
+        health = HealthRepository(db, db.healthDao(), db.bodyDao(), db.workoutDao(), db.routineDao(), prefs, device, days, healthSource, clock)
     }
 
     /** Simulates process death: everything not written to disk is gone. */
