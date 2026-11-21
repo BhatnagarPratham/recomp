@@ -79,9 +79,8 @@ class OpenFoodFactsClient @Inject constructor(
     }
 
     private suspend fun <T : Any> get(kind: OffThrottle.Kind, url: HttpUrl, now: Long, read: (JsonObject) -> T?): OffReply<T> {
-        val wait = throttle.waitMs(kind, now)
+        val wait = throttle.tryAcquire(kind, now)
         if (wait > 0) return OffReply.Busy(wait)
-        throttle.sentAt(kind, now)
         val request = Request.Builder().url(url).header("User-Agent", userAgent).header("Accept", "application/json").build()
         return withContext(Dispatchers.IO) {
             try {

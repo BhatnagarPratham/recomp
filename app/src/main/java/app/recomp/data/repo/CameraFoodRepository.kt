@@ -80,7 +80,7 @@ class CameraFoodRepository @Inject constructor(
     }
 
     /** Products already fetched this session, by barcode. */
-    private val products = mutableMapOf<String, OffProduct>()
+    private val products = java.util.concurrent.ConcurrentHashMap<String, OffProduct>()
 
     suspend fun barcode(code: String, now: Long = System.currentTimeMillis()): BarcodeLookup {
         val c = code.trim()

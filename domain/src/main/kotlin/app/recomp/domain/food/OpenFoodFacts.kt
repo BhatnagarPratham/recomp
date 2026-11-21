@@ -140,6 +140,13 @@ class OffThrottle {
         return if (times.size < kind.perMinute) 0 else MINUTE_MS - (now - times.first())
     }
 
+    /**
+     * Takes a slot for a request of [kind] now, checking and recording together so two requests started at once
+     * can't both take the last one. Returns 0 when it may go, else how long to wait (nothing is recorded then).
+     */
+    @Synchronized
+    fun tryAcquire(kind: Kind, now: Long): Long = waitMs(kind, now).also { if (it == 0L) sentAt(kind, now) }
+
     /** Records a request that went out. */
     @Synchronized
     fun sentAt(kind: Kind, now: Long) {

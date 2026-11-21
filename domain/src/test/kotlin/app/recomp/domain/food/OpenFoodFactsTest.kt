@@ -76,6 +76,16 @@ class OpenFoodFactsTest {
     }
 
     @Test
+    fun `taking a slot checks and records together, so the last one goes once`() {
+        val t = OffThrottle()
+        repeat(9) { assertEquals(0L, t.tryAcquire(OffThrottle.Kind.SEARCH, 1_000L)) }
+        assertEquals(0L, t.tryAcquire(OffThrottle.Kind.SEARCH, 1_000L))
+        assertEquals(60_000L, t.tryAcquire(OffThrottle.Kind.SEARCH, 1_000L))
+        // A refused try records nothing: the window still opens a minute after the first.
+        assertEquals(0L, t.tryAcquire(OffThrottle.Kind.SEARCH, 61_000L))
+    }
+
+    @Test
     fun `the throttle keeps to the per-minute limits and backs off on a 429`() {
         val t = OffThrottle()
         repeat(10) { t.sentAt(OffThrottle.Kind.SEARCH, 1_000L + it) }
