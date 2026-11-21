@@ -21,11 +21,16 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M6: in the gym: supersets, warm-up suggestions for the first heavy lift, assisted pull-ups and dips, two steps up for beginners with reps to spare, and same-movement substitutes when you swap.
 > - M7: a choice of AI provider: Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint such as OpenRouter or a server on your own network. Each keeps its own encrypted key and model, and one monthly cap covers them all.
 > - M8: a weekly review on the check-in screen, week by week: food against target with protein days hit and the share of ordered and packaged food, training against your plan with PRs and stalls, the trend, waist and scans, the finish line at your current rate, a month calendar with no streaks, and a body-composition chart on Body.
+> - M9: faster food logging: *Describe it* now works with AI off, matching what you type against your own foods and the database (and going first with AI on, so repeat dishes are instant and free); *Will it fit?* shows what a dish would do to today before you order it; and an optional snack allowance inside your calorie target.
 > - M10: training history: every workout and extra session on the Train tab, editing or deleting a past workout with PRs and next targets recomputed, a chart of each exercise's estimated 1RM and top set, and weekly sets per muscle against a band you can change.
 > - M11: with AI on, a weekly programme review: you tick what's sent (body trends off by default), read the full text, and get up to 5 suggestions you apply one by one, with Undo. Train also offers a deload week every 6–8 weeks (4–6 for advanced lifters).
 > - M13: Health Connect in: daily steps against a goal, last night's sleep at the morning weigh-in, walks, runs and classes recorded by other apps counted toward your weekly plan, and InBody measurements as draft scans. Each is off until you turn it on, read-only, and stays on the phone.
 > - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
 > - M16: data out: a weekly automatic backup to a folder on the phone (keeping 8) or one file on Google Drive, CSV export for spreadsheets, and, if you turn it on, your workouts, meals and weigh-ins written to Health Connect.
+> - M14: recipes: *New food* → *Recipe* builds a dish from the foods in it, with a cooked weight or a number of servings. It becomes one of your foods, with values per 100 g and per serving and its strictest ingredient's diet tag.
+> - M15: share an InBody screenshot to Recomp and type the scan with it pinned above the form (it stays on the phone, never sent to AI); with a recent on-protocol scan, BMR uses your lean mass, Body offers to preview targets with it, and a target body-fat % becomes a finish line.
+> - M19: goals: *What to expect* when you change goal, a Goal reached card, a suggested maintenance break after 12 weeks in a deficit that resumes on its own, *Describe your goal* read by AI (only the text you type is sent), a pregnancy and breastfeeding switch that turns off deficits, and presets as data files a fork can add to.
+> - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
@@ -62,6 +67,10 @@ You need:
 2. Point Gradle at your SDK in `local.properties` (Android Studio writes this for you):
    ```properties
    sdk.dir=/path/to/Android/sdk
+   ```
+   Barcode lookups and International search use [Open Food Facts](https://world.openfoodfacts.org), which asks apps to name a contact in their User-Agent. Add yours on the next line; it goes into your build only, never the repo:
+   ```properties
+   recomp.off.contact=you@example.com
    ```
 3. Turn on the privacy hooks (below):
    ```bash

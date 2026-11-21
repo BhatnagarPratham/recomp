@@ -1,5 +1,10 @@
 package app.recomp.ui
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import app.recomp.data.body.ScanImages
+import app.recomp.data.repo.BodyRepository
+import java.io.InputStream
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.backup.BackupManager
@@ -7,6 +12,7 @@ import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.food.FoodSeeder
 import app.recomp.data.repo.CheckinRepository
+import app.recomp.data.repo.GoalRepository
 import app.recomp.data.repo.HealthRepository
 import app.recomp.healthconnect.HealthSyncScheduler
 import app.recomp.data.repo.PersonaRepository
@@ -43,6 +49,12 @@ sealed interface AppNav {
     data object Food : AppNav
     data object Body : AppNav
     data class Checkin(val weekStart: java.time.LocalDate) : AppNav
+
+    /**
+     * A shared image, kept as [image] (IB-03); empty when it couldn't be read or isn't one the app keeps. [setup] means
+     * onboarding hasn't finished, so it wasn't kept.
+     */
+    data class Shared(val image: String, val setup: Boolean = false) : AppNav
 }
 
 /**
@@ -59,6 +71,9 @@ class MainViewModel @Inject constructor(
     backups: BackupManager,
     private val checkins: CheckinRepository,
     reminders: app.recomp.reminders.ReminderScheduler,
+    goals: GoalRepository,
+    private val scanImages: ScanImages,
+    private val body: BodyRepository,
     private val health: HealthRepository,
     private val healthScheduler: HealthSyncScheduler,
     private val healthWrites: app.recomp.healthconnect.HealthWriteSync,
@@ -96,6 +111,8 @@ class MainViewModel @Inject constructor(
             _restoreNotice.value = backups.finishPendingRestore()
             // Weeks that ended while the app was closed, against the data as the restore left it (PRD §12.1).
             checkins.catchUp()
+            // GL-06: a maintenance break whose end date has passed resumes now, and the finish line is checked.
+            runCatching { goals.refresh() }
             // After the restore, so an import's data is what Health Connect is read against (TRD §6.3).
             syncHealthNow()
             // M16: writes to Health Connect and the weekly backup, also after the restore so they see its data.
@@ -103,6 +120,8 @@ class MainViewModel @Inject constructor(
             runCatching { autoBackup.ensureScheduled() }
         }
         viewModelScope.launch { training.ensureLibrarySeeded() }
+        // A shared image you backed out of is kept a day, then goes (IB-03).
+        viewModelScope.launch { body.cleanImages() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
         // M12: the reminder alarm and the widget follow the app from its first screen (TRD §6.6).
         reminders.start()
@@ -164,6 +183,20 @@ class MainViewModel @Inject constructor(
                 lastSetAt = lastSetAt,
                 stale = System.currentTimeMillis() - session.startedAt > STALE_AFTER_MS,
             )
+        }
+    }
+
+    /** Copies a shared image in and opens "What is this?" (IB-03). */
+    fun onSharedImage(mimeType: String?, open: () -> InputStream?) {
+        viewModelScope.launch {
+            // Before onboarding there's no profile or usual slot to log a scan against.
+            if (onboarded.first { it != null } != true) {
+                _nav.send(AppNav.Shared("", setup = true))
+                return@launch
+            }
+            // Opening a provider's stream can be slow (a photo in the cloud): off the main thread.
+            val name = withContext(Dispatchers.IO) { open() }?.let { scanImages.stage(it, mimeType) }
+            _nav.send(AppNav.Shared(name.orEmpty()))
         }
     }
 

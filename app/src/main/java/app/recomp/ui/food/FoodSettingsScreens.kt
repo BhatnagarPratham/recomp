@@ -20,6 +20,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimeInput
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -40,6 +43,9 @@ import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.FoodRepository
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
+import app.recomp.domain.food.MealTimes
+import app.recomp.domain.food.SnackAllowance
+import app.recomp.ui.components.ChoiceChips
 import app.recomp.domain.food.Portions
 import app.recomp.domain.persona.FoodRegion
 import app.recomp.ui.components.MenuItem
@@ -76,6 +82,20 @@ class FoodSettingsViewModel @Inject constructor(
 
     fun rename(key: String, name: String) = editSlots { slots -> slots.map { if (it.key == key) it.copy(name = name.trim()) else it } }
 
+    /** PRD §12.5: when the meal usually starts. Null goes back to the default (or to no usual time, for a meal you added). */
+    fun setStart(key: String, minutes: Int?) = editSlots { slots -> slots.map { if (it.key == key) it.copy(startMinutes = minutes) else it } }
+
+    /** NU-06. Off by default. */
+    val allowance: StateFlow<SnackAllowance?> = prefs.snackAllowance.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Turns the allowance off (null) or sets its size, keeping the meal it counts against. */
+    fun setAllowance(kcal: Int?) = viewModelScope.launch {
+        val slot = allowance.value?.slotKey ?: SnackAllowance.defaultSlot(slots.value) ?: return@launch
+        prefs.setSnackAllowance(kcal?.let { SnackAllowance(it, slot) })
+    }
+
+    fun setAllowanceSlot(key: String) = viewModelScope.launch { allowance.value?.let { prefs.setSnackAllowance(it.copy(slotKey = key)) } }
+
     fun add(name: String) = editSlots { slots -> slots + MealSlot(MealSlots.newKey(slots), name.trim()) }
 
     /** Keeps at least one meal you can log to. A removed meal keeps its past entries. */
@@ -106,12 +126,14 @@ fun MealSlotsScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hiltV
     val slots by viewModel.slots.collectAsStateWithLifecycle()
     var renaming by remember { mutableStateOf<MealSlot?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var timing by remember { mutableStateOf<MealSlot?>(null) }
 
     SettingsPage("Meals", onBack) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp)) {
             item {
                 Text(
-                    "A removed meal isn't offered for new food, but its past entries stay where they are.",
+                    "A removed meal isn't offered for new food, but its past entries stay where they are. Each meal's usual time decides " +
+                        "which meal Will it fit? logs into: a time belongs to the last meal that starts before it.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
@@ -120,12 +142,18 @@ fun MealSlotsScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hiltV
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).clickable(onClickLabel = "Rename ${slot.name}") { renaming = slot }.padding(vertical = 8.dp)) {
                         Text(slot.name, style = MaterialTheme.typography.bodyLarge, color = if (slot.removed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
-                        if (slot.removed) Text("Removed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (slot.removed) "Removed" else FoodText.slotTime(slots, slot),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     TextButton(onClick = { viewModel.move(slot.key, -1) }, enabled = i > 0, modifier = Modifier.semantics { contentDescription = "Move ${slot.name} up" }) { Text("↑") }
                     TextButton(onClick = { viewModel.move(slot.key, 1) }, enabled = i < slots.lastIndex, modifier = Modifier.semantics { contentDescription = "Move ${slot.name} down" }) { Text("↓") }
                     OverflowMenu("${slot.name} options") { close ->
                         MenuItem("Rename") { close(); renaming = slot }
+                        if (!slot.removed) MenuItem("Usual time") { close(); timing = slot }
+                        if (slot.startMinutes != null) MenuItem(if (slot.key in MealTimes.DEFAULT_STARTS) "Reset usual time" else "Clear usual time") { close(); viewModel.setStart(slot.key, null) }
                         if (slot.removed) {
                             MenuItem("Bring back") { close(); viewModel.setRemoved(slot.key, false) }
                         } else {
@@ -151,6 +179,57 @@ fun MealSlotsScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hiltV
         TextEntryDialog("Add a meal", "", onDismiss = { adding = false }) { name ->
             adding = false
             if (name.isNotBlank()) viewModel.add(name)
+        }
+    }
+    timing?.let { slot ->
+        StartTimeDialog(slot, onDismiss = { timing = null }) { minutes ->
+            timing = null
+            viewModel.setStart(slot.key, minutes)
+        }
+    }
+}
+
+/** When a meal usually starts (PRD §12.5). Its range runs to the next meal's start. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StartTimeDialog(slot: MealSlot, onDismiss: () -> Unit, onSave: (Int) -> Unit) {
+    val start = MealTimes.start(slot) ?: 12 * 60
+    val state = rememberTimePickerState(initialHour = start / 60, initialMinute = start % 60, is24Hour = true)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${slot.name} usually starts at") },
+        text = { TimeInput(state) },
+        confirmButton = { TextButton(onClick = { onSave(state.hour * 60 + state.minute) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** NU-06: a planned snack inside the calorie target, counted against one meal. */
+@Composable
+fun SnackAllowanceScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hiltViewModel()) {
+    val allowance by viewModel.allowance.collectAsStateWithLifecycle()
+    val slots by viewModel.slots.collectAsStateWithLifecycle()
+    val sizes: List<Int?> = listOf<Int?>(null) + SnackAllowance.OPTIONS
+
+    SettingsPage("Snack allowance", onBack) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                "Set some of your calorie target aside for a snack, so a planned snack isn't a slip. It's part of the target, not extra: " +
+                    "the day's target and what's left stay the same.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ChoiceChips(sizes, allowance?.kcal, { if (it == null) "Off" else GoalText.kcal(it) }, viewModel::setAllowance)
+            allowance?.let { a ->
+                Text("Counted against", style = MaterialTheme.typography.labelLarge)
+                val active = slots.filter { !it.removed || it.key == a.slotKey }
+                ChoiceChips(active, active.firstOrNull { it.key == a.slotKey }, { it.name + if (it.removed) " (removed)" else "" }, { viewModel.setAllowanceSlot(it.key) })
+                Text(
+                    "The Food tab's day view says “${FoodText.allowanceIncluded(a.kcal)}”, and ${slots.firstOrNull { it.key == a.slotKey }?.name ?: "that meal"} " +
+                        "shows what you've eaten of it, like “${FoodText.allowanceUsed(60.0, a.kcal)}”.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -224,6 +303,7 @@ fun HiddenFoodsScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hil
 /** Where the food data comes from (TRD §6.4), including INDB's citation. */
 @Composable
 fun FoodDataDialog(indbCount: Int?, onDismiss: () -> Unit) {
+    var licences by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Food data") },
@@ -242,8 +322,41 @@ fun FoodDataDialog(indbCount: Int?, onDismiss: () -> Unit) {
                         "Diet tags come from each recipe's ingredients; hide any food that's tagged wrongly.",
                 )
                 Text("The protein-rich basics are rounded from USDA FoodData Central (public domain) or typical pack labels.")
+                Text(
+                    "Barcodes, and search in the International region, use Open Food Facts (world.openfoodfacts.org): data © " +
+                        "Open Food Facts contributors, under the Open Database License (opendatacommons.org/licenses/odbl). Only the " +
+                        "barcode or the words you searched are sent; a product you save becomes your own food.",
+                )
+                Text("Labels are read on the phone by Tesseract (Apache-2.0) with its tessdata_fast English model (Apache-2.0).")
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        dismissButton = { TextButton(onClick = { licences = true }) { Text("Licences") } },
     )
+    if (licences) LicencesDialog(onDismiss = { licences = false })
+}
+
+/** The bundled open-source components' licences and notices (M18 review S3), from `assets/licenses`. */
+@Composable
+fun LicencesDialog(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val text = androidx.compose.runtime.remember { ThirdPartyNotices.read(context) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Licences") },
+        text = {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
+object ThirdPartyNotices {
+    const val ASSET = "licenses/THIRD_PARTY_NOTICES.txt"
+
+    fun read(context: android.content.Context): String = context.assets.open(ASSET).bufferedReader().use { it.readText() }
 }

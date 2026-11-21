@@ -57,10 +57,29 @@ data class GoalPlan(
     val pace: Pace?,
     val goalWeightKg: Double?,
     val finishLine: FinishLine?,
+    /** The day this goal began. A pace, goal-weight or finish-line edit keeps it; only a change of goal resets it (PS-04). */
     val startedOn: LocalDate,
     val aggressiveAcknowledged: Boolean = false,
+    /** The day the finish line was first seen reached (GL-06). The Goal reached card shows until it's answered. */
+    val reachedOn: LocalDate? = null,
+    /** At maintenance until this day (GL-06). Set from the day a break is accepted until the goal resumes. */
+    val breakUntil: LocalDate? = null,
+    /** The day the last break ended: the 12 weeks in a deficit count again from it. */
+    val lastBreakEndedOn: LocalDate? = null,
+    /** *Not now*: the break isn't suggested again before this day. */
+    val breakSnoozedUntil: LocalDate? = null,
 ) {
     val goal: Goal get() = policy.goal
+
+    /** At maintenance for now: a maintenance break, or the 2 weeks after a reached goal. */
+    val onBreak: Boolean get() = breakUntil != null
+
+    /**
+     * What the targets follow. During a break that's maintenance at the goal's own protein, so every screen that
+     * recomputes targets (Settings, the check-in) agrees with the break's version; the goal itself stays underneath.
+     */
+    val targetPlan: GoalPlan
+        get() = if (breakUntil == null) this else copy(policy = GoalPolicy(Goal.MAINTAIN, proteinGPerKg = policy.proteinGPerKg), pace = null)
 
     companion object {
         /** A preset pace for [goal]; Maintain has none. */
@@ -82,6 +101,10 @@ data class Profile(
     /** Current weight as typed. M4's weigh-ins replace it with the trend weight (TRD §5.2). */
     val weightKg: Double,
     val activity: ActivityLevel = ActivityLevel.MODERATE,
+    /** Pregnant or breastfeeding (GL-09): deficits are unavailable while it's on. Body data, never sent to AI. */
+    val pregnant: Boolean = false,
+    /** The day the switch last went off (M19 review R4): the check-in stays quiet until its window is past it. */
+    val pregnantUntil: LocalDate? = null,
 ) {
     fun ageOn(date: LocalDate): Int = Period.between(birthDate, date).years
 

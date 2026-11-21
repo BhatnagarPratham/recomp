@@ -1,5 +1,11 @@
 package app.recomp.ui.body
 
+import app.recomp.data.body.ScanImages
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -171,11 +177,23 @@ data class ScanForm(
 }
 
 @HiltViewModel
-class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private val body: BodyRepository, private val health: HealthRepository) : ViewModel() {
+class ScanViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val body: BodyRepository,
+    private val health: HealthRepository,
+    private val images: ScanImages,
+) : ViewModel() {
     private val scanId = savedState.toRoute<ScanRoute>().scanId.takeIf { it > 0 }
 
     /** An InBody measurement from Health Connect that this form completes (IB-07). */
-    private val draftId = savedState.toRoute<ScanRoute>().draftId.takeIf { it > 0 }
+    private var draftId = savedState.toRoute<ScanRoute>().draftId.takeIf { it > 0 }
+
+    /** A shared InBody screenshot (IB-03), kept with the scan when it's saved. */
+    private val sharedImage = savedState.toRoute<ScanRoute>().image.takeIf { it.isNotEmpty() }
+
+    /** The image pinned above the form: the shared one, or the one a saved scan keeps. */
+    private val _image = MutableStateFlow<ImageBitmap?>(null)
+    val image: StateFlow<ImageBitmap?> = _image
 
     private val _form = MutableStateFlow(ScanForm())
     val form: StateFlow<ScanForm> = _form
@@ -185,10 +203,13 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
     init {
         viewModelScope.launch {
             val existing = scanId?.let { body.scan(it) }
+            // A shared screenshot picks up the InBody draft from the same time, if Health Connect has one (PRD §12.11).
+            if (existing == null && draftId == null && sharedImage != null) draftId = health.draftForShare(System.currentTimeMillis())?.id
             val draft = if (existing == null) draftId?.let { health.draft(it) } else null
             _form.value = existing?.let(ScanForm::of)
                 ?: draft?.let { ScanForm.of(it).copy(workout = body.trainedBefore(it.measuredAt)) }
                 ?: ScanForm(loaded = true).let { it.copy(workout = body.trainedBefore(it.at)) }
+            (sharedImage ?: existing?.imagePath)?.let { _image.value = loadScanImage(images, it) }
         }
     }
 
@@ -228,7 +249,8 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
         viewModelScope.launch {
             try {
                 val fromDraft = draftId?.takeIf { _form.value.id == null }
-                val saved = body.saveScan(if (fromDraft != null) input.copy(source = ScanSource.HEALTH_CONNECT) else input, _form.value.id)
+                val withImage = input.copy(imagePath = sharedImage)
+                val saved = body.saveScan(if (fromDraft != null) withImage.copy(source = ScanSource.HEALTH_CONNECT) else withImage, _form.value.id)
                 // Saved as a scan, so the draft is done and never comes back.
                 fromDraft?.let { health.closeDraft(it) }
                 _form.update { it.copy(id = saved.id) }
@@ -289,8 +311,20 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
         },
     ) { padding ->
         if (!form.loaded) return@Scaffold
+        val image by viewModel.image.collectAsStateWithLifecycle()
+        Column(Modifier.fillMaxSize().padding(padding)) {
+        // A shared screenshot stays pinned above the form while you type its numbers (IB-03); tap to see more of it.
+        image?.let { bitmap ->
+            var tall by remember { mutableStateOf(false) }
+            Image(
+                bitmap,
+                "The InBody result you shared. Tap to " + if (tall) "shrink it" else "see more of it",
+                Modifier.fillMaxWidth().height(if (tall) 420.dp else 200.dp).clickable { tall = !tall }.padding(horizontal = 16.dp, vertical = 4.dp),
+                contentScale = ContentScale.Fit,
+            )
+        }
         Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).imePadding(),
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             val check = viewModel.check(form, slot)
@@ -385,6 +419,7 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
                 modifier = Modifier.padding(bottom = 16.dp),
             )
         }
+        }
     }
 
     slotSet?.let { s ->
@@ -396,7 +431,7 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
         )
     }
     if (deleting) {
-        ConfirmDialog("Delete this scan?", "Its Scan weigh-in is deleted with it.", confirm = "Delete", onDismiss = { deleting = false }) {
+        ConfirmDialog("Delete this scan?", "Its Scan weigh-in, and any image kept with it, are deleted with it.", confirm = "Delete", onDismiss = { deleting = false }) {
             deleting = false
             viewModel.delete()
         }
