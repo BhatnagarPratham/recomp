@@ -973,6 +973,10 @@ These rules hold for every block:
   - Targets don't change on their own. After a scan that moves BMR by 20 kcal or more, Body offers *Preview targets with your scan*, before and after.
   - The **body-fat finish line** becomes available. Its goal weight is lean mass ÷ (1 − target %), and the suggested goal weight uses the scan (§4.2).
   - Once the weekly check-in has a maintenance estimate (M5), that sets the calories. The scan's BMR still sets the floor.
+- ◆ **Built (M15):**
+  - *Preview targets with your scan* is a card on Body, above the scans. *Not now* hides it until a newer scan.
+  - Typing a target body fat % fills the goal weight. With a recent scan, the suggested goal weight aims at 15% body fat for men and 23% for women. <!-- pii-ok: the suggestion rule's defaults, not anyone's data -->
+  - A shared image you back out of is removed a day later.
 
 ### 12.12 M16: Data out (DA-02, DA-03, DA-04)
 

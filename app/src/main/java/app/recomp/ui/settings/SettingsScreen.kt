@@ -138,9 +138,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { today.value = personas.today() }
     }
 
-    private val about = combine(personas.stored, personas.profile, personas.overrides, today, personas.maintenance) { stored, profile, overrides, day, maintenance ->
+    /** The check-in's estimate and a recent scan's lean mass (IB-05), which the targets shown use. */
+    private val basis = combine(personas.maintenance, personas.leanMass, ::Pair)
+
+    private val about = combine(personas.stored, personas.profile, personas.overrides, today, basis) { stored, profile, overrides, day, basis ->
         val plan = stored.goal?.toPlan()
-        Triple(stored, profile, Triple(plan, overrides, day to maintenance))
+        Triple(stored, profile, Triple(plan, overrides, day to basis))
     }
 
     private val inForce = combine(today.flatMapLatest { personas.observeTargetOn(it) }, personas.checkinWaiting, goals.status) { target, waiting, status ->
@@ -151,14 +154,15 @@ class SettingsViewModel @Inject constructor(
 
     val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot, inForce) ->
         val (plan, overrides, dayAndEstimate) = rest
-        val (day, maintenance) = dayAndEstimate
+        val (day, basis) = dayAndEstimate
+        val (maintenance, leanMassKg) = basis
         SettingsUi(
             loaded = true,
             today = day,
             stored = stored,
             plan = plan,
             profile = profile,
-            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day, maintenance) else null,
+            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day, maintenance, leanMassKg) else null,
             dayStart = dayStart,
             training = settings,
             extraNames = extras.map { it.name },

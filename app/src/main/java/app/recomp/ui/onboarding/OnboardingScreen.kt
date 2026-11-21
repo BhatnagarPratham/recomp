@@ -431,8 +431,30 @@ private fun LazyListScope.finishStep(ui: OnboardingUi, vm: OnboardingViewModel) 
         }
     }
     item {
-        // TODO(M4): available once body-composition scans exist (IB-05).
-        OptionCard("A target body fat %", "Needs a body-composition scan. Arrives with scans.", selected = false, enabled = false) {}
+        // IB-05: with an on-protocol scan from the last 60 days; its goal weight is lean mass ÷ (1 − target %).
+        val lean = ui.leanMassKg
+        val selected = ui.goal.finishKind == FinishKind.BODY_FAT
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            OptionCard(
+                "A target body fat %",
+                if (lean == null) "Needs an on-protocol scan from the last 60 days." else "Reached when your scans get there. Your goal weight follows from your lean mass.",
+                selected = selected,
+                enabled = lean != null,
+            ) { vm.setFinish(FinishKind.BODY_FAT) }
+            if (selected && lean != null) {
+                NumberField(
+                    "Target body fat",
+                    ui.goal.targetBodyFat,
+                    "%",
+                    Modifier.fillMaxWidth(),
+                    error = ui.goal.targetBodyFat.isNotBlank() && ui.goal.targetBodyFatPct == null,
+                    onChange = vm::setTargetBodyFat,
+                )
+                ui.goal.targetBodyFatPct?.let { pct ->
+                    Text(GoalText.bodyFatGoal(lean, pct), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
     item { OptionCard("No finish line", if (goal == Goal.MAINTAIN) "The usual for Maintain." else "Keep going until you change goal.", selected = ui.goal.finishKind == null) { vm.setFinish(null) } }
     vm.projectionText()?.takeIf { goal != Goal.MAINTAIN }?.let { text -> item { Text(text, color = MaterialTheme.colorScheme.primary) } }

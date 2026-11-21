@@ -290,7 +290,8 @@ class CheckinRepository @Inject constructor(
         val profile = personas.currentProfile() ?: return null
         val guarded = Guardrails.apply(profile, stored, today)
         val notes = guarded.notes.filter { it != GuardrailNote.AGGRESSIVE_NEEDS_ACK }
-        return Basis(profile, stored, guarded.plan, notes, TargetInputs.from(profile, guarded.plan.targetPlan, today), Guardrails.deficitAllowed(profile))
+        // With a recent scan, BMR (and so the floor under any proposal) is the scan's (IB-05); the estimate sets TDEE.
+        return Basis(profile, stored, guarded.plan, notes, TargetInputs.from(profile, guarded.plan.targetPlan, today, personas.leanMassKg(today)), Guardrails.deficitAllowed(profile))
     }
 
     private suspend fun trend(): List<TrendPoint> =
@@ -368,7 +369,7 @@ class CheckinRepository @Inject constructor(
             status = status,
             evaluation = evaluation,
             gap = AdaptiveTdee.gapOf(row.windowDays, row.loggedDays, row.weighIns, row.tdeeObs != null),
-            formulaTdee = personas.targetsFor(basis.profile, basis.plan, TargetOverrides(), today).tdeeKcal.roundToInt(),
+            formulaTdee = NutritionCalculator.startingTargets(basis.inputs).tdeeKcal.roundToInt(),
             current = current,
             proposal = open?.let { CheckinProposal.targets(basis.inputs, row.tdeeNew.toDouble(), overrides.copy(kcal = null), kcal = it) },
             adjustRange = open?.let { CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble(), basis.deficitAllowed) },

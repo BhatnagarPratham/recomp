@@ -132,8 +132,8 @@ class ProgrammeReviewRepository @Inject constructor(
      * GL-09 (M19): while pregnant or breastfeeding, an estimate below the formula's TDEE is never maintenance, in the
      * report or the check of its suggestions, so no suggestion can land under it.
      */
-    private fun maintenanceFor(profile: Profile, plan: GoalPlan, day: LocalDate, estimate: Double): Double =
-        if (profile.pregnant) maxOf(estimate, NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, day)).tdeeKcal) else estimate
+    private suspend fun maintenanceFor(profile: Profile, plan: GoalPlan, day: LocalDate, estimate: Double): Double =
+        if (profile.pregnant) maxOf(estimate, NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, day, personas.leanMassKg(day))).tdeeKcal) else estimate
 
     private suspend fun goalFacts(day: LocalDate): GoalFacts? {
         val plan = plan(day) ?: return null
@@ -271,7 +271,7 @@ class ProgrammeReviewRepository @Inject constructor(
         // A reply's % and g/kg mean the report's numbers; the guardrails are today's.
         val routineIds = stored.routines.values.toSet()
         val kcalRange = if (profile != null && plan != null && maintenance > 0) {
-            val range = CheckinProposal.adjustRange(TargetInputs.from(profile, plan, day), maintenance)
+            val range = CheckinProposal.adjustRange(TargetInputs.from(profile, plan, day, personas.leanMassKg(day)), maintenance)
             // PRD §4.9: below BMI 18.5 there's no deficit at all, and under 18 none deeper than the plan's own.
             val noDeficit = !Guardrails.deficitAllowed(profile)
             val minorFloor = if (Guardrails.isMinor(profile, day)) nutritionDao.targetOn(day)?.kcal else null

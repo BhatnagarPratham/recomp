@@ -363,6 +363,8 @@ class TestApp(private val dir: File) {
     val device = DevicePrefs(PreferenceDataStoreFactory.create { deviceFile })
     val healthSource = FakeHealthSource()
     val notifier = FakeNotifier()
+    /** Shared InBody images (IB-03), in the test's own folder. */
+    val scanImages = app.recomp.data.body.ScanImages(File(dir, "scan_images"), isImage = { true })
     /** The real adapters, for the requests that go through the provider layer itself; a test points one at a local server. */
     val openAi = OpenAiProvider()
     val providers = AiProviders(AnthropicProvider(), openAi, GeminiProvider())
@@ -422,7 +424,7 @@ class TestApp(private val dir: File) {
             .allowMainThreadQueries()
             .build()
         training = TrainingRepository(db, db.exerciseDao(), db.routineDao(), db.workoutDao(), FileSeedSource, prefs)
-        body = BodyRepository(db, db.bodyDao(), db.workoutDao(), prefs, days)
+        body = BodyRepository(db, db.bodyDao(), db.workoutDao(), prefs, days, scanImages)
         progression = ProgressionRepository(db, db.workoutDao(), db.exerciseDao(), db.routineDao(), prefs, db.nutritionDao(), days, body)
         workouts = WorkoutRepository(db, db.workoutDao(), db.routineDao(), db.exerciseDao(), training, progression, days)
         personas = PersonaRepository(prefs, db.nutritionDao(), training, days, body, db.checkinDao())

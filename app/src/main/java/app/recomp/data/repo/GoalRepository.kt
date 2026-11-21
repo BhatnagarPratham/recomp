@@ -123,7 +123,7 @@ class GoalRepository @Inject constructor(
     private suspend fun write(plan: GoalPlan, reason: TargetReason, today: LocalDate, now: Long): Boolean {
         val profile = personas.currentProfile() ?: return false
         val guarded = GoalChange.afterGuardrails(plan, Guardrails.apply(profile, plan, today).plan, today)
-        val targets = personas.targetsFor(profile, guarded, prefs.overrides.first(), today, personas.maintenance())
+        val targets = personas.targetsFor(profile, guarded, prefs.overrides.first(), today, personas.maintenance(), personas.leanMassKg(today))
         personas.writeTarget(targets, guarded, today, reason, now)
         store(guarded, profile)
         return true

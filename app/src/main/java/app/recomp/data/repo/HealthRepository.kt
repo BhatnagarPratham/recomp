@@ -1,5 +1,6 @@
 package app.recomp.data.repo
 
+import app.recomp.domain.body.SharedScan
 import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyDao
@@ -449,6 +450,13 @@ class HealthRepository @Inject constructor(
     }
 
     suspend fun draft(id: Long): ScanDraftEntity? = dao.draft(id)
+
+    /** The open draft from the same time as a screenshot shared at [sharedAt] (IB-03, PRD §12.11), or null. */
+    suspend fun draftForShare(sharedAt: Long): ScanDraftEntity? {
+        val drafts = observeDrafts().first()
+        val id = SharedScan.draftFor(drafts.map { it.id to it.measuredAt }, sharedAt) ?: return null
+        return drafts.firstOrNull { it.id == id }
+    }
 
     /** *Dismiss*, or the draft was saved as a scan: it goes, and its records are remembered so it doesn't come back. */
     suspend fun closeDraft(id: Long) {

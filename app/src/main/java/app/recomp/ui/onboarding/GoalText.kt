@@ -41,6 +41,10 @@ object GoalText {
         Goal.LEAN_BULK -> "A small surplus to grow faster with little fat gain."
     }
 
+    /** The body-fat finish line's goal weight, from the scan's lean mass (IB-05). */
+    fun bodyFatGoal(leanKg: Double, pct: Double): String =
+        "Lean mass ${d(leanKg)} kg from your scan, so ${d(pct)}% body fat is about ${d(app.recomp.domain.persona.GoalWeights.forBodyFat(leanKg, pct))} kg."
+
     fun advice(a: GoalAdvice): String {
         val fat = a.basis.bodyFatPct?.let { "body fat around ${d(it)}%" } ?: "a BMI of ${d(a.basis.bmi)}"
         return when (a.reason) {

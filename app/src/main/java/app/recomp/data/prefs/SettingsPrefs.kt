@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.data.health.HealthFeature
@@ -413,6 +414,9 @@ internal object SettingsKeys {
     /** RM-01: each reminder's on or off, time and weekdays (PRD §12.8). Absent is every reminder off. */
     val REMINDERS = stringPreferencesKey("reminders")
 
+    /** M15: the scan (by its measured-at time) whose *Preview targets with your scan* card you dismissed. */
+    val SCAN_TARGETS_DISMISSED = longPreferencesKey("scan_targets_dismissed")
+
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
 
@@ -630,6 +634,11 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         it.remove(SettingsKeys.DELOAD_SNOOZED_UNTIL)
     }
 
+    /** M15: the scan whose targets card was dismissed; a newer scan offers it again. */
+    val scanTargetsDismissed: Flow<Long?> = store.data.map { it[SettingsKeys.SCAN_TARGETS_DISMISSED] }.distinctUntilChanged()
+
+    suspend fun setScanTargetsDismissed(measuredAt: Long) = store.edit { it[SettingsKeys.SCAN_TARGETS_DISMISSED] = measuredAt }
+
     suspend fun setDeloadSnoozedUntil(day: LocalDate) = store.edit { it[SettingsKeys.DELOAD_SNOOZED_UNTIL] = day.toString() }
 
     /** *Undo* of a review's deload week: the last deload week goes back to [day], or to none. */
@@ -663,6 +672,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
                 add(SettingsKeys.DAY_START_MINUTES.name)
             }
             if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
+            if (wrongType(SettingsKeys.SCAN_TARGETS_DISMISSED, Long::class)) add(SettingsKeys.SCAN_TARGETS_DISMISSED.name)
             if (wrongType(SettingsKeys.VOLUME_BAND_MIN, Int::class)) add(SettingsKeys.VOLUME_BAND_MIN.name)
             if (wrongType(SettingsKeys.VOLUME_BAND_MAX, Int::class)) add(SettingsKeys.VOLUME_BAND_MAX.name)
             val bandMin = values[SettingsKeys.VOLUME_BAND_MIN.name] as? Int

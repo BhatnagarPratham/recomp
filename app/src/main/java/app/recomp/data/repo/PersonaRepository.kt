@@ -1,5 +1,9 @@
 package app.recomp.data.repo
 
+import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import app.recomp.domain.body.ScanTargets
 import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.WeeklyCheckinEntity
@@ -59,6 +63,9 @@ data class MaintenanceEstimate(val kcal: Int, val weekStart: LocalDate) {
 }
 
 /** What a Settings change would do to the targets (PRD §7.1: shown before it saves). */
+/** A scan that would move BMR (IB-05): its day and time, and BMR now against the scan's. */
+data class ScanOffer(val date: LocalDate, val measuredAt: Long, val targetBmrKcal: Int, val scanBmrKcal: Int)
+
 data class TargetPreview(
     val before: NutritionTargetEntity?,
     val after: NutritionTargets,
@@ -74,7 +81,9 @@ data class TargetPreview(
 
     val changes: Boolean
         get() = before == null || before.kcal != after.kcal || before.proteinG != after.proteinG ||
-            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != targetGoal
+            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != targetGoal ||
+            // A scan's BMR (IB-05) is worth a version even when a check-in estimate keeps every macro the same.
+            before.bmrKcal != after.bmrKcal.roundToInt()
 }
 
 /**
@@ -118,14 +127,46 @@ class PersonaRepository @Inject constructor(
      * While pregnant or breastfeeding the check-in's estimate never lowers the targets: weight gained then isn't stored
      * energy, so an estimate below the formula's TDEE is ignored (GL-09, PRD §12.15).
      */
-    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate, maintenance: MaintenanceEstimate? = null): NutritionTargets {
-        val formula = TargetInputs.from(profile, plan.targetPlan, today)
+    fun targetsFor(
+        profile: Profile,
+        plan: GoalPlan,
+        overrides: TargetOverrides,
+        today: LocalDate,
+        maintenance: MaintenanceEstimate? = null,
+        leanMassKg: Double? = null,
+    ): NutritionTargets {
+        val formula = TargetInputs.from(profile, plan.targetPlan, today, leanMassKg)
         val estimate = maintenance?.kcal?.toDouble()?.takeUnless { profile.pregnant && it < NutritionCalculator.startingTargets(formula).tdeeKcal }
         val inputs = formula.copy(maintenanceKcal = estimate)
         val own = if (plan.onBreak) overrides.copy(kcal = null) else overrides
         val targets = NutritionCalculator.startingTargets(inputs, own)
         return if (Guardrails.kcalOverride(profile, own.kcal, targets.tdeeKcal) == own.kcal) targets else NutritionCalculator.startingTargets(inputs, own.copy(kcal = null))
     }
+
+    /**
+     * IB-05: lean mass from the latest on-protocol scan of the last 60 days, which BMR then uses (Katch-McArdle, TRD
+     * §5.3), else null for Mifflin-St Jeor. It's used whenever targets are worked out; they never change on their own.
+     */
+    suspend fun leanMassKg(today: LocalDate? = null): Double? = body.countingScan(today ?: days.today())?.leanKg
+
+    /**
+     * IB-05, PRD §12.11: *Preview targets with your scan*, while the scan that counts puts BMR 20 kcal or more from the
+     * target in force today and you haven't dismissed it for that scan. Targets never change on their own.
+     */
+    val scanOffer: Flow<ScanOffer?> = combine(body.observeScans(), days.observeToday(), prefs.scanTargetsDismissed, ::Triple).flatMapLatest { (scans, today, dismissed) ->
+        nutritionDao.observeTargetOn(today).map { target ->
+            val scan = ScanTargets.counting(scans.map { it.toLeanScan() }, today) ?: return@map null
+            val scanBmr = ScanTargets.bmr(scan)
+            if (target == null || scan.measuredAt == dismissed || !ScanTargets.worthPreview(target.bmrKcal.toDouble(), scanBmr)) null
+            else ScanOffer(scan.date, scan.measuredAt, target.bmrKcal, scanBmr.roundToInt())
+        }
+    }.distinctUntilChanged()
+
+    suspend fun dismissScanOffer(measuredAt: Long) = prefs.setScanTargetsDismissed(measuredAt)
+
+    val leanMass: Flow<Double?> = combine(body.observeScans(), days.observeToday()) { scans, today ->
+        ScanTargets.counting(scans.map { it.toLeanScan() }, today)?.leanKg
+    }.distinctUntilChanged()
 
     /** The latest check-in's estimate, once a week had enough data; null before (TRD §5.4). */
     val maintenance: Flow<MaintenanceEstimate?> = checkinDao.observeLatestEstimate().map { MaintenanceEstimate.of(it) }
@@ -168,7 +209,7 @@ class PersonaRepository @Inject constructor(
                 increments = result.increments,
             ),
         )
-        writeTarget(targetsFor(result.profile, plan, result.overrides, today), plan, today, TargetReason.INITIAL, now)
+        writeTarget(targetsFor(result.profile, plan, result.overrides, today, leanMassKg = leanMassKg(today)), plan, today, TargetReason.INITIAL, now)
         prefs.edit {
             persona = this.persona.copy(
                 goal = StoredGoal.of(plan),
@@ -209,7 +250,7 @@ class PersonaRepository @Inject constructor(
         val settled = if (plan != null || current == null) GoalChange.settle(current, guarded.plan, today) else GoalChange.afterGuardrails(current, guarded.plan, today)
         val newOverrides = overrides ?: prefs.overrides.first()
         val maintenance = maintenance()
-        val after = targetsFor(newProfile, settled, newOverrides, today, maintenance)
+        val after = targetsFor(newProfile, settled, newOverrides, today, maintenance, leanMassKg(today))
         val raised = newProfile.pregnant && !settled.onBreak && newOverrides.kcal != null && after.overrides.kcal == null
         return TargetPreview(
             before = nutritionDao.targetOn(today),
