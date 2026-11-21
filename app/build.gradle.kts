@@ -28,12 +28,17 @@ android {
         }
         val offContact = localProps.getProperty("recomp.off.contact").orEmpty().replace("\\", "").replace("\"", "")
         buildConfigField("String", "OFF_CONTACT", "\"$offContact\"")
+        if (offContact.isBlank()) {
+            logger.warn("recomp.off.contact isn't set in local.properties: Open Food Facts requests will say \"no contact set\".")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // Phones only: Tesseract4Android's x86 libraries (emulators) would add about 15 MB (M18 review N2).
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // M0: debug-signed so the minified build installs for the R8 spike. A personal keystore replaces this before real use.
             signingConfig = signingConfigs.getByName("debug")
