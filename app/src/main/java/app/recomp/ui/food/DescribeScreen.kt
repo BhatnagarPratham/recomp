@@ -661,6 +661,9 @@ private fun InputStep(
             // A photo needs the AI; words alone can be read by the parser too.
             val canEstimate = text.isNotBlank() || (ready && photo != null)
             Button(onClick = onEstimate, enabled = canEstimate && !photoBusy && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
+            DescribeText.photoNeedsAi(gate?.state, text.isNotBlank(), photo != null)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             // AI on but not ready (AI-02): the parser answers now, and the description (or photo) can still wait for the AI.
             if (!ready && gate != null && gate.state != AiState.OFF) {
                 OutlinedButton(onClick = onSaveDraft, enabled = hasInput && !photoBusy && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Save draft") }

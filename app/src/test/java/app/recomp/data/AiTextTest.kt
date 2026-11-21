@@ -116,4 +116,15 @@ class AiTextTest {
         val help = AiText.keyHelp(AiProviderId.COMPATIBLE)
         assertTrue(help.contains("only to this server") && help.contains("needs no key"))
     }
+
+    @Test
+    fun `a photo with AI off or not ready says why Estimate is greyed out, and nothing else does`() {
+        val off = app.recomp.ui.food.DescribeText.photoNeedsAi(AiState.OFF, hasText = false, hasPhoto = true)!!
+        assertTrue(off.contains("AI, which is off") && off.contains("Settings → AI"))
+        val noKey = app.recomp.ui.food.DescribeText.photoNeedsAi(AiState.NO_KEY, hasText = false, hasPhoto = true)!!
+        assertTrue(noKey.contains("save it as a draft"))
+        assertNull(app.recomp.ui.food.DescribeText.photoNeedsAi(AiState.OFF, hasText = true, hasPhoto = true))
+        assertNull(app.recomp.ui.food.DescribeText.photoNeedsAi(AiState.OFF, hasText = false, hasPhoto = false))
+        assertNull(app.recomp.ui.food.DescribeText.photoNeedsAi(AiState.READY, hasText = false, hasPhoto = true))
+    }
 }
