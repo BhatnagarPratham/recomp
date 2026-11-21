@@ -1,5 +1,6 @@
 package app.recomp.domain.export
 
+import app.recomp.domain.food.MealSlot
 import app.recomp.domain.model.SessionKind
 import java.time.LocalDate
 import java.time.LocalTime
@@ -16,7 +17,9 @@ class HealthWritesTest {
     private val day = LocalDate.of(2026, 11, 20)
     private val dayStart = LocalTime.of(4, 0)
     private fun ms(hour: Int, minute: Int = 0, date: LocalDate = day) = date.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
-    private val slots = HealthWrites.mealTimes(listOf("breakfast" to "Breakfast", "lunch" to "Lunch", "snacks" to "Snacks", "dinner" to "Dinner", "pre_bed" to "Before bed"))
+    private val slots = HealthWrites.mealTimes(
+        listOf(MealSlot("breakfast", "Breakfast"), MealSlot("lunch", "Lunch"), MealSlot("snacks", "Snacks"), MealSlot("dinner", "Dinner"), MealSlot("pre_bed", "Before bed")),
+    )
 
     private fun session(id: Long, sets: List<SetRow> = listOf(SetRow("Bench press", 40_000, false, 10)), imported: String? = null, kind: SessionKind = SessionKind.STRENGTH) =
         SessionRow(id, day, ms(18), ms(19), kind, "Push", imported, sets)
@@ -78,7 +81,8 @@ class HealthWritesTest {
 
     @Test
     fun `a meal whose usual time is before the day starts sits on its log date, the next calendar morning`() {
-        val late = listOf("breakfast" to "Breakfast", "midnight" to "Midnight snack").let { HealthWrites.mealTimes(it) }.map { if (it.key == "midnight") it.copy(startMinutes = 60) else it }
+        // M9: a meal you added with its own usual start, here 01:00.
+        val late = HealthWrites.mealTimes(listOf(MealSlot("breakfast", "Breakfast"), MealSlot("midnight", "Midnight snack", startMinutes = 60)))
         val meal = HealthWrites.meals(listOf(FoodRow(day, "midnight", 200.0, 10.0, null, null, null)), late, dayStart, zone).single()
         assertEquals(day, meal.date)
         assertEquals(ms(1, date = day.plusDays(1)), meal.start.toEpochMilli())

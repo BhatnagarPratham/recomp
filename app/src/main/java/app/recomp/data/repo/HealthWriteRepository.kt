@@ -115,7 +115,7 @@ class HealthWriteRepository @Inject constructor(
         val weighIns = rows(WEIGH_INS, arrayOf(since)) { c ->
             WeighInRow(c.getLong(0), LocalDate.parse(c.getString(1)), c.getLong(2), c.getLong(3), fromScan = c.getString(4) == "SCAN" || !c.isNull(5))
         }
-        val slots = HealthWrites.mealTimes(prefs.mealSlots.first().map { it.key to it.name })
+        val slots = HealthWrites.mealTimes(prefs.mealSlots.first())
         HealthWrites.workouts(sessions) + HealthWrites.meals(food, slots, prefs.currentDayStart(), clock.zone) + HealthWrites.weights(weighIns)
     }
 

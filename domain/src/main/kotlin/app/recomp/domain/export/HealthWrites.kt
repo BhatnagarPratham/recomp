@@ -1,5 +1,7 @@
 package app.recomp.domain.export
 
+import app.recomp.domain.food.MealSlot
+import app.recomp.domain.food.MealTimes
 import app.recomp.domain.model.SessionKind
 import java.security.MessageDigest
 import java.time.Instant
@@ -197,18 +199,15 @@ object HealthWrites {
     private const val NOON = 12 * 60
 
     /**
-     * When the default meals usually start, as M9's `MealTimes.DEFAULT_STARTS` has them. Until M9's slot times are on
-     * `main` this is the one place to switch to `MealTimes.start`: a meal you added starts an hour after the one
-     * before it in your list.
+     * Each meal's usual start, by M9's rule (`MealTimes.start`: the time you set, else the default meal's). A meal
+     * with neither starts an hour after the one before it in your list.
      */
-    val DEFAULT_STARTS = mapOf("breakfast" to 5 * 60, "lunch" to 12 * 60, "snacks" to 16 * 60, "dinner" to 19 * 60)
-
-    fun mealTimes(slots: List<Pair<String, String>>): List<MealTime> {
+    fun mealTimes(slots: List<MealSlot>): List<MealTime> {
         var previous: Int? = null
-        return slots.map { (key, name) ->
-            val start = DEFAULT_STARTS[key] ?: ((previous ?: (NOON - 60)) + 60).coerceAtMost(24 * 60 - 1)
+        return slots.map { slot ->
+            val start = MealTimes.start(slot) ?: ((previous ?: (NOON - 60)) + 60).coerceAtMost(24 * 60 - 1)
             previous = start
-            MealTime(key, name, start)
+            MealTime(slot.key, slot.name, start)
         }
     }
 
