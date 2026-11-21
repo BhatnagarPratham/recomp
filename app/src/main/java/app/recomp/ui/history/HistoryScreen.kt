@@ -40,6 +40,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.HistoryRow
 import app.recomp.data.repo.ExtraEdit
+import app.recomp.domain.training.FocusAreas
+import app.recomp.ui.extra.FocusChips
 import app.recomp.data.repo.HistoryRepository
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
@@ -87,7 +89,7 @@ class HistoryViewModel @Inject constructor(private val history: HistoryRepositor
         val (session, detail) = history.extra(row.session.id) ?: return@launch
         _extra.value = ExtraEditing(
             session.id, row.routineName ?: Labels.kind(session.kind), detail.style,
-            ExtraEdit(session.logDate, detail.durationMin, detail.intensity, session.notes),
+            ExtraEdit(session.logDate, detail.durationMin, detail.intensity, session.notes, FocusAreas.normalize(detail.focusAreas)),
         )
     }
 
@@ -206,6 +208,8 @@ private fun ExtraEditSheet(editing: ExtraEditing, onChange: (ExtraEdit) -> Unit,
             )
             Text("Intensity (optional)", style = MaterialTheme.typography.labelLarge)
             ChoiceChips((1..5).toList(), edit.intensity, { "$it" }, { onChange(edit.copy(intensity = if (edit.intensity == it) null else it)) })
+            Text("Focus (optional)", style = MaterialTheme.typography.labelLarge)
+            FocusChips(edit.focusAreas.orEmpty(), onToggle = { onChange(edit.copy(focusAreas = FocusAreas.toggle(edit.focusAreas.orEmpty(), it))) })
             OutlinedTextField(value = edit.notes.orEmpty(), onValueChange = { onChange(edit.copy(notes = it)) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
             editing.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(onClick = onSave, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }

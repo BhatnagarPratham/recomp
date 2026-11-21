@@ -22,6 +22,7 @@ import app.recomp.domain.progression.RebuildExposure
 import app.recomp.domain.progression.SessionSet
 import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.EditedSession
+import app.recomp.domain.training.FocusAreas
 import app.recomp.domain.training.MuscleSets
 import app.recomp.domain.training.MuscleVolume
 import app.recomp.domain.training.SessionEdit
@@ -46,7 +47,8 @@ data class EditableSession(val session: WorkoutSessionEntity, val routineName: S
 data class WeekVolume(val weekStart: LocalDate, val muscles: List<MuscleSets>, val band: VolumeBand)
 
 /** An extra session's editable details (PRD §12.6). */
-data class ExtraEdit(val logDate: LocalDate, val durationMin: Int, val intensity: Int?, val notes: String?)
+/** [focusAreas] are YG-03's keys; null leaves the saved ones alone. */
+data class ExtraEdit(val logDate: LocalDate, val durationMin: Int, val intensity: Int?, val notes: String?, val focusAreas: List<String>? = null)
 
 /**
  * Training history (M10, PRD §12.6): the list of past sessions, editing and deleting them (WL-10), and
@@ -242,7 +244,9 @@ class HistoryRepository @Inject constructor(
         SessionEdit.timeProblem(startedAt, endedAt, now)?.let { return@withTransaction "That date is in the future." }
         workoutDao.active()?.let { active -> SessionEdit.activeProblem(startedAt, active.startedAt)?.let { return@withTransaction it } }
         workoutDao.updateSession(session.copy(startedAt = startedAt, endedAt = endedAt, logDate = days.of(startedAt), notes = edit.notes?.trim()?.ifBlank { null }))
-        historyDao.updateYogaDetail(detail.copy(durationMin = edit.durationMin, intensity = edit.intensity))
+        historyDao.updateYogaDetail(
+            detail.copy(durationMin = edit.durationMin, intensity = edit.intensity, focusAreas = edit.focusAreas?.let(FocusAreas::normalize) ?: detail.focusAreas),
+        )
         null
     }
 

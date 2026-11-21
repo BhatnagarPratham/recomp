@@ -583,5 +583,20 @@ class HistoryFlowTest {
         assertEquals(listOf("hips", "core"), workouts.lastExtra(yoga.id)!!.focusAreas)
         assertEquals(listOf("hips", "core"), app.db.backupCheckDao().yogaDetail().single().focusAreas)
     }
+
+    @Test
+    fun `editing an extra session in History keeps or changes its focus areas`() = runBlocking {
+        val yoga = app.training.observeExtras().first().single()
+        val id = workouts.logExtra(yoga, ExtraEntry("Hatha", 45, null, null, listOf("hips")), now = clock)
+        val date = session(id).logDate
+        fun focus() = runBlocking { app.db.backupCheckDao().yogaDetail().single().focusAreas }
+
+        assertNull(history.saveExtra(id, ExtraEdit(date, 50, null, null), now = clock + 3_600_000))
+        assertEquals(listOf("hips"), focus())
+        assertNull(history.saveExtra(id, ExtraEdit(date, 50, null, null, listOf("core", "back", "back")), now = clock + 3_600_000))
+        assertEquals(listOf("back", "core"), focus())
+        assertNull(history.saveExtra(id, ExtraEdit(date, 50, null, null, emptyList()), now = clock + 3_600_000))
+        assertEquals(emptyList<String>(), focus())
+    }
 }
 
