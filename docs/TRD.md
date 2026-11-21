@@ -162,7 +162,7 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 - `persona`: the persona (§5.0) as JSON, including the goal plan, the training part (split, experience, strength days, extra-session schedules by routine id) and `onboarded_on`. Never body data, so PS-06 can export it as is.
 - `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
-- `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
+- `meal_slots` (NU-10; from M9 each slot may carry `start`, its usual start in minutes after midnight), `portion_sizes` (household measures, NU-12), `snack_allowance` (NU-06, M9: `{kcal, slot}`, absent = off) and `food_data_version` (§6.4).
 - `ai_mode` (`OFF|ON`), `ai_monthly_cap_usd` (absent = no cap), and from M7 (AI-05, §6.2):
   - `ai_provider` (an `AiProviderId` name; absent = Anthropic);
   - a model per provider: `ai_model` (Anthropic's; the name predates M7), `ai_model_openai`, `ai_model_gemini`, and `ai_model_compatible` (the typed name);
@@ -706,7 +706,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   | OpenAI and compatible | `prompt_tokens` − `cached_tokens` − `cache_write_tokens` | `prompt_tokens_details.cached_tokens` (writes: `cache_write_tokens`, at 1.25 × input) | `completion_tokens` (reasoning is already inside) |
   | Gemini | `promptTokenCount` − `cachedContentTokenCount` | `cachedContentTokenCount` | `candidatesTokenCount` + `thoughtsTokenCount` |
 
-  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers.
+  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers. A usage with only one of the two counts keeps the count it has and takes the upper bound for the missing one, so half a usage never makes the other half free (M9).
 - **Upper bound.** The reservation is the same shape for each provider: the prompt at 3 characters a token, 1,500 tokens of overhead, 5,000 tokens a photo, and the provider's whole output limit (`AiProviderId.outputBound`, 8,000 for each, since each limit includes reasoning or thinking), at the model's own rates or the typed ones.
 - **Statuses.** Each provider's replies map onto the table above:
 
@@ -733,21 +733,49 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   - A key is never sent over `http`: such a server needs none, and the gate doesn't ask for one.
   - No user name, password, query or fragment, so nothing secret is stored or exported with the settings.
   - `network_security_config.xml` allows cleartext in its base config, because it can't name a LAN range. Anthropic, OpenAI and Gemini are fixed `https` addresses.
-- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
+- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. The lookup gives up after 3 s: `InetAddress.getAllByName` ignores a thread interrupt, so it runs on its own and the caller just stops waiting. It's done before the send lock is taken, so a network whose DNS hangs holds up that one estimate and nothing queues behind it (M9). *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
 - **Gate.** `OFF` → `NO_URL` (the compatible provider without a usable URL and model) → `NO_KEY` → `OVER_CAP` → `OFFLINE` → `NO_LOCAL_NETWORK` → `READY`.
 - **Privacy notice.** Shown before a kind's first send to each provider, naming it, and again for another compatible server (by host). Gemini's adds that Google may use free-tier prompts to improve its products and that reviewers may read them; OpenAI's API and Gemini's paid tier don't train on them.
 
-**Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
+**Local describe parser (AI-04, M9).** This is plain rules, not AI: `DescribeParser` in `:domain`, over a `FoodIndex` the repository supplies. The same parser answers *Will it fit?* without AI.
 
 ```
 "2 roti, 1 katori dal makhani and salad"
-→ split on  ,  "and"  +  newline
-→ per chunk: quantity (2, ½, "half", "one"…) + unit (food_unit labels + synonyms: bowl→katori, chapati→roti)
-             + name
-→ FTS-match name against the foods the persona's diet and region allow, ranked by use_count;
-  unit → grams via food_unit, else the food's default serving
-→ unmatched chunks listed as "Couldn't find: search or quick add"
+→ split on  ,  ;  +  newline; then on "and", "with", "&" unless a food's own name carries them
+→ per chunk: amount + unit + name, or the amount after the name ("roti x2", "rajma 1 katori")
+→ whole-word match of the name against the foods the persona's diet and region allow
+→ grams from the typed weight, the food's own unit, a household measure, or the food's usual serving
+→ unmatched chunks listed as "Couldn't find: salad", with Search and Quick add
 ```
+
+- **Limits:** the first 500 characters and 20 chunks.
+- **Amounts** (`Quantities`): digits and decimals; fractions (`1/2`, `1 1/2`, `½`, `2½`); ranges (`2-3` is 2.5); words (a, an, one to twelve, half, half a, quarter, a couple of, one and a half). An "and" inside an amount ("one and a half", "2 and a half") never splits the chunk. A weight (`150 g`, `150g`, `200 ml`, `0.5 kg`, `1 l`) is grams directly; 1 ml counts as 1 g. No amount means one.
+- **Units:** the first word after the amount is a unit when it's a household measure or serving unit, a common unit (bowl, plate, piece, slice, cup, scoop, handful, egg, tsp, serving), one of the foods' own single-word unit labels, or another spelling of one (tablespoon → tbsp, pcs → piece, vati → katori, plurals). A unit that is also a food (roti, egg) reads as a unit only after an amount.
+- **Name words:** filler words are dropped (of, a, the, some, my, small, medium, large, big, fresh, homemade). Each word is also tried in the singular and as each of its synonyms (roti/chapati/phulka, curd/dahi/yogurt, tea/chai, rice/chawal, potato/aloo, egg/anda, paratha/parantha, chana/channa/chickpea, moong/mung, khichdi/khichri, chaas/buttermilk). What's shown is always the matched food's own name.
+- **Matching.** `FoodIndex.lookup(words)` is `food_fts MATCH` with whole words (no prefixes, so "pan" never finds paneer), on the same filter and order as search (§6.4), 20 candidates per variant. Every typed word must be in the food's name: "dal makhani" with no such food is unmatched, never plain dal. Among the candidates, the first rule that separates them wins:
+  1. an exact name among your own foods (custom, AI-learned, label-scanned);
+  2. an exact name among the rest. A food's names are its whole name and each part between `/`, brackets and commas, so "Chapati/Roti" is exactly "roti" and "Pea paneer curry (Matar paneer)" is exactly "matar paneer";
+  3. foods you've logged, most often first; then your own; then foods without a caveat; then the name with the fewest extra words, where everyday words (plain, boiled, steamed, cooked, whole) count for less, so "rice" is boiled rice before lemon rice.
+- **A unit word that's part of the name.** When the picked food has no such unit and no household measure has that label, the chunk is tried again with the unit word in the name ("egg curry", "2 egg whites").
+- **Grams:** a typed weight; else the typed unit as the food's own unit (so a food's own "bowl" beats bowl → katori), a unit whose label ends with it ("tea cup" for cup), the synonym's unit, the household measure at your calibrated weight, or a generic weight (cup 240 g, tsp 5 g). With no unit typed: the food's unit named in the text ("2 roti"), else the unit you logged it in last, else its first own serving if believable (`Portions.plausible`), else 100 g each. A typed unit that fits nothing uses the same fallback.
+- **Confidence and note.** High: an exact name and a sure amount. Medium: an exact name with a default serving, or a non-exact pick you've logged before. Low: a non-exact pick you've never logged, a unit fallback, or the 100 g fallback. The note says what was matched and where the grams came from, and shows in the review like the AI's assumptions.
+
+**Describe it and Will it fit? with the parser (M9, PRD §12.5).** `MealDescriber` (`data/repo`) runs both, in this order:
+
+| Gate and origin | What runs |
+|-----------------|-----------|
+| AI off | The parser alone. |
+| AI on, not ready (no key, no URL, offline, over the cap, no local-network permission) | The parser alone. The review says it was matched without AI, and *Save draft* stays as the second action. |
+| Ready, *Ordered* | Straight to the AI, as in M3c. |
+| Ready, *Home* or *Packaged* | The parser first. Everything matched: no request and no spend. Nothing matched: M3c's plain request. Otherwise one request. |
+
+- **The one request** carries the whole description, then "Already counted, do not return these:" with a line per matched item ("2 roti = Chapati/Roti, 80 g"). One fixed sentence in the system prompt says such items are never returned, so the system prompt stays the same between calls and cacheable. With a counted list, a reply with no items is `OK` ("nothing else"), not `INVALID`.
+- **Merge** (`DescribeMerge`): parser items first, then the AI's. An AI item whose name is a counted item's typed name, or any of its food's names (ignoring plurals, synonyms and word order), is dropped and named in the review. Totals are recomputed from what's kept.
+- **Failures.** If the request fails after the parser matched something, the review opens with the matched items, the rest under "Couldn't find", and the reason. No draft is kept then: saving the matched items and later estimating a draft of the whole text would count them twice. With nothing matched it's M3c's behaviour: a draft with the reason. A fit check never keeps a draft, so any failure falls back to what the parser found.
+- **Cancellation.** Describing runs to completion like the request (`NonCancellable`), so a screen left the moment *Estimate* is tapped still sends once and keeps its draft.
+- **Review.** Each item says where its numbers came from: *Your food*, *Database*, *AI* or *Quick add*. A "Couldn't find" chunk offers *Search* (a food picker, then the portion sheet), *Quick add* and *Leave out*; nothing is logged until *Save*. A matched or picked food changes its weight only, since its numbers are the food's own; AI items edit as before, with the learning loop.
+- **Saving** (`FoodLogRepository.saveDescribedMeal`, one transaction with the saved meal and the draft): a matched food logs from the food's numbers, linked to it, as `LOCAL_PARSE` (a food you picked: `MANUAL`), and bumps its use count; AI items are `AI_TEXT` with the request id; quick adds are `QUICK_ADD`.
+- **Will it fit?** is `AiKind.FIT_CHECK`, so it has its own notice per provider. `FitCheck` (`:domain`) gives the goal's main number before and after (`TodayNumbers.main` on today's intake with and without the dish), with calories and protein for every goal; `FitText` words it. *Log it* saves through the same call, into `MealTimes.slotAt(now)` or the meal it was opened from, with the request id when the AI estimated it.
 
 ### 6.3 Health Connect (P1)
 
@@ -786,7 +814,9 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **Import.** On launch, `FoodSeeder` upserts the basics and, when the build has it, INDB by `source_key`, but only when a file's version differs from `food_data_version`. Updates keep use counts, hidden foods and calibrated units. A food that disappears from a file is archived, never deleted, because log rows may point at it. Without INDB in the build, INDB rows already on the phone stay.
 - **Search (NU-11).** `food_fts MATCH` with each typed word as a prefix (`pan* tik*`), joined to `food` and filtered to unarchived rows whose diet the persona allows and whose region is null or the persona's. Order: foods you've logged first (most often, then most recently), then custom, AI-learned, the basics and INDB, with caveat foods last among those; then names that start with the query, then shorter names. An empty query lists recently used foods, or the basics for the diet when nothing has been logged yet. Hiding a food archives it.
 - **Units and portions (NU-12).** A food offers `g`, its own `food_unit` rows and the region's household measures (`portion_sizes`; Indian: katori 150 g, glass 250 g, tbsp 15 g; International: cup 240 g, tbsp 15 g; 1 ml counts as 1 g). Recalibrating a unit for one food writes a `calibrated` `food_unit` row, which beats the household default. A log row snapshots grams and macros: `kcal = kcal_100g × grams / 100`, and so on.
-- **Meal slots (NU-10)** are `{key, name, removed}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
+- **Meal slots (NU-10)** are `{key, name, removed, start}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
+  - **Slot times (M9, PRD §12.5).** `start` is the meal's usual start in minutes after midnight. Slots stored before M9 have none; the four default meals then use their defaults (Breakfast 05:00, Lunch 12:00, Snacks 16:00, Dinner 19:00), and a meal you add has no usual time until you set one. `MealTimes.slotAt(slots, time)` (`:domain`) gives "the meal for the time of day": among the meals you can log to, the one with the latest start at or before the time. Before the day's first start it's the last meal (01:30 is a late dinner); equal starts go to the meal later in your list; with no starts at all it's your first meal. A slot's range is its start to the next start. The log date still comes from the day boundary (PR-03); only the slot uses the wall-clock time. M12's reminders use the same function.
+- **Snack allowance (NU-06, M9).** `snack_allowance` holds `{kcal, slot}`: 100 to 300 kcal in steps of 50, counted against one meal (Snacks, or your first meal when there's no Snacks). It's inside the calorie target: the target, "left" and every average are computed exactly as without it. `DayLog.allowance` and `MealGroup.allowanceKcal` carry it to the day view, which adds "includes a 150 kcal snack allowance" under the target and shows the meal as "60 of 150 kcal". It's a current setting, not a versioned target, so it shows on any day you view. A value that isn't one of the offered amounts reads as off, and an import with one is refused (`problems()`).
 - **Saved meals and copy (NU-13).** Logging a saved meal inserts one row per item in a transaction (`source = SAVED_MEAL`); an item with a food recomputes from the food's current values. Copying a day or a meal re-inserts its rows on the target date with a new `logged_at`, keeping their macros, origin and source. Both bump the foods' `use_count` and `last_used_at`, and return the new ids for *Undo*.
 - **Label scan (P1, NU-19):**
   1. CameraX captures the label.
@@ -888,7 +918,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M6: In the gym** | Supersets, warm-up suggestions, assisted exercises, RIR-aware jumps, substitutes (Room v9) | RT-05, WL-11, WL-09 (assisted), PO-08, EX-04 |
 | **M7: AI providers** | Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint, each with its own key (Room v10) | AI-05 |
 | **M8: Weekly review** ✅ | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
-| **M9: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
+| **M9: Faster food logging** ✅ | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
 | **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
 | **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |

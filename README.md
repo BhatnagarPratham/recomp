@@ -21,6 +21,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M6: in the gym: supersets, warm-up suggestions for the first heavy lift, assisted pull-ups and dips, two steps up for beginners with reps to spare, and same-movement substitutes when you swap.
 > - M7: a choice of AI provider: Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint such as OpenRouter or a server on your own network. Each keeps its own encrypted key and model, and one monthly cap covers them all.
 > - M8: a weekly review on the check-in screen, week by week: food against target with protein days hit and the share of ordered and packaged food, training against your plan with PRs and stalls, the trend, waist and scans, the finish line at your current rate, a month calendar with no streaks, and a body-composition chart on Body.
+> - M9: faster food logging: *Describe it* now works with AI off, matching what you type against your own foods and the database (and going first with AI on, so repeat dishes are instant and free); *Will it fit?* shows what a dish would do to today before you order it; and an optional snack allowance inside your calorie target.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
