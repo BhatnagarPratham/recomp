@@ -790,13 +790,15 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **Meal slots (NU-10)** are `{key, name, removed}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
 - **Saved meals and copy (NU-13).** Logging a saved meal inserts one row per item in a transaction (`source = SAVED_MEAL`); an item with a food recomputes from the food's current values. Copying a day or a meal re-inserts its rows on the target date with a new `logged_at`, keeping their macros, origin and source. Both bump the foods' `use_count` and `last_used_at`, and return the new ids for *Undo*.
 - **Label scan (P1, NU-19):**
-  1. CameraX captures the label.
-  2. An open-source on-device text recogniser reads it (M18's choice; not ML Kit, see §7).
-  3. Tolerant regexes parse the per-100 g column of the FSSAI nutrition table: `Energy (kcal)`, `Protein (g)`, `Carbohydrate (g)`, `Total Fat (g)`.
-  4. An editable form is pre-filled.
+  1. CameraX captures the label, or the photo picker supplies one (no storage permission).
+  2. Tesseract (Tesseract4Android, `tessdata_fast` English) reads it on the phone, from a greyscale copy at most 2,000 px on its long edge (not ML Kit, see §7).
+  3. `LabelParser` (`:domain`) finds the layout from the header (per 100 g and per-serving columns in either order, or a US *Nutrition Facts* panel per serving with its weight) and reads energy (kcal, else kJ ÷ 4.184), protein, carbs, fat, fibre and the serving weight. It mends common OCR slips inside numbers (O→0, l→1, comma decimals) and leaves blank any value that can't be right (over 950 kcal or 100 g per 100 g; per serving, more than the serving weighs).
+  4. New food opens pre-filled, with every filled field marked *Check this* until edited, and keeps `source = LABEL_OCR`.
 
-  With AI on, the photo and OCR text also go to your AI provider (`LABEL`) for a cleaner result.
-- **Barcode (P1, NU-21):** Open Food Facts API, with a custom User-Agent as its terms require. A result is cached as a `food` row. Coverage of Indian brands is patchy, so a miss goes straight to label scan.
+  With AI on (and after the `LABEL` privacy notice, which offers *Phone only*), the photo at about 1,500 px and the OCR text also go to your AI provider with the `nutrition_label` schema (no persona). Its values replace the phone's where it found one; if it fails, the phone's reading stands and New food says so. The label photo isn't kept.
+- **Barcode (P1, NU-21):** ZXing reads EAN-13, EAN-8, UPC-A and UPC-E from CameraX frames on the phone, and only codes with a valid GS1 check digit are used. Your own foods are checked first (`food.barcode`); otherwise Open Food Facts' product API is asked (`Recomp/<version> (<contact>)`, at most 15 reads a minute, backing off on 429 with `Retry-After`). A product opens New food pre-filled; saving it makes a `food(source = OFF, source_key = "off:<code>")` row, and saving the same product again updates that row. Coverage of Indian brands is patchy, so a miss offers *Scan label*, and that food keeps the barcode.
+- **Open Food Facts search (NU-11, International region):** under your own results, only after a 600 ms pause with 3+ characters and fewer than 5 own matches, or on the keyboard's search key; each search is cached for the session (50 entries) and at most 10 are sent a minute. Results show apart from your foods with the ODbL credit.
+- **Meal photos (P1, NU-20):** Describe it takes a photo (camera or gallery), scaled to about 1,500 px, upright and without its metadata, kept in app-private `files/meal_photos`. The photo and any words go as one `MEAL_PHOTO` request. A photo stays only while its meal is a draft (`meal_draft.photo_path`): saving the meal deletes it, and at launch any photo no draft points at is deleted after a day's grace.
 - **Search ranking:** recent and frequent foods first (`use_count`, `last_used_at`), then custom foods, then AI-learned items, then the bundled database.
 
 ### 6.5 Backup and restore (DA-01, DA-02)
@@ -1650,6 +1652,7 @@ Tests cover:
   - the request shapes against a mock server.
 - **Risks:** an open-source recogniser reads labels less well than ML Kit would; AI cleans up when it's on, and every field stays editable. Tesseract and its `tessdata_fast` models are Apache-2.0, so the English model (about 4 MB) can be committed. Tesseract4Android ships through JitPack, a third-party repository: pin its version and limit JitPack to that group in Gradle's content filter. ZXing is Apache-2.0 too. Open Food Facts covers Indian brands patchily, so label scan is the fallback. Camera permissions and lifecycle on the phone.
 - **Parallel:** with M17.
+- **Built (2026-11-21):** CameraX 1.6.2, ZXing core 3.5.4 and Tesseract4Android 4.9.0 (JitPack limited to `cz.adaptech.tesseract4android`); the `tessdata_fast` English model is committed (commit `8741641`, about 4 MB). No ML Kit or Google Play services. The Open Food Facts contact comes from `recomp.off.contact` in `local.properties`, into `BuildConfig`. Details in §6.4.
 
 #### M19: Goals
 

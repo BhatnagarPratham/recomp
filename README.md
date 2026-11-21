@@ -23,6 +23,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M8: a weekly review on the check-in screen, week by week: food against target with protein days hit and the share of ordered and packaged food, training against your plan with PRs and stalls, the trend, waist and scans, the finish line at your current rate, a month calendar with no streaks, and a body-composition chart on Body.
 > - M11: with AI on, a weekly programme review: you tick what's sent (body trends off by default), read the full text, and get up to 5 suggestions you apply one by one, with Undo. Train also offers a deload week every 6–8 weeks (4–6 for advanced lifters).
 > - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
+> - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
@@ -59,6 +60,10 @@ You need:
 2. Point Gradle at your SDK in `local.properties` (Android Studio writes this for you):
    ```properties
    sdk.dir=/path/to/Android/sdk
+   ```
+   Barcode lookups and International search use [Open Food Facts](https://world.openfoodfacts.org), which asks apps to name a contact in their User-Agent. Add yours on the next line; it goes into your build only, never the repo:
+   ```properties
+   recomp.off.contact=you@example.com
    ```
 3. Turn on the privacy hooks (below):
    ```bash
