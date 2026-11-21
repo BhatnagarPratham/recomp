@@ -102,7 +102,7 @@ class BodyRepository @Inject constructor(
     // Weigh-ins (BM-01)
 
     fun observeTrend(): Flow<BodyTrend> = combine(bodyDao.observeWeighIns(), prefs.persona) { rows, persona ->
-        trendOf(rows, persona.weightSource, persona.goal?.toPlan()?.policy?.let(WeightPace::of))
+        trendOf(rows, persona.weightSource, persona.goal?.toPlan()?.targetPlan?.policy?.let(WeightPace::of))
     }
 
     /** The current trend weight, or null before the primary source has a weigh-in. */

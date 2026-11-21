@@ -22,10 +22,13 @@ import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
 import app.recomp.domain.checkin.EstimateGap
 import app.recomp.domain.checkin.WaistReading
+import app.recomp.domain.nutrition.NutritionCalculator
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
+import app.recomp.domain.persona.GoalChange
 import app.recomp.domain.persona.GoalPlan
+import app.recomp.domain.persona.MaintenanceBreak
 import app.recomp.domain.persona.GuardrailNote
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.Profile
@@ -74,6 +77,18 @@ data class CheckinView(
     val written: NutritionTargetEntity?,
     /** The log date the week was decided on: the written version's, else the day boundary's (PR-03). */
     val decidedOn: LocalDate?,
+    /**
+     * The week falls in a maintenance break, or in the weeks after one before the flag's window is back on the goal
+     * (GL-06): the estimate still updates, but there's no flag and no proposal.
+     */
+    val quiet: Boolean = false,
+    /**
+     * Pregnant or breastfeeding (GL-09): the scale isn't judged, since the gain isn't stored energy, so there's no flag
+     * and no proposal. The estimate is still shown, but never lowers a target.
+     */
+    val pregnant: Boolean = false,
+    /** The switch is on now; [pregnant] without it is the weeks just after it went off (R4). */
+    val pregnantNow: Boolean = false,
 )
 
 /**
@@ -103,6 +118,7 @@ class CheckinRepository @Inject constructor(
     private val prefs: SettingsPrefs,
     private val days: DayBoundary,
     private val personas: PersonaRepository,
+    private val goals: GoalRepository,
 ) {
     /** Catch-up, open and the decisions each read a row and write it back. */
     private val mutex = Mutex()
@@ -122,6 +138,15 @@ class CheckinRepository @Inject constructor(
     }
 
     private suspend fun catchUpLocked(day: LocalDate, now: Long) {
+        // A break that ended while the app was closed resumes first, so the weeks after it are judged on the goal (GL-06).
+        // A failure there (a settings write that throws) mustn't stop the check-ins from opening.
+        try {
+            goals.refresh(now)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Retried at the next catch-up or launch.
+        }
         val first = nutritionDao.first() ?: return
         val thisWeek = mondayOf(day)
         // A week lapses when the next one is ready. If that next one was a clock-ahead week just dropped, it's open again.
@@ -204,18 +229,25 @@ class CheckinRepository @Inject constructor(
             val row = checkinDao.week(weekStart)?.takeIf { it.pending } ?: return@withLock false
             val today = days.of(now)
             val basis = basis(today) ?: return@withLock false
+            // A break began after this proposal was made (GL-06): it's no longer on offer.
+            // A break began after this proposal was made (GL-06), or the pregnancy switch went on (GL-09): it's off the table.
+            if (basis.plan.onBreak || basis.profile.pregnant) return@withLock false
             val overrides = prefs.overrides.first()
-            val requested = kcalFor(row, overrides) ?: return@withLock false
-            val kcal = if (decision == CheckinDecision.ADJUSTED) requested.coerceIn(CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble())) else requested
+            // GL-09: a calorie target of your own below maintenance isn't kept by *Accept* while deficits are off.
+            val own = overrides.copy(kcal = Guardrails.kcalOverride(basis.profile, overrides.kcal, row.tdeeNew.toDouble()))
+            val requested = kcalFor(row, own) ?: return@withLock false
+            val range = CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble(), basis.deficitAllowed)
+            val kcal = if (decision == CheckinDecision.ADJUSTED) requested.coerceIn(range) else requested
             val kept = if (resetKcal) overrides.copy(kcal = null) else overrides
             val targets = CheckinProposal.targets(basis.inputs, row.tdeeNew.toDouble(), kept, kcal = kcal)
             db.withTransaction {
-                val id = nutritionDao.upsert(targets.toVersion(basis.plan.goal, today, TargetReason.CHECKIN, now))
+                val id = nutritionDao.upsert(targets.toVersion(basis.plan.targetPlan.goal, today, TargetReason.CHECKIN, now))
                 checkinDao.upsert(row.copy(decision = decision, decidedAt = now, targetId = id))
             }
             try {
                 prefs.edit {
-                    persona = this.persona.copy(goal = StoredGoal.of(basis.plan))
+                    // A goal the guardrails moved is a change of goal: it starts today (PS-04).
+                    persona = this.persona.copy(goal = StoredGoal.of(GoalChange.afterGuardrails(basis.stored, basis.plan, today)))
                     setProfile(basis.profile)
                     if (resetKcal && overrides.kcal != null) setOverrides(kept)
                 }
@@ -241,14 +273,24 @@ class CheckinRepository @Inject constructor(
     // Computing a week
 
     /** What targets are judged by now, as in Settings: body data at the trend weight, and the goal after the guardrails. */
-    private data class Basis(val profile: Profile, val plan: GoalPlan, val notes: List<GuardrailNote>, val inputs: TargetInputs)
+    private data class Basis(
+        val profile: Profile,
+        /** The goal as stored, and as the guardrails leave it. */
+        val stored: GoalPlan,
+        val plan: GoalPlan,
+        val notes: List<GuardrailNote>,
+        /** What the targets are computed from: maintenance during a break (GL-06). */
+        val inputs: TargetInputs,
+        /** PRD §4.9: no proposal or adjustment may go below maintenance when this is false. */
+        val deficitAllowed: Boolean,
+    )
 
     private suspend fun basis(today: LocalDate): Basis? {
         val stored = prefs.currentPersona().goal?.toPlan() ?: return null
         val profile = personas.currentProfile() ?: return null
         val guarded = Guardrails.apply(profile, stored, today)
         val notes = guarded.notes.filter { it != GuardrailNote.AGGRESSIVE_NEEDS_ACK }
-        return Basis(profile, guarded.plan, notes, TargetInputs.from(profile, guarded.plan, today))
+        return Basis(profile, stored, guarded.plan, notes, TargetInputs.from(profile, guarded.plan.targetPlan, today), Guardrails.deficitAllowed(profile))
     }
 
     private suspend fun trend(): List<TrendPoint> =
@@ -273,10 +315,20 @@ class CheckinRepository @Inject constructor(
             incomplete = checkinDao.incompleteDays(from, end).toSet(),
             previous = previous.toDouble(),
         )
-        val tdeeNew = estimate.new.roundToInt()
-        val flag = CheckinFlags.evaluate(basis.plan.policy, points, waist(), end).flag
+        // GL-09: pregnancy gain isn't stored energy, so while it's on the estimate never falls below the formula's TDEE.
+        // Nothing biased is carried into the chain for when it's switched off (M19 review R1).
+        val formulaTdee = NutritionCalculator.startingTargets(basis.inputs).tdeeKcal
+        val pregnancy = Guardrails.pregnancyQuiet(basis.profile, end)
+        val tdeeNew = (if (pregnancy) maxOf(estimate.new, formulaTdee) else estimate.new).roundToInt()
+        // During a break, and until the flag's window is back on the goal, the estimate updates but nothing is flagged.
+        // While pregnant or breastfeeding the scale isn't judged either (GL-09): a gain would read as drift, and the
+        // estimate as a lower maintenance.
+        val quiet = MaintenanceBreak.flagsQuiet(basis.plan, end) || pregnancy
+        val flag = if (quiet) null else CheckinFlags.evaluate(basis.plan.policy, points, waist(), end).flag
         val current = nutritionDao.targetOn(today)
-        val proposal = if (propose && current != null) CheckinProposal.of(flag, basis.inputs, tdeeNew.toDouble(), prefs.overrides.first(), current.kcal) else null
+        val proposal = if (propose && current != null) {
+            CheckinProposal.of(flag, basis.inputs, tdeeNew.toDouble(), prefs.overrides.first(), current.kcal, basis.deficitAllowed)
+        } else null
         return WeeklyCheckinEntity(
             weekStart = week,
             computedAt = now,
@@ -302,10 +354,12 @@ class CheckinRepository @Inject constructor(
         val evaluation = CheckinFlags.evaluate(basis.plan.policy, trend(), waist(), row.weekEnd)
         val status = when {
             row.flag != null -> CheckinStatus.FLAGGED
+            // Not judged this week (GL-06): the screen says so rather than asking for data it wouldn't use.
+            MaintenanceBreak.flagsQuiet(basis.plan, row.weekEnd) || Guardrails.pregnancyQuiet(basis.profile, row.weekEnd) -> CheckinStatus.ON_TRACK
             evaluation.status == CheckinStatus.FLAGGED -> CheckinStatus.ON_TRACK
             else -> evaluation.status
         }
-        val open = row.proposedKcal?.takeIf { row.pending }
+        val open = row.proposedKcal?.takeIf { row.pending && !basis.profile.pregnant }
         val written = row.targetId?.let { nutritionDao.target(it) }
         return CheckinView(
             row = row,
@@ -317,10 +371,13 @@ class CheckinRepository @Inject constructor(
             formulaTdee = personas.targetsFor(basis.profile, basis.plan, TargetOverrides(), today).tdeeKcal.roundToInt(),
             current = current,
             proposal = open?.let { CheckinProposal.targets(basis.inputs, row.tdeeNew.toDouble(), overrides.copy(kcal = null), kcal = it) },
-            adjustRange = open?.let { CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble()) },
+            adjustRange = open?.let { CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble(), basis.deficitAllowed) },
             kcalOverride = overrides.kcal,
             written = written,
             decidedOn = written?.effectiveFrom ?: row.decidedAt?.let { days.of(it) },
+            quiet = row.flag == null && MaintenanceBreak.flagsQuiet(basis.plan, row.weekEnd),
+            pregnant = row.flag == null && Guardrails.pregnancyQuiet(basis.profile, row.weekEnd),
+            pregnantNow = basis.profile.pregnant,
         )
     }
 

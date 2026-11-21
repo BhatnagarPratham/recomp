@@ -144,23 +144,39 @@ object AiText {
      * in Settings. [host] is an OpenAI-compatible server's.
      */
     fun privacy(provider: AiProviderId, host: String? = null): String {
-        val to = when (provider) {
-            AiProviderId.ANTHROPIC -> "Anthropic"
-            AiProviderId.OPENAI -> "OpenAI"
-            AiProviderId.GEMINI -> "Google"
-            AiProviderId.COMPATIBLE -> if (host != null) "the server at $host" else "the server you set"
-        }
+        val to = recipient(provider, host)
         val sends = "Describe it sends your description and its origin to $to, with your diet and food region, your portion " +
             "sizes and your most-used own foods (names and values), so the estimate fits how you eat. It never sends your " +
             "name, body data, targets or food log."
-        val after = when (provider) {
+        return sends + after(provider)
+    }
+
+    /**
+     * What a goal description sends (GL-03, TRD §5.7): shown before the first one with each provider. Only the text
+     * you typed, and your answer to the one follow-up question.
+     */
+    fun goalPrivacy(provider: AiProviderId, host: String? = null): String =
+        "Describe your goal sends the text you type to ${recipient(provider, host)}, and your answer if it asks one question. Nothing else: " +
+            "not your name, body data, targets or history. The reply only says what you're after; the same rules as the three " +
+            "questions pick the goal." + after(provider)
+
+    fun goalPrivacy(s: AiSettings): String = goalPrivacy(s.provider, s.url?.host)
+
+    private fun recipient(provider: AiProviderId, host: String?) = when (provider) {
+        AiProviderId.ANTHROPIC -> "Anthropic"
+        AiProviderId.OPENAI -> "OpenAI"
+        AiProviderId.GEMINI -> "Google"
+        AiProviderId.COMPATIBLE -> if (host != null) "the server at $host" else "the server you set"
+    }
+
+    private fun after(provider: AiProviderId): String {
+        return when (provider) {
             AiProviderId.ANTHROPIC -> " Requests use your API key and are billed to your Anthropic account."
             AiProviderId.OPENAI -> " Requests use your API key and are billed to your OpenAI account."
             AiProviderId.GEMINI -> " Requests use your API key. On Google's free tier, Google may use what you send to improve its " +
                 "products and reviewers may read it; on the paid tier it doesn't."
             AiProviderId.COMPATIBLE -> " What happens to it there is up to whoever runs that server."
         }
-        return sends + after
     }
 
     fun privacy(s: AiSettings): String = privacy(s.provider, s.url?.host)

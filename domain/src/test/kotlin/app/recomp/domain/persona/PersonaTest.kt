@@ -1,6 +1,5 @@
 package app.recomp.domain.persona
 
-import app.recomp.domain.model.SessionKind
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.Pace
 import app.recomp.domain.nutrition.Sex
@@ -12,44 +11,22 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Presets (PRD §4.4) and the onboarding draft (PS-01). */
+/** The onboarding draft (PS-01) and the profile. The presets are data files, tested in `:app` (`PresetsTest`). */
 class PersonaTest {
     private val today = LocalDate.of(2026, 10, 17)
     private val recomp = GoalPlan.of(Goal.RECOMP, Pace.STANDARD, 78.0, FinishLine.GoalWeight, today)
 
     @Test
-    fun `presets match the PRD table`() {
-        assertEquals(5, Presets.all.map { it.key }.toSet().size)
-        with(Presets.REFERENCE) {
-            assertEquals(Goal.RECOMP, goal)
-            assertEquals(Experience.BEGINNER, draft.experience)
-            assertEquals(Diet.LACTO_VEGETARIAN, draft.diet)
-            assertEquals(FoodRegion.INDIAN, draft.region)
-            assertEquals(SplitTemplate.PPL, draft.split)
-            assertEquals(listOf(SessionKind.YOGA), draft.extras.map { it.kind })
-            assertEquals(WeightSource.HOME_SCALE, draft.weightSource)
-        }
-        assertEquals(Goal.FAT_LOSS to SplitTemplate.FULL_BODY_AB, Presets.FAT_LOSS_STARTER.goal to Presets.FAT_LOSS_STARTER.draft.split)
-        assertEquals(Experience.BEGINNER, Presets.FAT_LOSS_STARTER.draft.experience)
-        assertEquals(Goal.LEAN_BULK to SplitTemplate.UPPER_LOWER, Presets.LEAN_BULK.goal to Presets.LEAN_BULK.draft.split)
-        assertEquals(Experience.INTERMEDIATE, Presets.LEAN_BULK.draft.experience)
-        assertEquals(Goal.MAINTAIN to SplitTemplate.FULL_BODY_AB, Presets.MAINTAIN.goal to Presets.MAINTAIN.draft.split)
-        assertNull(Presets.MAINTAIN.draft.experience)
-        assertNull(Presets.CUSTOM.goal)
-        assertEquals(Presets.LEAN_BULK, Presets.byKey("lean_bulk"))
-        assertNull(Presets.byKey("gone"))
-    }
-
-    @Test
     fun `asked values are missing until chosen`() {
-        assertEquals(listOf("goal", "diet", "region"), Presets.FAT_LOSS_STARTER.draft.missing)
-        assertEquals(listOf("goal", "experience", "diet", "region", "split"), Presets.CUSTOM.draft.missing)
-        assertNull(Presets.FAT_LOSS_STARTER.draft.complete())
+        val starter = PersonaDraft(experience = Experience.BEGINNER, split = SplitTemplate.FULL_BODY_AB)
+        assertEquals(listOf("goal", "diet", "region"), starter.missing)
+        assertEquals(listOf("goal", "experience", "diet", "region", "split"), PersonaDraft().missing)
+        assertNull(starter.complete())
     }
 
     @Test
     fun `a complete draft becomes a persona with the diet's ramp default and the split's days`() {
-        val draft = Presets.LEAN_BULK.draft.copy(goal = recomp, diet = Diet.NON_VEGETARIAN, region = FoodRegion.INTERNATIONAL)
+        val draft = PersonaDraft(experience = Experience.INTERMEDIATE, split = SplitTemplate.UPPER_LOWER).copy(goal = recomp, diet = Diet.NON_VEGETARIAN, region = FoodRegion.INTERNATIONAL)
         val persona = draft.complete()!!
         assertFalse(persona.proteinRamp)
         assertEquals(4, persona.strengthDaysPerWeek)

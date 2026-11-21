@@ -1047,6 +1047,13 @@ These rules hold for every block:
   - It's body data: kept with the profile, never sent to AI and never shared in a persona (PS-06).
   - ◆ **Decided:** shown to everyone.
 - **Presets as data files (PS-05).** The five presets move to `assets/presets/*.json`. Nothing changes on screen.
+- ◆ **Settled in M19 (2026-11-21):**
+  - Only a change of goal is a fresh start. Editing the pace, goal weight or finish line keeps the goal's start, so the 12 weeks and "since you started" carry on.
+  - The 2 weeks at maintenance after a reached goal end with a choice: the targets stay at maintenance until you pick a new goal or *Keep going*.
+  - During a break your own calorie target waits and comes back with the goal. The check-in stays quiet for its weeks and until the flag's window is back on the goal (2 weeks for fat loss and a lean bulk, 4 for a recomp and Maintain).
+  - *Describe your goal* appears only while AI is ready. With the pregnancy switch on, a calorie target of your own below maintenance isn't used.
+  - With the pregnancy switch on, the weekly check-in doesn't judge the scale: pregnancy weight gain isn't stored energy, so there's no flag and no proposal, and the check-in's maintenance estimate never lowers a target below the formula's. The same holds for the first weeks after it's switched off, until the check-in's 4-week window no longer includes the pregnancy. Suggestions never name fat loss or a recomp.
+  - The goal resumes after a break from the first time the app opens on or after the end date; days in between keep maintenance.
 
 ### 12.16 M20: lb and in (PR-05)
 

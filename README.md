@@ -27,6 +27,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M13: Health Connect in: daily steps against a goal, last night's sleep at the morning weigh-in, walks, runs and classes recorded by other apps counted toward your weekly plan, and InBody measurements as draft scans. Each is off until you turn it on, read-only, and stays on the phone.
 > - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
 > - M14: recipes: *New food* → *Recipe* builds a dish from the foods in it, with a cooked weight or a number of servings. It becomes one of your foods, with values per 100 g and per serving and its strictest ingredient's diet tag.
+> - M19: goals: *What to expect* when you change goal, a Goal reached card, a suggested maintenance break after 12 weeks in a deficit that resumes on its own, *Describe your goal* read by AI (only the text you type is sent), a pregnancy and breastfeeding switch that turns off deficits, and presets as data files a fork can add to.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >

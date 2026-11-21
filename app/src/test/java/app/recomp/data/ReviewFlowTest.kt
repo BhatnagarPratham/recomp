@@ -34,6 +34,7 @@ import app.recomp.domain.review.WeeklyReview
 import app.recomp.domain.trend.TrendCalculator
 import app.recomp.domain.trend.WeighIn
 import app.recomp.domain.trend.WeightPace
+import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.checkin.ReviewText
 import java.io.File
@@ -302,13 +303,24 @@ class ReviewFlowTest {
         assertEquals(WeightPace.of(cut(date(28)).policy), first.body.pace)
         assertNull(ReviewText.earlierPlan(first.plan))
 
-        // The same goal set again on day 35: the week before it can't know its pace then.
+        // The same goal at a gentler pace on day 35 is an edit, not a new plan (M19, PS-04): the cut still started on
+        // day 28, so its first week is still the current plan, now judged at the gentler pace.
         app.personas.save(plan = GoalPlan.of(Goal.FAT_LOSS, Pace.GENTLE, 76.0, FinishLine.GoalWeight, date(35)), now = at(35))
+        assertEquals(date(28), app.prefs.currentPersona().goal!!.startedOn)
+        val edited = reviews.week(date(28), today = date(36))
+        assertEquals(WeekPlan.Current, edited.plan)
+        assertEquals(WeightPace.of(GoalPolicy.defaultFor(Goal.FAT_LOSS, Pace.GENTLE)), edited.body.pace)
+
+        // A change of goal is a new plan: the week before it can't know the new pace.
+        app.personas.save(plan = GoalPlan.of(Goal.RECOMP, Pace.STANDARD, 76.0, FinishLine.GoalWeight, date(35)), now = at(35))
         val reset = reviews.week(date(28), today = date(36))
-        assertEquals(WeekPlan.EarlierPlan(since = date(35)), reset.plan)
+        assertEquals(WeekPlan.EarlierGoal(Goal.FAT_LOSS, since = date(35)), reset.plan)
         assertNull(reset.body.pace)
         assertNull(reset.outlook)
-        assertTrue(ReviewText.earlierPlan(reset.plan)!!.contains("isn't kept"))
+        // Week 1 was a recomp too, but an earlier one: its pace then isn't kept.
+        val earlier = reviews.week(date(7), today = date(36))
+        assertEquals(WeekPlan.EarlierPlan(since = date(35)), earlier.plan)
+        assertTrue(ReviewText.earlierPlan(earlier.plan)!!.contains("isn't kept"))
 
         // Without a target version for the week, its check-in's flag says which goal it was on.
         app.db.checkinDao().upsert(WeeklyCheckinEntity(date(-7), computedAt = 1, windowDays = 21, loggedDays = 0, weighIns = 0, tdeePrev = 2400, tdeeNew = 2400, flag = CheckinFlag.GAIN_SLOW))
