@@ -142,26 +142,39 @@ class HealthRepository @Inject constructor(
         device.bindToDatabase(databaseStamp())
         val now = clock.millis()
         val errors = mutableMapOf<HealthFeature, String>()
-        active.forEach { feature ->
+        // Without the background permission Health Connect only answers while the app is in front. A sync begun at
+        // launch that's still going when you leave stops there, and the next one picks up, rather than reading short.
+        val anyTime = source.backgroundRead() == BackgroundRead.GRANTED
+        val read = mutableSetOf<HealthFeature>()
+        for (feature in active) {
+            if (!anyTime && !source.foreground()) break
             try {
                 when (feature) {
                     HealthFeature.STEPS -> syncSteps(now)
+                    // Any change re-reads all 30 nights on purpose: a night is merged from every app's sessions, so a
+                    // partial read would merge only some of them (N6).
                     HealthFeature.SLEEP -> withChanges(feature, full = { rereadSleep(now) }) { rereadSleep(now) }
                     HealthFeature.WORKOUTS -> {
                         withChanges(feature, full = { rereadWorkouts(now) }) { applyWorkoutChanges(it, now) }
-                        dropOverlapped(now)
+                        reconcileImports(now)
                     }
                     HealthFeature.INBODY -> withChanges(feature, full = { rereadInBody(now) }) { rereadInBody(now) }
                 }
+                read += feature
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 errors[feature] = e.message ?: e.javaClass.simpleName
             }
         }
-        device.setSynced(now, errors.entries.joinToString("; ") { "${it.key.name.lowercase()}: ${it.value}" }.ifEmpty { null })
-        SyncReport(active - errors.keys, errors)
+        if (read.isNotEmpty() || errors.isNotEmpty()) {
+            device.setSynced(now, errors.entries.joinToString("; ") { "${it.key.name.lowercase()}: ${it.value}" }.ifEmpty { null })
+        }
+        SyncReport(read, errors)
     }
+
+    /** A sync that failed before reading anything, e.g. from the daily job: Settings shows it (N5). */
+    suspend fun recordFailure(e: Exception) = device.setSyncError(e.message ?: e.javaClass.simpleName)
 
     private fun databaseStamp(): Int = db.openHelper.readableDatabase.query("PRAGMA application_id").use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
@@ -186,7 +199,7 @@ class HealthRepository @Inject constructor(
     private suspend fun syncSteps(now: Long) {
         val today = calendarDay(now)
         val from = today.minusDays(WINDOW_DAYS - 1)
-        val counts = source.stepsByDay(from, today, zone)
+        val counts = source.stepsByDay(from, today)
         db.withTransaction {
             val existing = dao.activity(from, today).associateBy { it.logDate }
             generateSequence(from) { it.plusDays(1) }.takeWhile { !it.isAfter(today) }.forEach { date ->
@@ -206,7 +219,9 @@ class HealthRepository @Inject constructor(
     private suspend fun rereadSleep(now: Long) {
         val today = days.of(now)
         val from = today.minusDays(WINDOW_DAYS - 1)
-        val sessions = source.sleepSessions(Span(SleepNight.window(from, zone).start, now))
+        // Health Connect allows 30 days before the first grant, so nothing older is asked for (S4).
+        val readFrom = now - WINDOW_DAYS * DAY_MS
+        val sessions = source.sleepSessions(Span(SleepNight.window(from, zone).start.coerceIn(readFrom, now), now), readFrom)
         db.withTransaction {
             generateSequence(from) { it.plusDays(1) }.takeWhile { !it.isAfter(today) }.forEach { date ->
                 val window = SleepNight.window(date, zone, until = now)
@@ -226,45 +241,73 @@ class HealthRepository @Inject constructor(
         return prefs.currentPersona().extras.mapNotNull { extra -> routines[extra.routineId]?.let { ExtraSlot(it.id, it.kind, extra.toPlan().days) } }
     }
 
+    /**
+     * The last 30 days of other apps' sessions, the longest first so that of two apps' copies of one session the
+     * longer is kept (S2). An import Health Connect no longer has is dropped only when its app returned other sessions
+     * in this read: right after a restore, Health Connect's own data may not be back yet, and the imports stay (N2).
+     */
     private suspend fun rereadWorkouts(now: Long) {
         val since = now - WINDOW_DAYS * DAY_MS
-        val workouts = source.workouts(Span(since, now))
+        val workouts = source.workouts(Span(since, now)).sortedWith(compareByDescending<ExternalWorkout> { it.end - it.start }.thenBy { it.start })
         val slots = extraSlots()
         db.withTransaction {
             workouts.forEach { applyWorkout(it, slots, now) }
-            // Anything imported in the window that Health Connect no longer has was deleted there.
             val ids = workouts.map { it.id }.toSet()
-            dao.importedSince(since).filter { it.hcRecordId !in ids }.forEach { dao.deleteImportedRow(it.id) }
-        }
-    }
-
-    private suspend fun applyWorkoutChanges(changes: HealthChanges, now: Long) {
-        val slots = extraSlots()
-        db.withTransaction {
-            changes.deletedIds.forEach { dao.deleteImported(it) }
-            changes.workouts.forEach { applyWorkout(it, slots, now) }
+            val answered = workouts.map { origin(it) }.toSet()
+            dao.importedSince(since).filter { it.hcRecordId !in ids && it.notes in answered }.forEach { dao.deleteImportedRow(it.id) }
         }
     }
 
     /**
-     * Saves one session from another app as a completed extra session, or follows an edit to it (AR-04). Strength
-     * types and anything overlapping a workout you logged here are never kept, so nothing counts twice.
+     * What changed. When a deleted session was one Recomp kept, the window is read again, so another app's copy that
+     * was skipped as a duplicate of it comes back (S2).
+     */
+    private suspend fun applyWorkoutChanges(changes: HealthChanges, now: Long) {
+        val slots = extraSlots()
+        var keptOneDeleted = false
+        db.withTransaction {
+            changes.deletedIds.forEach { id ->
+                if (dao.imported(id) != null) keptOneDeleted = true
+                dao.deleteImported(id)
+            }
+            changes.workouts.sortedByDescending { it.end - it.start }.forEach { applyWorkout(it, slots, now) }
+        }
+        if (keptOneDeleted) rereadWorkouts(now)
+    }
+
+    private fun origin(workout: ExternalWorkout) = "from ${source.appName(workout.origin)}"
+
+    /**
+     * Saves one session from another app as a completed extra session, or follows an edit to it (AR-04). Never kept:
+     * strength and vague types; anything overlapping a strength workout you logged here; and the shorter of two
+     * imports of one kind that share more than half of the shorter one's time, which are two apps' copies of one
+     * session (S2).
      */
     private suspend fun applyWorkout(workout: ExternalWorkout, slots: List<ExtraSlot>, now: Long) {
-        val existing = dao.imported(workout.id) ?: dao.importedAt(workout.start, workout.end)
+        var existing = dao.imported(workout.id) ?: dao.importedAt(workout.start, workout.end)
         val kind = ExerciseTypes.kind(workout.type)
-        if (kind == null || workout.end <= workout.start || dao.ownOverlapping(workout.start, workout.end, now).isNotEmpty()) {
+        if (kind == null || workout.end <= workout.start || dao.ownStrengthOverlapping(workout.start, workout.end, now).isNotEmpty()) {
+            existing?.let { dao.deleteImportedRow(it.id) }
+            return
+        }
+        val copies = dao.importedOverlapping(kind, workout.start, workout.end, existing?.id ?: 0).filter { other ->
+            ImportedWorkouts.sameSession(Span(workout.start, workout.end), Span(other.startedAt, other.endedAt ?: other.startedAt))
+        }
+        if (copies.any { (it.endedAt ?: it.startedAt) - it.startedAt >= workout.end - workout.start }) {
             existing?.let { dao.deleteImportedRow(it.id) }
             return
         }
         val logDate = days.of(workout.start)
+        // This one is the longer copy: it replaces the others, keeping the extra the first one counted toward.
+        val inherited = copies.firstOrNull { it.routineId != null && it.logDate == logDate }?.routineId
+        copies.forEach { dao.deleteImportedRow(it.id) }
         val style = ExerciseTypes.label(workout.type)
         val minutes = ((workout.end - workout.start + 30_000) / 60_000).toInt().coerceAtLeast(1)
-        val notes = "from ${source.appName(workout.origin)}"
+        val notes = origin(workout)
         if (existing == null) {
             workoutDao.insertExtraSession(
                 WorkoutSessionEntity(
-                    routineId = ImportedWorkouts.routineFor(kind, logDate.dayOfWeek, slots),
+                    routineId = inherited ?: ImportedWorkouts.routineFor(kind, logDate.dayOfWeek, slots),
                     kind = kind,
                     status = SessionStatus.COMPLETED,
                     startedAt = workout.start,
@@ -285,10 +328,23 @@ class HealthRepository @Inject constructor(
         }
     }
 
-    /** A workout you logged here after the import (say the watch synced first) wins: the overlapping import goes. */
-    private suspend fun dropOverlapped(now: Long) = db.withTransaction {
-        dao.importedSince(now - WINDOW_DAYS * DAY_MS).forEach { row ->
-            if (dao.ownOverlapping(row.startedAt, row.endedAt ?: row.startedAt, now).isNotEmpty()) dao.deleteImportedRow(row.id)
+    /**
+     * After each sync, so a workout you logged after the import wins (TRD §6.3):
+     * - an import overlapping a strength workout you logged here goes;
+     * - an import of a kind you also logged yourself that day stays visible but counts toward nothing (S1). An
+     *   extra's logged times are *Save* minus its length, so the day and kind are what match, not the clock;
+     * - one that counted toward nothing only because of that counts again once your session is gone.
+     */
+    private suspend fun reconcileImports(now: Long) {
+        val slots = extraSlots()
+        db.withTransaction {
+            dao.importedSince(now - WINDOW_DAYS * DAY_MS).forEach { row ->
+                when {
+                    dao.ownStrengthOverlapping(row.startedAt, row.endedAt ?: row.startedAt, now).isNotEmpty() -> dao.deleteImportedRow(row.id)
+                    dao.ownExtraOn(row.logDate, row.kind) -> if (row.routineId != null) dao.setRoutine(row.id, null)
+                    row.routineId == null -> ImportedWorkouts.routineFor(row.kind, row.logDate.dayOfWeek, slots)?.let { dao.setRoutine(row.id, it) }
+                }
+            }
         }
     }
 

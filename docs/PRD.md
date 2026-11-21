@@ -905,8 +905,10 @@ These rules hold for every block:
   - Strength workouts from other apps aren't imported, and nor is anything that overlaps a workout you logged in Recomp, so nothing counts twice.
   - Their calories are never added to the food budget: the activity level and the maintenance estimate already cover activity.
   - Nor are sessions that say nothing about what you did ("other workout", "exercise class").
-  - Which extra a session counts toward is settled when it's imported; changing your extras later doesn't move it.
-  - If you log a session in Recomp over the time of one already imported, yours stays and the import goes.
+  - Which extra a session counts toward is settled when it's imported; changing your extras later doesn't move one that already counts.
+  - If you log a workout in Recomp over the time of one already imported, yours stays and the import goes.
+  - If you log a class by hand on a day another app recorded the same kind, yours counts and the import shows but counts toward nothing, whatever times either has.
+  - When two apps record the same walk, it's imported once.
   - *Log class* is never prefilled from an import.
 - **InBody import (IB-07).** Each new InBody measurement in Health Connect (weight, body fat % and BMR) becomes a draft.
   - Body shows "New InBody scan, Mon 10:05: add muscle and visceral fat". It opens the scan form filled in, with the protocol questions as usual.

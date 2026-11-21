@@ -7,6 +7,7 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
+import app.recomp.domain.model.SessionKind
 import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 
@@ -122,12 +123,30 @@ interface HealthDao {
     @Query("UPDATE yoga_detail SET style = :style, duration_min = :durationMin WHERE session_id = :sessionId")
     suspend fun setDetail(sessionId: Long, style: String, durationMin: Int)
 
-    /** Sessions you logged in Recomp that overlap [start]..[end]; one still in progress runs until [now]. */
+    /**
+     * Strength workouts you logged in Recomp that overlap [start]..[end]; one still in progress runs until [now]. Only
+     * strength: its times are when you trained. An extra's are made up from *Save* minus its length (YG-01), so
+     * extras are matched by day and kind instead ([ownExtraOn]).
+     */
     @Query(
-        "SELECT started_at, ended_at FROM workout_session WHERE hc_record_id IS NULL AND status != 'DISCARDED' " +
+        "SELECT started_at, ended_at FROM workout_session WHERE hc_record_id IS NULL AND kind = 'STRENGTH' AND status != 'DISCARDED' " +
             "AND started_at < :end AND COALESCE(ended_at, :now) > :start",
     )
-    suspend fun ownOverlapping(start: Long, end: Long, now: Long): List<SessionTimes>
+    suspend fun ownStrengthOverlapping(start: Long, end: Long, now: Long): List<SessionTimes>
+
+    /** Whether you logged an extra session of [kind] yourself on [date]: an import of that kind then counts toward nothing. */
+    @Query("SELECT EXISTS(SELECT 1 FROM workout_session WHERE hc_record_id IS NULL AND status = 'COMPLETED' AND log_date = :date AND kind = :kind)")
+    suspend fun ownExtraOn(date: LocalDate, kind: SessionKind): Boolean
+
+    /** Other imports of [kind] overlapping [start]..[end], [exceptId] aside: possibly another app's copy of the same session. */
+    @Query(
+        "SELECT * FROM workout_session WHERE hc_record_id IS NOT NULL AND kind = :kind AND id != :exceptId " +
+            "AND started_at < :end AND COALESCE(ended_at, started_at) > :start",
+    )
+    suspend fun importedOverlapping(kind: SessionKind, start: Long, end: Long, exceptId: Long): List<WorkoutSessionEntity>
+
+    @Query("UPDATE workout_session SET routine_id = :routineId WHERE id = :id")
+    suspend fun setRoutine(id: Long, routineId: Long?)
 
     @Query(
         "SELECT ws.id, ws.log_date, ws.started_at, d.style, d.duration_min, ws.notes FROM workout_session ws " +

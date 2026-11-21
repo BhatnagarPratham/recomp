@@ -32,7 +32,8 @@ class HealthSyncWorker @AssistedInject constructor(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        // Tomorrow's run, or the next launch, tries again; a retry storm buys nothing.
+        // Settings shows it; tomorrow's run, or the next launch, tries again, since a retry storm buys nothing.
+        runCatching { health.recordFailure(e) }
         Result.success()
     }
 

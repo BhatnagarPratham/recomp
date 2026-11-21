@@ -196,6 +196,9 @@ class FakeHealthSource : HealthSource {
     val reads = mutableMapOf<HealthFeature, Int>()
     var stepRequests = mutableListOf<Pair<LocalDate, LocalDate>>()
     var failing: HealthFeature? = null
+    var foreground = true
+    /** Where each sleep read started, to check it never reaches past Health Connect's 30 days. */
+    val sleepReadFrom = mutableListOf<Long>()
 
     private var tokens = 0
     private val pending = mutableMapOf<HealthFeature, MutableList<Pair<ExternalWorkout?, String?>>>()
@@ -230,15 +233,18 @@ class FakeHealthSource : HealthSource {
     override suspend fun granted() = granted
     override suspend fun backgroundRead() = background
 
-    override suspend fun stepsByDay(from: LocalDate, to: LocalDate, zone: ZoneId): Map<LocalDate, Long> {
+    override fun foreground() = foreground
+
+    override suspend fun stepsByDay(from: LocalDate, to: LocalDate): Map<LocalDate, Long> {
         read(HealthFeature.STEPS)
         stepRequests += from to to
         return steps.filterKeys { !it.isBefore(from) && !it.isAfter(to) }
     }
 
-    override suspend fun sleepSessions(span: Span): List<SleepSession> {
+    override suspend fun sleepSessions(endingIn: Span, readFrom: Long): List<SleepSession> {
         read(HealthFeature.SLEEP)
-        return sleep.filter { it.span.end > span.start && it.span.end <= span.end }
+        sleepReadFrom += maxOf(endingIn.start - 24 * 3_600_000L, readFrom)
+        return sleep.filter { it.span.end > endingIn.start && it.span.end <= endingIn.end }
     }
 
     override suspend fun workouts(span: Span): List<ExternalWorkout> {
@@ -268,11 +274,16 @@ class FakeHealthSource : HealthSource {
         )
     }
 
-    override fun appName(packageName: String): String = if (packageName == FIT) "Google Fit" else packageName
+    override fun appName(packageName: String): String = when (packageName) {
+        FIT -> "Google Fit"
+        SAMSUNG -> "Samsung Health"
+        else -> packageName
+    }
 
     companion object {
         const val OWN_PACKAGE = "app.recomp"
         const val FIT = "com.google.android.apps.fitness"
+        const val SAMSUNG = "com.sec.android.app.shealth"
     }
 }
 

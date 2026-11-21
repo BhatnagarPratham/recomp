@@ -1,5 +1,6 @@
 package app.recomp.healthconnect
 
+import android.app.ActivityManager
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
@@ -32,7 +33,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.Period
-import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.reflect.KClass
@@ -67,7 +67,11 @@ class HealthConnectSource @Inject constructor(@ApplicationContext private val co
      * your priority list and includes the phone's own count (Android 14 with SDK extension 20 or later), whose data
      * origin is never named here. Days with no data are simply absent.
      */
-    override suspend fun stepsByDay(from: LocalDate, to: LocalDate, zone: ZoneId): Map<LocalDate, Long> =
+    override fun foreground(): Boolean =
+        ActivityManager.RunningAppProcessInfo().also(ActivityManager::getMyMemoryState).importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+
+    /** `LocalDateTime` bounds are read in the phone's time zone, which is what makes each bucket a calendar day. */
+    override suspend fun stepsByDay(from: LocalDate, to: LocalDate): Map<LocalDate, Long> =
         client.aggregateGroupByPeriod(
             AggregateGroupByPeriodRequest(
                 metrics = setOf(StepsRecord.COUNT_TOTAL),
@@ -76,10 +80,10 @@ class HealthConnectSource @Inject constructor(@ApplicationContext private val co
             ),
         ).mapNotNull { bucket -> bucket.result[StepsRecord.COUNT_TOTAL]?.let { bucket.startTime.toLocalDate() to it } }.toMap()
 
-    override suspend fun sleepSessions(span: Span): List<SleepSession> =
-        // A night can start well before the span does; what counts is where it ends.
-        readAll(SleepSessionRecord::class, Span(span.start - LONGEST_SLEEP_MS, span.end))
-            .filter { notOurs(it) && it.endTime.toEpochMilli() in (span.start + 1)..span.end }
+    override suspend fun sleepSessions(endingIn: Span, readFrom: Long): List<SleepSession> =
+        // A night can start well before the span does; what counts is where it ends. Never before readFrom (S4).
+        readAll(SleepSessionRecord::class, Span((endingIn.start - LONGEST_SLEEP_MS).coerceIn(readFrom, endingIn.end), endingIn.end))
+            .filter { notOurs(it) && it.endTime.toEpochMilli() in (endingIn.start + 1)..endingIn.end }
             .map { record ->
                 SleepSession(
                     Span(record.startTime.toEpochMilli(), record.endTime.toEpochMilli()),

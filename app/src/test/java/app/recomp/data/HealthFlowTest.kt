@@ -18,6 +18,7 @@ import app.recomp.domain.health.BodyReading
 import app.recomp.domain.health.SleepSession
 import app.recomp.domain.health.Span
 import app.recomp.domain.model.SessionKind
+import app.recomp.domain.model.SetType
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.Pace
 import app.recomp.domain.nutrition.Sex
@@ -297,26 +298,99 @@ class HealthFlowTest {
         assertNull(WeeklyPlan.restDay(monday, app.workouts.observeWeek(monday).first(), 3))
     }
 
+    /** A Push workout you logged here, from [startHour] for an hour, with one set ticked. */
+    private suspend fun lift(date: LocalDate, startHour: Int) {
+        val routine = app.training.observeNextRoutine().first()!!
+        val session = app.workouts.startRoutine(routine.id, at(date, startHour))
+        val set = app.db.workoutDao().sessionExercises(session).first().sets.first { it.setType == SetType.WORKING }
+        app.workouts.completeSet(set.id, 40_000, 10, 2, at(date, startHour, 20))
+        app.workouts.finish(session, at(date, startHour + 1))
+    }
+
     @Test
-    fun `a session overlapping a workout you logged in Recomp is skipped, whichever came first`() = runBlocking {
+    fun `a session overlapping a strength workout you logged here is never kept, whichever came first`() = runBlocking {
         onboard()
-        val yoga = extra("Yoga class")
-        // Logged here first: a class from 07:00 to 08:00.
-        app.workouts.logExtra(yoga, ExtraEntry("Hatha", 60, 3, null), now = at(monday, 8))
-        app.healthSource.put(workout("watch-yoga", ExerciseSessionRecord.EXERCISE_TYPE_YOGA, monday, 7, 55))
+        lift(monday, 7)
+        app.healthSource.put(workout("watch-walk", ExerciseSessionRecord.EXERCISE_TYPE_WALKING, monday, 7, 55))
         app.healthSource.put(workout("walk-1", ExerciseSessionRecord.EXERCISE_TYPE_WALKING, monday, 8, 20))
         app.health.sync()
         assertEquals(listOf("walk-1"), imported().map { it.hcRecordId })
 
-        // Imported first, then logged here over the same time: the import goes at the next sync.
+        // Imported first, then a workout logged here over the same time: the import goes at the next sync.
         now(monday, 20)
-        app.healthSource.put(workout("evening", ExerciseSessionRecord.EXERCISE_TYPE_YOGA, monday, 18, 60))
+        app.healthSource.put(workout("evening", ExerciseSessionRecord.EXERCISE_TYPE_RUNNING, monday, 18, 60))
         app.health.sync()
         assertEquals(setOf("walk-1", "evening"), imported().map { it.hcRecordId }.toSet())
-        app.workouts.logExtra(yoga, ExtraEntry("Yin", 45, null, null), now = at(monday, 19))
+        lift(monday, 18)
         app.health.sync()
         assertEquals(listOf("walk-1"), imported().map { it.hcRecordId })
-        assertEquals(2, progress().extras.single { it.routineId == yoga.id }.done)
+    }
+
+    @Test
+    fun `a class the watch recorded and the same class logged by hand later count once`() = runBlocking {
+        onboard()
+        val yoga = extra("Yoga class")
+        val saturday = monday.minusDays(2)
+        // The watch records the class at 18:00; you tap Log class at 21:00, which stores 20:00 to 21:00.
+        app.healthSource.put(workout("watch-yoga", ExerciseSessionRecord.EXERCISE_TYPE_YOGA, saturday, 18, 60))
+        app.health.sync()
+        app.workouts.logExtra(yoga, ExtraEntry("Hatha", 60, 3, null), now = at(saturday, 21))
+        app.health.sync()
+
+        val week = WeeklyPlan.progress(saturday, app.workouts.observeWeek(saturday).first(), 3, app.prefs.currentPersona().extras.map { it.toPlan() })
+        assertEquals(1, week.extras.single { it.routineId == yoga.id }.done)
+        // The import is still there, read-only, but counts toward nothing.
+        assertNull(imported().single().routineId)
+
+        // Logged by hand first, then the watch's copy arrives: the same.
+        app.healthSource.put(workout("watch-yoga-2", ExerciseSessionRecord.EXERCISE_TYPE_YOGA, monday, 7, 60))
+        app.workouts.logExtra(yoga, ExtraEntry("Hatha", 60, null, null), now = at(monday, 9))
+        app.health.sync()
+        assertEquals(1, progress().extras.single { it.routineId == yoga.id }.done)
+    }
+
+    @Test
+    fun `a class logged by hand doesn't remove another kind's import from around the same time`() = runBlocking {
+        onboard()
+        // A walk 19:10 to 19:40; a 60-minute class logged at 20:00 is stored as 19:00 to 20:00.
+        app.healthSource.put(workout("walk-1", ExerciseSessionRecord.EXERCISE_TYPE_WALKING, monday, 19, 30).let { it.copy(start = it.start + 10 * 60_000L, end = it.end + 10 * 60_000L) })
+        now(monday, 21)
+        app.workouts.logExtra(extra("Yoga class"), ExtraEntry("Hatha", 60, null, null), now = at(monday, 20))
+        app.health.sync()
+        val walk = imported().single()
+        assertEquals(extra("Walks").id, walk.routineId)
+        assertEquals(1, progress().extras.single { it.routineId == extra("Walks").id }.done)
+    }
+
+    @Test
+    fun `two apps' copies of one walk count once, and the other comes back if the kept one is deleted`() = runBlocking {
+        onboard()
+        val walks = extra("Walks")
+        val fit = workout("fit-walk", ExerciseSessionRecord.EXERCISE_TYPE_WALKING, monday, 7, 35)
+        val samsung = ExternalWorkout("samsung-walk", FakeHealthSource.SAMSUNG, fit.start + 40_000L, fit.end + 90_000L, ExerciseSessionRecord.EXERCISE_TYPE_WALKING)
+        app.healthSource.put(fit)
+        app.health.sync()
+        app.healthSource.put(samsung)
+        app.health.sync()
+
+        val kept = imported().single()
+        assertEquals("the longer copy is kept", "samsung-walk", kept.hcRecordId)
+        assertEquals(walks.id, kept.routineId)
+        assertEquals(1, progress().extras.single { it.routineId == walks.id }.done)
+        // A full re-read keeps it at one.
+        app.healthSource.expireTokens()
+        app.health.sync()
+        assertEquals(listOf("samsung-walk"), imported().map { it.hcRecordId })
+
+        app.healthSource.delete("samsung-walk")
+        app.health.sync()
+        assertEquals(listOf("fit-walk"), imported().map { it.hcRecordId })
+        assertEquals(1, progress().extras.single { it.routineId == walks.id }.done)
+
+        // Two separate walks the same morning are two.
+        app.healthSource.put(workout("fit-walk-2", ExerciseSessionRecord.EXERCISE_TYPE_WALKING, monday, 8, 20))
+        app.health.sync()
+        assertEquals(2, progress().extras.single { it.routineId == walks.id }.done)
     }
 
     @Test
@@ -606,5 +680,64 @@ class HealthFlowTest {
         assertEquals(1, extras["Walks"])
         assertEquals(1, extras["Yoga class"])
         assertEquals(0, review.training.strengthDays)
+    }
+
+    // Review fixes (PR #19)
+
+    @Test
+    fun `turning on Health Connect sleep turns on track sleep`() = runBlocking {
+        app.health.setFeature(HealthFeature.SLEEP, false)
+        app.health.setTrackSleep(false)
+        app.health.setFeature(HealthFeature.SLEEP, true)
+        assertTrue(app.health.trackSleep.first())
+        app.healthSource.sleep += night(monday, 23, 7)
+        app.health.sync()
+        assertEquals(8.0, app.health.observeSleep().first()!!.hours)
+    }
+
+    @Test
+    fun `the first sync never reads further back than Health Connect's 30 days`() = runBlocking {
+        app.healthSource.sleep += night(monday.minusDays(29), 23, 7)
+        app.health.sync()
+        val limit = app.clock.millis() - 30 * 86_400_000L
+        assertTrue(app.healthSource.sleepReadFrom.isNotEmpty())
+        app.healthSource.sleepReadFrom.forEach { assertTrue("read from $it, limit $limit", it >= limit) }
+        assertEquals(monday.minusDays(29) to monday, app.healthSource.stepRequests.single())
+    }
+
+    @Test
+    fun `a sync stops once the app leaves the foreground without background reads, and isn't an error`() = runBlocking {
+        fillEverything()
+        app.healthSource.background = BackgroundRead.NOT_GRANTED
+        app.healthSource.foreground = false
+        val report = app.health.sync()!!
+        assertEquals(emptySet<HealthFeature>(), report.read)
+        assertEquals(emptyMap<HealthFeature, Int>(), app.healthSource.reads)
+        assertNull(app.device.healthSync.first().lastSyncAt)
+
+        // With background reads allowed, the daily job reads while the app is closed.
+        app.healthSource.background = BackgroundRead.GRANTED
+        assertEquals(HealthFeature.entries.toSet(), app.health.sync()!!.read)
+    }
+
+    @Test
+    fun `after a restore, imports stay until Health Connect has that app's sessions back`() = runBlocking {
+        fillEverything()
+        app.health.sync()
+        // An import of a backup: the tokens go, and this phone's Health Connect hasn't restored anything yet.
+        app.db.openHelper.writableDatabase.execSQL("PRAGMA application_id = 515151")
+        app.healthSource.workouts.clear()
+        app.health.sync()
+        assertEquals(setOf("walk-1", "yoga-1"), imported().map { it.hcRecordId }.toSet())
+    }
+
+    @Test
+    fun `a sync that fails before reading shows its error and keeps the last good time`() = runBlocking {
+        app.health.sync()
+        val good = app.device.healthSync.first().lastSyncAt
+        app.health.recordFailure(IllegalStateException("Health Connect is updating"))
+        val state = app.device.healthSync.first()
+        assertEquals(good, state.lastSyncAt)
+        assertEquals("Health Connect is updating", state.error)
     }
 }

@@ -4,7 +4,6 @@ import app.recomp.domain.health.BodyReading
 import app.recomp.domain.health.SleepSession
 import app.recomp.domain.health.Span
 import java.time.LocalDate
-import java.time.ZoneId
 
 /** What Recomp can read from Health Connect (PRD §12.9). Each is off until you turn it on, and asks only for its own permission. */
 enum class HealthFeature { STEPS, SLEEP, WORKOUTS, INBODY }
@@ -48,11 +47,20 @@ interface HealthSource {
 
     suspend fun backgroundRead(): BackgroundRead
 
-    /** The steps of each calendar day in [from]..[to], de-duplicated across apps by Health Connect. Days with no data are absent. */
-    suspend fun stepsByDay(from: LocalDate, to: LocalDate, zone: ZoneId): Map<LocalDate, Long>
+    /** Whether the app is in the foreground now: without the background permission, Health Connect reads only work then. */
+    fun foreground(): Boolean
 
-    /** Sleep sessions that end inside [span]. */
-    suspend fun sleepSessions(span: Span): List<SleepSession>
+    /**
+     * The steps of each calendar day in [from]..[to] in the phone's time zone, de-duplicated across apps by Health
+     * Connect. Days with no data are absent.
+     */
+    suspend fun stepsByDay(from: LocalDate, to: LocalDate): Map<LocalDate, Long>
+
+    /**
+     * Sleep sessions that end inside [endingIn]. Nothing before [readFrom] is asked for, so a first sync stays within
+     * Health Connect's 30 days before the first grant: a night that began earlier is missed for that oldest morning.
+     */
+    suspend fun sleepSessions(endingIn: Span, readFrom: Long): List<SleepSession>
 
     /** Exercise sessions that start inside [span], from every app but this one. */
     suspend fun workouts(span: Span): List<ExternalWorkout>

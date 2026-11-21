@@ -20,6 +20,15 @@ object ImportedWorkouts {
 
     /** Whether [session] overlaps a workout you logged in Recomp, so importing it would count the time twice. */
     fun overlapsOwn(session: Span, own: List<Span>): Boolean = own.any { it.overlaps(session) }
+
+    /**
+     * Whether two sessions of one kind from different apps are copies of the same one: they share more than half of
+     * the shorter one's time. Two walks an hour apart, or a short one inside a long hike only in part, stay two.
+     */
+    fun sameSession(a: Span, b: Span): Boolean {
+        val shared = minOf(a.end, b.end) - maxOf(a.start, b.start)
+        return shared > 0 && shared * 2 > minOf(a.length, b.length)
+    }
 }
 
 /** Daily steps (AR-01), keyed by calendar day so they match Google Fit. */

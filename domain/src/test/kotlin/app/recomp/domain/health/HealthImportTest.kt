@@ -149,6 +149,15 @@ class HealthImportTest {
     // Steps
 
     @Test
+    fun `two apps' copies of one session share more than half of the shorter one`() {
+        val walk = Span(at(16, 7), at(16, 7, 35))
+        assertTrue(ImportedWorkouts.sameSession(walk, Span(at(16, 7) + 40_000, at(16, 7, 36))))
+        assertTrue("a short copy inside a long one", ImportedWorkouts.sameSession(Span(at(16, 7), at(16, 9)), Span(at(16, 7, 30), at(16, 8))))
+        assertFalse("touching only", ImportedWorkouts.sameSession(walk, Span(at(16, 7, 35), at(16, 8))))
+        assertFalse("less than half", ImportedWorkouts.sameSession(walk, Span(at(16, 7, 25), at(16, 8, 25))))
+    }
+
+    @Test
     fun `the 7-day average leaves today out and skips days with no count`() {
         val today = LocalDate.of(2026, 11, 16)
         val byDay = mapOf(today to 900, today.minusDays(1) to 8_000, today.minusDays(3) to 6_000, today.minusDays(8) to 20_000)

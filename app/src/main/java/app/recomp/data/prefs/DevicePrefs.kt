@@ -59,6 +59,9 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
         if (error == null) prefs.remove(Keys.LAST_SYNC_ERROR) else prefs[Keys.LAST_SYNC_ERROR] = error
     }
 
+    /** A sync that failed before reading anything: the error shows, and the last good sync's time stays. */
+    suspend fun setSyncError(error: String) = store.edit { it[Keys.LAST_SYNC_ERROR] = error }
+
     /**
      * The tokens belong to the database they were issued against. After an import replaced it ([stamp] differs),
      * they're dropped, so the next sync reads the last 30 days again. Returns true when it dropped them.
