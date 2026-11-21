@@ -463,6 +463,7 @@ internal object SettingsKeys {
     /** AR-01: the daily step goal, 2,000 to 20,000; absent is 8,000. Steps are on while the STEPS feature is. */
     val STEPS_GOAL = intPreferencesKey("steps_goal")
 
+
     /** AR-02: Settings → Body data → Track sleep. Absent is off. */
     val TRACK_SLEEP = booleanPreferencesKey("track_sleep")
 
@@ -829,6 +830,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     val trackSleep: Flow<Boolean> = store.data.map { it[SettingsKeys.TRACK_SLEEP] ?: false }.distinctUntilChanged()
 
     suspend fun setTrackSleep(on: Boolean) = store.edit { it[SettingsKeys.TRACK_SLEEP] = on }
+
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

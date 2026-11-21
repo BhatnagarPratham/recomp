@@ -80,4 +80,18 @@ object HealthText {
     fun sleepWeek(w: BodyActivity): String = w.sleepAverage?.let {
         "7-day average ${BodyText.oneDecimal(it)} h of sleep (${w.sleepNights} ${if (w.sleepNights == 1) "night" else "nights"})"
     } ?: "Sleep appears once a night is entered"
+
+    // Writing to Health Connect (M16, DA-04)
+
+    const val SHARE_TITLE = "Share with other apps"
+
+    const val SHARE_NOTE =
+        "Writes your workouts, one nutrition record per meal and the weigh-ins you log to Health Connect, from the last 30 days on, " +
+            "and keeps them up to date as you edit. Scan weights and other apps' workouts aren't written. Apps you allow to read " +
+            "them, such as Google Fit, may upload them to their own cloud."
+
+    const val RESYNC_NOTE =
+        "Edits and deletes older than 30 days aren't followed on their own. Resync everything replaces all of Recomp's records in Health Connect with what's here now."
+
+    fun shared(at: Long?): String = if (at == null) "Nothing written yet." else "Last written ${app.recomp.ui.settings.DataViewModel.dateTime(at)}."
 }

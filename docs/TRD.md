@@ -190,6 +190,12 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
   - `hc_database_stamp`: the database the tokens were issued against (`PRAGMA application_id`, which every import changes, §6.5). When it differs, the tokens are dropped and the last 30 days are read again;
   - `hc_inbody_handled`: the record ids of InBody measurements already saved as a scan or dismissed;
   - `hc_last_sync_at` and `hc_last_sync_error`, for Settings → Health Connect.
+- M16's keys there:
+  - `hc_written`: the records written to Health Connect in the 30-day window, as `clientRecordId → date|hash` JSON (§6.3), so unchanged ones aren't written again and deleted ones are found;
+  - `hc_last_write_at` and `hc_write_error`, for Settings → Health Connect;
+  - `backup_uri`, `backup_is_folder`, `backup_label`: where the automatic backup goes (a folder's tree address or one file's address; its permission is the phone's, §6.5);
+  - `backup_last_at` and `backup_error`, for Settings → Data.
+- M16's `hc_share`: Settings → Health Connect → *Share with other apps* (absent = off). It's device state on purpose, not a setting: an import or the safety copy can never turn sharing back on, so it only ever starts with a tap on this phone.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
@@ -874,7 +880,17 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
   - `hc_inbody_handled` holds Health Connect's record ids, which change when Health Connect restores onto a new phone. Saved scans are still matched within 10 minutes there, so only a dismissed draft can come back once, to be dismissed again.
   - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
   - The InBody app's Health Connect access was off on the reference phone; turn it on in the InBody app.
-- **Write (DA-04, M16):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow.
+- **Write (DA-04, M16, as built).** Settings → Health Connect → *Share with other apps*, off by default, asks for `WRITE_EXERCISE`, `WRITE_NUTRITION` and `WRITE_WEIGHT` together. `HealthWrites` (`:domain`) builds the records, `HealthWriter`/`HealthConnectWriter` writes them, `HealthWriteRepository` syncs, `HealthWriteSync` decides when.
+  - **What's written:**
+    - your finished workouts as `ExerciseSessionRecord`s: strength training, yoga, stretching for mobility, and for cardio and sport the activity the class's style names when M13's `ExerciseTypes` knows it ("Walk", "Badminton"), else "other workout". The title is the routine's name or the class's style; the notes list each exercise's sets ("Bench press: 40 kg × 10, 42.5 kg × 8"), so an edit (M10) changes them;
+    - one `NutritionRecord` per meal of each log date, summing its entries, quick adds included. Carbs, fat and fibre add up only the entries that have them, and stay unknown when none does. `mealType` maps Breakfast, Lunch, Dinner and Snacks; a meal you added is `MEAL_TYPE_UNKNOWN`. It spans 30 minutes from the meal's usual start on its log date (a start before "day starts at" falls on the next calendar morning). The starts are M9's (`MealTimes.start`: the time you set, else the default meal's; a meal with neither an hour after the one before it);
+    - the weigh-ins you log as `WeightRecord`s.
+  - **Never written:** sessions read from other apps (`hc_record_id` set, M13), and scan weights (`source = SCAN` or linked to a scan), which the scale's app writes itself.
+  - **Ids and versions.** `clientRecordId` is `recomp-workout-<session id>`, `recomp-meal-<log date>-<slot key>` or `recomp-weight-<row id>`, stable across edits. `clientRecordVersion` is the write time in epoch ms, so a later write always replaces an earlier one, even after a reinstall or restore. Records are manual entries, written in chunks of at most 1,000.
+  - **The sync reads the tables, not the save paths.** Each run builds the records of the last 30 log dates from what's there now and compares them with `hc_written` (§4): new or changed ones are written, ones written before and no longer there are deleted by `clientRecordId` (one Health Connect no longer has isn't an error). Entries older than the window are forgotten, not deleted. An edit or delete older than 30 days waits for *Resync everything*, which deletes all of Recomp's records of the three types (a delete by time range only removes the calling app's) and writes every record again.
+  - **When.** At launch (after a pending restore finishes), daily (`HealthWriteWorker`, while sharing is on; writing needs no background permission), and 20 seconds after the last change to the tables it reads (`workout_session`, `session_exercise`, `set_entry`, `yoga_detail`, `routine`, `exercise`, `food_log`, `body_weight`), found through Room's invalidation tracker. Turning sharing on writes the last 30 days; turning it off stops writing and forgets `hc_written` (what was written stays in Health Connect, where you can delete it).
+  - **Failures** never escape: without the permissions nothing is written and Settings says why; any other error is shown with the last good write's time, and the next run writes it all.
+  - Reads (M13) leave out Recomp's own records, so nothing written comes back as an import.
 - **The app works fully without Health Connect.** When it's missing or needs an update, Settings → Health Connect says so and nothing else changes.
 
 ### 6.4 Food data (database P0, scanning P1)
@@ -916,7 +932,7 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
 ### 6.5 Backup and restore (DA-01, DA-02)
 
 - **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Every table includes M3c's `meal_draft` and `ai_request_log`; the `secrets` DataStore is never read. Written through the system "create document" picker, so Google Drive works as a target.
-- **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
+- **Automatic backup (DA-02, M16):** Settings → Data → *Automatic backup*, see below.
 - **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
 - **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`, below).
 - **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
@@ -949,6 +965,21 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
     - when it doesn't, nothing was replaced, and the file is dropped ("The last import didn't happen").
   - **A failed settings write** keeps the file for the next launch. The message says the data was replaced, and points to the safety copy, which is always there from step 4.
 - Import is refused while a workout is ACTIVE on the phone. A backup taken during a workout restores it as active, and the resume prompt picks it up.
+**Automatic backup (M16, `data/backup/AutoBackup.kt`).**
+- **Where:** chosen once, with its permission kept (`takePersistableUriPermission`):
+  - *A folder on this phone* (`ACTION_OPEN_DOCUMENT_TREE`). Each run writes `recomp-backup-YYYY-MM-DD.zip` there (replacing that day's file if it exists) and deletes the oldest of Recomp's backups beyond 8. Only names of that form (and a folder's copies, `… (1).zip`) are counted; nothing else in the folder is touched.
+  - *One file, e.g. on Google Drive* (`ACTION_CREATE_DOCUMENT`, suggested name `recomp-backup-latest.zip`), overwritten each week. On the reference phone (2026-11-21) Drive shows in the folder picker, but its *Use this folder* button is disabled at Drive's top level, so Drive can't be a backup folder.
+- **When:** a WorkManager job every 7 days, first on the coming Sunday at 22:00, when the battery isn't low. A first backup runs as soon as you choose, and *Back up now* runs one.
+- **How:** `BackupManager`'s full export is built in memory first, so an export that fails never leaves a half-written file. In a folder it's written to `<name>.part`, its size checked, and only then renamed over the day's file, so a write that fails or is cut short never destroys the backup already there (a provider that can't rename gets the file written in place). The single file can't be renamed: it's overwritten in place and its size checked, so a cut-short write is reported and rewritten by the next run, but until then that one file is damaged; a folder on the phone is the safer choice. Building in memory is fine under the 16 MB import budget; M17's photos will need streaming to a part file instead.
+- **Failures** never crash and are shown in Settings with the last success. A folder or file you deleted, or whose access was taken back, says so ("Recomp can't reach the folder … any more. Choose where to back up again") and isn't retried. Any other write error (a slow or offline Drive) is retried with exponential backoff from 30 minutes, up to 4 tries.
+- The target and its outcome are device state (§4), so a restored phone asks you to choose again.
+
+**CSV export (DA-03, M16, `CsvExport`).** Settings → Data → *Export as CSV* saves `recomp-csv-YYYY-MM-DD.zip` with four files, for spreadsheets; it can't be imported back:
+- `workouts.csv`: one row per ticked set of each finished session (date, start, end, kind, routine, notes, exercise, load type, set, set type, load in kg, reps, RIR, when the set was done), and one row with the set columns empty for a session without sets (a class, another app's walk), with its style and minutes. `load_kg` is the weight, the added weight for bodyweight-plus, or the assistance for assisted lifts.
+- `food.csv`: one row per entry, with the meal's name, amounts, macros (empty when unknown), origin and how it was logged.
+- `weigh-ins.csv` and `scans.csv`: weights in kg, the scan's composition and its protocol.
+- RFC 4180: comma-separated, CRLF, quoted when needed with quotes doubled, and a UTF-8 byte order mark so Excel reads any script. Text a spreadsheet would run as a formula (starting `=`, `+`, `-`, `@`, a tab or a carriage return) gets a leading apostrophe. Times are local, dates are log dates.
+
 - **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store (the `secrets` DataStore and Tink's keyset file), is left out by omission. Lint rejects an `<exclude>` outside an included path, so the key files can't also be excluded by name.
 
 ### 6.6 Notifications
@@ -1862,6 +1893,14 @@ Tests cover:
   - scan weights and other apps' sessions never written.
 - **Risks:** a Drive folder can be slow or offline, so the worker retries with backoff and Settings shows the last success. Nutrition written to Health Connect is readable by every app you give access; it's off by default.
 - **Parallel:** with M15.
+
+**M16 results (2026-11-21; no Room change; on main 137632e with M10, M12 and M13).** Built to PRD §12.12; §6.3 (*Write*) and §6.5 (*Automatic backup*, *CSV export*) describe what was built. Where the spec left room:
+- **Drive** shows in the reference phone's folder picker, but its *Use this folder* is disabled at Drive's top level, so Drive gets the one rolling file and *the last 8* is for folders on the phone.
+- **A meal's time** is its usual start by M9's rule (`MealTimes.start`).
+- **Turning sharing off** stops writing and forgets what was written; the records stay in Health Connect.
+- **After PR #24's review:** the share switch is device state (`hc_share`), so an import or the safety copy can never turn sharing back on; a failed *Resync everything* forgets what was written before its deletes, so the next sync rewrites the window; folder backups go through a `.part` file and a rename, with the written size checked; Health Connect missing or out of date gets its own message; a class's style picks the activity type; changing the backup target reschedules the weekly run from Sunday night. Not changed: CSV's formula guard also marks text starting with `-` or `+` (OWASP's trade-off, noted in `Csv`).
+- **Tests:** 417 domain and 426 app tests in the gate, 0 failures, lint 0 errors. New: `CsvTest`, `CsvExportTest`, `HealthWritesTest`, `BackupRotationTest`, `HealthWriteFlowTest` (10, including M10's history edit and delete followed), `AutoBackupTest` (6).
+- **On the phone (2026-11-22, release over the real data, after a fresh export):** no crash. The user picked a backup folder themself (the picker wasn't read), and the first automatic backup matched the manual export exactly: schema 13, 25 tables, 2,132 rows; Settings showed its time. *Share with other apps* opened Health Connect's write prompt; the user refused it, sharing stayed off with Recomp's note, and no write permission was granted, so nothing was written to Health Connect. Not checked on the phone, by the user's choice: an actual write and that rewrites don't duplicate records; `HealthWriteFlowTest` covers both (stable `clientRecordId`s, a later version replacing the earlier record, unchanged records skipped).
 
 #### M17: Body extras
 

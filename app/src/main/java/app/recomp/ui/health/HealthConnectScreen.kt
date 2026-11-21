@@ -158,7 +158,7 @@ fun HealthConnectScreen(onBack: () -> Unit, viewModel: HealthConnectViewModel = 
                 HealthAvailability.AVAILABLE -> Unit
             }
             Text(
-                "Recomp only reads from Health Connect, and only what you turn on here. What it reads stays on this phone.",
+                "Recomp reads from Health Connect only what you turn on here, and what it reads stays on this phone. It writes there only if you turn on sharing below.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             HealthFeature.entries.forEach { feature ->
@@ -184,6 +184,11 @@ fun HealthConnectScreen(onBack: () -> Unit, viewModel: HealthConnectViewModel = 
                 }
             }
             note?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+
+            // M16 (DA-04): writing back, off until you turn it on.
+            HorizontalDivider()
+            HealthShareSection()
+            HorizontalDivider()
 
             Text(
                 HealthText.synced(s.sync.lastSyncAt) + (s.sync.error?.let { " Some of it couldn't be read ($it)." } ?: ""),

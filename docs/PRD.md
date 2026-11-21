@@ -988,6 +988,12 @@ These rules hold for every block:
   - It writes your workouts, one nutrition record per meal, and the weigh-ins you log. Scan weights aren't written, since the InBody app already writes them, and nor are workouts read from other apps (AR-04).
   - Turning it on writes the last 30 days. After that, your edits and deletes follow.
   - Apps you let read it, such as Google Fit, may upload it to their own cloud; the switch says so.
+- *As built (M16):*
+  - Google Drive shows in the folder picker on the reference phone, but can't be chosen as a folder there (its *Use this folder* is disabled), so Settings offers *A folder on this phone* or *One file, e.g. on Google Drive*. A first backup runs as soon as you choose, and *Back up now* runs one any time.
+  - In a folder, a new backup replaces the day's file only once it's fully written. The single Drive file is overwritten in place: if that write fails, Settings says so and the next run writes it again, but until then that file is damaged, so a folder on the phone is the safer choice.
+  - *Share with other apps* belongs to this phone: importing a backup never turns it on.
+  - The CSV zip is named `recomp-csv-YYYY-MM-DD.zip`. A class or another app's walk is one row in `workouts.csv`. Spreadsheet formulas in names stay text.
+  - Health Connect gets each meal as one record at the meal's usual time on its log date. Edits and deletes older than 30 days are followed with *Resync everything*. Turning sharing off stops writing; what was written stays in Health Connect, where you can delete it.
 
 ### 12.13 M17: Body extras (BM-03, BM-04, YG-03, YG-04)
 

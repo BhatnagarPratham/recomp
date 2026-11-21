@@ -76,6 +76,8 @@ class MainViewModel @Inject constructor(
     private val body: BodyRepository,
     private val health: HealthRepository,
     private val healthScheduler: HealthSyncScheduler,
+    private val healthWrites: app.recomp.healthconnect.HealthWriteSync,
+    private val autoBackup: app.recomp.data.backup.AutoBackupScheduler,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -113,6 +115,9 @@ class MainViewModel @Inject constructor(
             runCatching { goals.refresh() }
             // After the restore, so an import's data is what Health Connect is read against (TRD §6.3).
             syncHealthNow()
+            // M16: writes to Health Connect and the weekly backup, also after the restore so they see its data.
+            healthWrites.start()
+            runCatching { autoBackup.ensureScheduled() }
         }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         // A shared image you backed out of is kept a day, then goes (IB-03).

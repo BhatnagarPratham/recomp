@@ -85,6 +85,12 @@ object ExerciseTypes {
     /** The session kind [type] is imported as, or null when it's never imported. */
     fun kind(type: Int): SessionKind? = table[type]?.kind
 
+    /**
+     * The other way (M16): the type whose label is [label] ("Walk", "Badminton"), for writing an extra logged in Recomp
+     * with its style. Null when no label matches.
+     */
+    fun typeFor(label: String): Int? = table.entries.firstOrNull { it.value.label.equals(label.trim(), ignoreCase = true) }?.key
+
     /** "Walk", "Yoga": what Today and History call it. */
     fun label(type: Int): String = table[type]?.label ?: "Workout"
 }

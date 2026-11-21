@@ -38,6 +38,14 @@
     <!-- The daily sync while the app is closed, where Health Connect offers it. Without it, sync runs at launch only. -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
 
+    <!--
+      M16 (DA-04): Settings → Health Connect → Share with other apps, off by default, asked for only when you turn it
+      on: your workouts, a nutrition record per meal and the weigh-ins you log.
+    -->
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
+    <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
+    <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
+
     <!-- The names of the apps that wrote a workout ("from Google Fit"): apps that work with Health Connect. -->
     <queries>
         <intent>
