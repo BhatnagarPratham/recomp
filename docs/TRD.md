@@ -1547,6 +1547,16 @@ Tests cover:
   - Health Connect can be missing or out of date on other phones. Everything works without it.
 - **Parallel:** with M14.
 
+**Results (2026-11-21, PR #19).** Built as §6.3 describes. The reference phone runs Android 15 with SDK extension 24, so Health Connect counts its own steps and **the sensor fallback isn't built** (nor its reboot test). Developed as 10→11 on a v10 main; it becomes 11→12 when it's rebased onto M11, before the install over the real data.
+- Tests: `:domain` `HealthImportTest` (sleep merging, InBody grouping and the 10-minute match, which extra an import counts toward, overlap, step averages); `:app` `HealthFlowTest` (the scope's list, plus a restored phone, an import of a backup, per-feature permissions, Health Connect missing, one feature failing, and M8's review showing steps, sleep and imports), `ExerciseTypesTest` (every type in connect-client 1.1.0 either mapped or left out on purpose, none to strength), the migration, backup round trip, backup rules (the device store is left out) and settings.
+- M10's History and M12's nudge weren't on main yet, so they're not tested here. Both read `workout_session` and `daily_activity`: History should show rows with `hc_record_id` as read-only, and the nudge's steps part reads `daily_activity.steps` by calendar date.
+
+| Check | Result |
+|-------|--------|
+| Dev install (`app.recomp.m13dev`, invented onboarding values, uninstalled afterwards) | ✅ Settings → Health Connect listed the four features with what each needs. Each switch asked Health Connect for that feature's permissions only (Steps; Sleep; Exercise; BMR, body fat and weight). *Allow background sync* asked for background reads, Settings then said "once a day in the background", and WorkManager's daily job was scheduled. Every sync finished with no error. Today showed "301 of 8,000 steps", the phone's own count with no Google Fit access, and "How long did you sleep?", which became "Slept 7 h" from the sheet; the weigh-in sheet prefilled 7. Body's Activity card showed the 7-day steps average and the night. Nothing was written to Health Connect. |
+| Not seen on the phone | No other app's workout and no InBody measurement in Health Connect in the last 30 days, so no import or draft appeared; the tests cover them. A tracker's night (no tracker on the phone). The daily job running: WorkManager won't force a periodic job early, so the Hilt worker factory isn't exercised on the phone. |
+| Over the real data | Pending: after M11 merges, rebased and renumbered to v12, with a backup first, just before the merge. |
+
 #### M14: Recipes
 
 *NU-22; PRD §12.10; Room v13.*
