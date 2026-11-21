@@ -109,12 +109,10 @@ import kotlinx.serialization.Serializable
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
 @Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
 
-/** M18's camera food: a pack's barcode, a nutrition label (for New food, named [name] so far), a meal photo. */
+/** M18's camera food: a pack's barcode, and a nutrition label for New food (named [name] so far). */
 @Serializable data object ScanBarcodeRoute
 
 @Serializable data class LabelScanRoute(val name: String = "")
-
-@Serializable data object MealPhotoRoute
 
 @Serializable data object MealSlotsRoute
 
@@ -385,7 +383,6 @@ private fun hasCamera(): Boolean {
 private object CameraKeys {
     const val BARCODE = "camera_barcode"
     const val LABEL = "camera_label"
-    const val MEAL_PHOTO = "camera_meal_photo"
 }
 
 /** Where Describe it leaves its outcome in the previous screen's saved state. */

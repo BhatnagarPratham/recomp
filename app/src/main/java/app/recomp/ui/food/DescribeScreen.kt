@@ -1,5 +1,12 @@
 package app.recomp.ui.food
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import app.recomp.data.food.PhotoStore
+import app.recomp.ui.camera.PhotoCaptureScreen
+import app.recomp.ui.camera.PickedPhoto
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -118,6 +125,7 @@ class DescribeViewModel @Inject constructor(
     private val ai: AiRepository,
     private val log: FoodLogRepository,
     private val foods: FoodRepository,
+    private val photos: PhotoStore,
 ) : ViewModel() {
     private val route = savedState.toRoute<DescribeRoute>()
     val date: LocalDate = LocalDate.parse(route.date)
@@ -130,6 +138,18 @@ class DescribeViewModel @Inject constructor(
     /** The description and origin survive process death; an estimate in flight doesn't need to. */
     val text: StateFlow<String> = savedState.getStateFlow(TEXT, "")
     val origin: StateFlow<Origin> = savedState.getStateFlow(ORIGIN, Origin.HOME)
+
+    /**
+     * The meal photo (NU-20): a path in app storage, kept there while the meal is a draft and deleted once it's saved.
+     * One you remove or replace is left for the sweep, since a draft may still point at it.
+     */
+    val photo: StateFlow<String?> = savedState.getStateFlow(PHOTO, null)
+
+    /** The photo a draft opened with, deleted with the draft when the meal is saved. */
+    private var draftPhoto: String? = null
+
+    private val _photoBusy = MutableStateFlow(false)
+    val photoBusy: StateFlow<Boolean> = _photoBusy
 
     val gate: StateFlow<AiGateView?> = ai.gate.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val settings: StateFlow<AiSettings?> = ai.settings.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -170,6 +190,8 @@ class DescribeViewModel @Inject constructor(
                 } else {
                     savedState[TEXT] = draft.text
                     savedState[ORIGIN] = draft.origin
+                    draftPhoto = draft.photoPath
+                    savedState[PHOTO] = draft.photoPath?.takeIf { java.io.File(it).isFile }
                     _autoStart.value = true
                 }
             }
@@ -184,11 +206,47 @@ class DescribeViewModel @Inject constructor(
         savedState[ORIGIN] = value
     }
 
+    /** Scales the photo down (and upright, without its metadata) into app storage; a camera file is then deleted. */
+    fun attachPhoto(picked: PickedPhoto) {
+        if (_photoBusy.value) return
+        _photoBusy.value = true
+        viewModelScope.launch {
+            try {
+                val bitmap = when (picked) {
+                    is PickedPhoto.Taken -> photos.decode(picked.file)
+                    is PickedPhoto.Picked -> photos.decode(picked.uri)
+                }
+                savedState[PHOTO] = photos.keep(bitmap)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _photoProblem.value = true
+            } finally {
+                (picked as? PickedPhoto.Taken)?.file?.delete()
+                _photoBusy.value = false
+            }
+        }
+    }
+
+    private val _photoProblem = MutableStateFlow(false)
+    val photoProblem: StateFlow<Boolean> = _photoProblem
+
+    fun photoProblemShown() {
+        _photoProblem.value = false
+    }
+
+    fun removePhoto() {
+        savedState[PHOTO] = null
+    }
+
+    /** What the privacy notice and the request are: a photo, or words alone. */
+    fun kind(): AiKind = if (photo.value != null) AiKind.MEAL_PHOTO else AiKind.MEAL_TEXT
+
     fun autoStarted() {
         _autoStart.value = false
     }
 
-    fun noticeSeen() = viewModelScope.launch { ai.markNoticeSeen(AiKind.MEAL_TEXT) }
+    fun noticeSeen() = viewModelScope.launch { ai.markNoticeSeen(kind()) }
 
     /** The local-network permission's prompt was answered: the gate reads it again. */
     fun localNetworkAnswered() = ai.localNetworkAnswered()
@@ -200,8 +258,9 @@ class DescribeViewModel @Inject constructor(
 
     fun estimate(clarification: Clarification? = null) {
         val description = text.value.trim()
+        val photoPath = photo.value
         // A second tap while one runs would send (and pay for) the same meal twice.
-        if (description.isEmpty() || _phase.value == DescribePhase.Estimating || _busy.value) return
+        if ((description.isEmpty() && photoPath == null) || _phase.value == DescribePhase.Estimating || _busy.value) return
         val mine = ++attempt
         beforeReestimate = if (clarification != null) _phase.value as? DescribePhase.Review else null
         _phase.value = DescribePhase.Estimating
@@ -210,7 +269,8 @@ class DescribeViewModel @Inject constructor(
         val plan = if (clarification == null) DraftPlan(date, slot, draftId, keep = { mine == attempt }) else null
         viewModelScope.launch {
             val result = try {
-                ai.estimate(description, origin.value, clarification, plan)
+                val image = photoPath?.let { photos.image(it) }
+                ai.estimate(description, origin.value, clarification, plan, photo = image, photoPath = photoPath.takeIf { image != null })
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -233,7 +293,7 @@ class DescribeViewModel @Inject constructor(
                     _phase.value = earlier.copy(notice = "${AiText.reason(result.status, provider())}, so this is the earlier estimate.")
                 } else {
                     // Whatever went wrong, the description is kept: by the repository, or here if it never got that far.
-                    draftId = result.draftId ?: ai.keepDraft(date, slot, draftId, description, origin.value, result.status)
+                    draftId = result.draftId ?: ai.keepDraft(date, slot, draftId, description, origin.value, result.status, photoPath)
                     _outcome.value = DescribeOutcome("${AiText.reason(result.status, provider())}. Kept as a draft in ${slotName()}; log it now with search or quick add.")
                 }
             }
@@ -255,10 +315,11 @@ class DescribeViewModel @Inject constructor(
     /** *Save draft* (AI not ready). */
     fun saveDraft() {
         val description = text.value.trim()
-        if (description.isEmpty() || !claim()) return
+        val photoPath = photo.value
+        if ((description.isEmpty() && photoPath == null) || !claim()) return
         viewModelScope.launch {
             finishing {
-                draftId = ai.keepDraft(date, slot, draftId, description, origin.value, reason = null)
+                draftId = ai.keepDraft(date, slot, draftId, description, origin.value, reason = null, photoPath = photoPath)
                 _outcome.value = DescribeOutcome("Kept as a draft in ${slotName()}. Estimate it once AI is ready.")
             }
         }
@@ -295,6 +356,10 @@ class DescribeViewModel @Inject constructor(
                     date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet(),
                     mealName = mealName, draftId = draftId,
                 )
+                // The meal is logged: its photo has done its job (NU-20).
+                photos.delete(photo.value)
+                photos.delete(draftPhoto)
+                savedState[PHOTO] = null
                 val totals = MealCheck.totals(review.items.map { it.current })
                 val n = review.items.size
                 _outcome.value = DescribeOutcome(
@@ -310,6 +375,7 @@ class DescribeViewModel @Inject constructor(
     private companion object {
         const val TEXT = "text"
         const val ORIGIN = "origin"
+        const val PHOTO = "photo"
     }
 }
 
@@ -331,6 +397,10 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     val slots by viewModel.slots.collectAsStateWithLifecycle()
     val region by viewModel.region.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val photo by viewModel.photo.collectAsStateWithLifecycle()
+    val photoBusy by viewModel.photoBusy.collectAsStateWithLifecycle()
+    val photoProblem by viewModel.photoProblem.collectAsStateWithLifecycle()
+    var capturing by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var notice by remember { mutableStateOf(false) }
     var addingKey by remember { mutableStateOf(false) }
@@ -347,7 +417,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
 
     /** The first estimate shows the privacy notice once (TRD §6.2). */
     fun requestEstimate() {
-        if (settings?.noticeSeen(AiKind.MEAL_TEXT) == true) viewModel.estimate() else notice = true
+        if (settings?.noticeSeen(viewModel.kind()) == true) viewModel.estimate() else notice = true
     }
 
     // Estimate now on a draft: start once the gate is known, and only if it's READY then. A gate that becomes
@@ -357,6 +427,19 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
             viewModel.autoStarted()
             if (ready) requestEstimate()
         }
+    }
+
+    if (capturing) {
+        BackHandler { capturing = false }
+        PhotoCaptureScreen(
+            title = "Meal photo",
+            hint = "The whole plate, from a little above. Words help too: say what's in it and how much.",
+            onBack = { capturing = false },
+        ) { picked ->
+            capturing = false
+            viewModel.attachPhoto(picked)
+        }
+        return
     }
 
     BackHandler(enabled = phase !is DescribePhase.Input) {
@@ -396,6 +479,12 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 onAllowLocalNetwork = askLocalNetwork,
                 onCancel = viewModel::cancel,
                 busy = busy,
+                photo = photo,
+                photoBusy = photoBusy,
+                photoProblem = photoProblem,
+                onPhoto = { capturing = true },
+                onRemovePhoto = viewModel::removePhoto,
+                onPhotoProblemShown = viewModel::photoProblemShown,
             )
             is DescribePhase.Review -> ReviewStep(
                 padding = padding,
@@ -414,7 +503,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
         AlertDialog(
             onDismissRequest = { notice = false },
             title = { Text("Before your first estimate with ${settings?.provider?.label ?: "AI"}") },
-            text = { Text(settings?.let(AiText::privacy).orEmpty()) },
+            text = { Text(settings?.let { AiText.privacy(it, viewModel.kind()) }.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = {
                     notice = false
@@ -481,8 +570,15 @@ private fun InputStep(
     onAllowLocalNetwork: () -> Unit,
     onCancel: () -> Unit,
     busy: Boolean,
+    photo: String? = null,
+    photoBusy: Boolean = false,
+    photoProblem: Boolean = false,
+    onPhoto: () -> Unit = {},
+    onRemovePhoto: () -> Unit = {},
+    onPhotoProblemShown: () -> Unit = {},
 ) {
     val ready = gate?.state == AiState.READY
+    val hasInput = text.isNotBlank() || photo != null
     Column(
         Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -513,6 +609,7 @@ private fun InputStep(
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             modifier = Modifier.fillMaxWidth(),
         )
+        MealPhotoRow(photo, photoBusy, photoProblem, enabled = !estimating, onPhoto, onRemovePhoto, onPhotoProblemShown)
         Text("Origin", style = MaterialTheme.typography.labelLarge)
         ChoiceChips(Origin.entries, origin, FoodText::origin, { if (!estimating) onOrigin(it) })
         if (origin == Origin.ORDERED) {
@@ -525,10 +622,58 @@ private fun InputStep(
             }
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel") }
         } else if (ready) {
-            Button(onClick = onEstimate, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
+            Button(onClick = onEstimate, enabled = hasInput && !photoBusy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
         } else {
-            Button(onClick = onSaveDraft, enabled = text.isNotBlank() && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save draft") }
+            Button(onClick = onSaveDraft, enabled = hasInput && !photoBusy && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save draft") }
         }
+    }
+}
+
+/** NU-20: a meal photo's thumbnail and *Remove*, or *Add a photo* (camera or gallery). */
+@Composable
+private fun MealPhotoRow(
+    photo: String?,
+    busy: Boolean,
+    problem: Boolean,
+    enabled: Boolean,
+    onPhoto: () -> Unit,
+    onRemove: () -> Unit,
+    onProblemShown: () -> Unit,
+) {
+    val thumb by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, photo) {
+        value = photo?.let { path ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 })?.asImageBitmap()
+            }
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        when {
+            busy -> {
+                CircularProgressIndicator(Modifier.size(24.dp))
+                Text("Getting the photo ready…", Modifier.weight(1f))
+            }
+            photo != null -> {
+                thumb?.let {
+                    androidx.compose.foundation.Image(
+                        it,
+                        contentDescription = "Meal photo",
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.size(72.dp).clip(MaterialTheme.shapes.small),
+                    )
+                }
+                Text("Photo added", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = onRemove, enabled = enabled) { Text("Remove") }
+            }
+            else -> OutlinedButton(onClick = onPhoto, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Add a photo") }
+        }
+    }
+    if (problem) {
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(4_000)
+            onProblemShown()
+        }
+        Text("Couldn't use that photo. Try another.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
 }
 

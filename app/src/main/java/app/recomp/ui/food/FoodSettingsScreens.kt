@@ -242,6 +242,12 @@ fun FoodDataDialog(indbCount: Int?, onDismiss: () -> Unit) {
                         "Diet tags come from each recipe's ingredients; hide any food that's tagged wrongly.",
                 )
                 Text("The protein-rich basics are rounded from USDA FoodData Central (public domain) or typical pack labels.")
+                Text(
+                    "Barcodes, and search in the International region, use Open Food Facts (world.openfoodfacts.org): data © " +
+                        "Open Food Facts contributors, under the Open Database License (opendatacommons.org/licenses/odbl). Only the " +
+                        "barcode or the words you searched are sent; a product you save becomes your own food.",
+                )
+                Text("Labels are read on the phone by Tesseract (Apache-2.0) with its tessdata_fast English model (Apache-2.0).")
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
