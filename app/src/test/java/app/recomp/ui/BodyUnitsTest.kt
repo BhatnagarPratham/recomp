@@ -325,4 +325,13 @@ class BodyUnitsTest {
         assertTrue(GoalText.protein(targets, kg).startsWith("1.8 g per kg of your goal weight (78 kg)."))
         assertTrue(GoalText.fat(targets, lb).startsWith("Your floor of 0.6 g per kg (172 lb)"))
     }
+
+    @Test
+    fun `the ± button flips a typed sit-and-reach, and the minus sign parses`() {
+        assertEquals("\u22122.5", app.recomp.ui.components.toggleSign("2.5"))
+        assertEquals("2.5", app.recomp.ui.components.toggleSign("\u22122.5"))
+        assertEquals("2.5", app.recomp.ui.components.toggleSign("-2.5"))
+        assertEquals(-6.35, BodyText.parseLength(app.recomp.ui.components.toggleSign("2.5"), UnitStyle.IMPERIAL)!!, 1e-9)
+        assertEquals(-4.0, BodyText.parse("\u22124")!!, 0.0)
+    }
 }

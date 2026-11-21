@@ -143,8 +143,8 @@ object BodyText {
         if (!p.changes) append("\nYour targets already match.")
     }
 
-    /** Typed numbers accept "80,4" as well as "80.4". */
-    fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+    /** Typed numbers accept "80,4" as well as "80.4", and a minus sign "−" (the ± button's) as well as a hyphen. */
+    fun parse(text: String): Double? = text.trim().replace(',', '.').replace('\u2212', '-').toDoubleOrNull()?.takeIf { it.isFinite() }
 
     // Body weights and lengths in either unit (PR-05). Every body weight, tape and height on screen goes through these.
 

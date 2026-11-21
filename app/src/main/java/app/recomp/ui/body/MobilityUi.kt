@@ -206,7 +206,7 @@ fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (Mobility
     when (typing) {
         MobilityMarker.SIT_AND_REACH -> {
             val r = reach ?: lastReachCm ?: 0.0
-            NumberEntryDialog("Sit-and-reach", BodyEntry.lengthText(r, style), decimal = true, onDismiss = { typing = null }, suffix = style.length) { text ->
+            NumberEntryDialog("Sit-and-reach", BodyEntry.lengthText(r, style), decimal = true, onDismiss = { typing = null }, suffix = style.length, signed = true) { text ->
                 typing = null
                 MobilityDraft.typedReach(text, r, style)?.takeIf(MobilityMarkers::validReach)?.let { reach = it }
             }
