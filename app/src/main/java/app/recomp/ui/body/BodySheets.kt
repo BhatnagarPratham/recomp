@@ -32,7 +32,18 @@ import app.recomp.ui.components.WhenRow
 import kotlin.math.roundToInt
 
 /** A weigh-in being logged or edited. [id] is null for a new one. */
-data class WeighInDraft(val id: Long?, val weightG: Int, val source: WeightSource, val at: Long)
+data class WeighInDraft(
+    val id: Long?,
+    val weightG: Int,
+    val source: WeightSource,
+    val at: Long,
+    /** *Track sleep* is on, so a new weigh-in also asks about last night (AR-02). */
+    val askSleep: Boolean = false,
+    /** Prefilled from what's stored for that morning, typed or from a tracker. */
+    val sleepHours: Double? = null,
+    /** Only a value you changed is saved, as typed; an untouched prefill stays what it was. */
+    val sleepTouched: Boolean = false,
+)
 
 /** A waist measurement being logged or edited, in tenths of a cm. */
 data class WaistDraft(val id: Long?, val tenthsCm: Int, val at: Long)
@@ -48,6 +59,8 @@ fun WeighInSheet(draft: WeighInDraft, onDismiss: () -> Unit, onDelete: (() -> Un
     var source by remember { mutableStateOf(draft.source) }
     var at by remember { mutableLongStateOf(draft.at) }
     var typing by remember { mutableStateOf(false) }
+    var sleep by remember { mutableStateOf(draft.sleepHours) }
+    var sleepTouched by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -68,7 +81,10 @@ fun WeighInSheet(draft: WeighInDraft, onDismiss: () -> Unit, onDelete: (() -> Un
             Text("Source", style = MaterialTheme.typography.labelLarge)
             ChoiceChips(WeightSource.entries, source, BodyText::source, { source = it })
             WhenRow(at, BodyText::dateTime, { at = it })
-            Button(onClick = { onSave(WeighInDraft(draft.id, grams, source, at)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
+            if (draft.askSleep) {
+                app.recomp.ui.health.SleepChips(sleep, { sleep = it; sleepTouched = true })
+            }
+            Button(onClick = { onSave(draft.copy(weightG = grams, source = source, at = at, sleepHours = sleep, sleepTouched = sleepTouched)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
             if (onDelete != null) OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Delete") }
         }
     }

@@ -74,6 +74,8 @@ data class ScanInput(
     val score: Int? = null,
     val segmental: SegmentalLean? = null,
     val notes: String? = null,
+    /** Set when the scan starts from an InBody draft (IB-07); null keeps what the scan already has. */
+    val source: ScanSource? = null,
 )
 
 /** What saving a scan did. [slotSet] is true when this first scan set the usual slot (PRD §7.9). */
@@ -105,6 +107,13 @@ class BodyRepository @Inject constructor(
 
     /** The current trend weight, or null before the primary source has a weigh-in. */
     suspend fun trendKg(): Double? = trendOf(bodyDao.weighIns(), prefs.currentPersona().weightSource, null).trendKg
+
+    /**
+     * The trend weight as it stood at [at]: from the primary source's weigh-ins measured by then, or null
+     * before the first. Rebuilt assisted-lift PRs use it, so they match what finishing the workout found.
+     */
+    suspend fun trendKgAt(at: Long): Double? =
+        trendOf(bodyDao.weighIns().filter { it.measuredAt <= at }, prefs.currentPersona().weightSource, null).trendKg
 
     private fun trendOf(rows: List<BodyWeightEntity>, primary: WeightSource, pace: WeightPace?): BodyTrend {
         val points = TrendCalculator.trend(rows.map(BodyWeightEntity::toWeighIn), primary)
@@ -195,6 +204,7 @@ class BodyRepository @Inject constructor(
             visceralFatLevel = 0.0, minsSinceMeal = 0, workoutBeforeScan = false, minsFromSlot = null, protocolOk = false,
         )
         val row = base.copy(
+            source = input.source ?: base.source,
             measuredAt = input.measuredAt,
             logDate = logDate,
             weightG = input.weightG,

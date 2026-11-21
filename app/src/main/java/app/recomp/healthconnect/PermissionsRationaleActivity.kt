@@ -25,8 +25,9 @@ class PermissionsRationaleActivity : ComponentActivity() {
                     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Text("How Recomp uses health data", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            "Recomp reads your daily steps and body measurements (weight, body fat, lean mass) " +
-                                "to track your recomposition. The data stays on this phone and is never uploaded.",
+                            "Recomp reads only what you turn on in Settings → Health Connect: your daily steps, your sleep, " +
+                                "workouts other apps recorded, and the InBody app's weight, body fat and BMR. It writes nothing " +
+                                "to Health Connect. What it reads stays on this phone and is never uploaded.",
                         )
                         Button(onClick = { finish() }) { Text("Close") }
                     }

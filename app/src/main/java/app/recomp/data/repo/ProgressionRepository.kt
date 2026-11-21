@@ -16,6 +16,7 @@ import app.recomp.domain.model.SetType
 import app.recomp.domain.nutrition.EnergyBalance
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.DatedExposure
 import app.recomp.domain.progression.ExerciseConfig
 import app.recomp.domain.progression.Exposure
 import app.recomp.domain.progression.PersonalRecords
@@ -89,6 +90,9 @@ class ProgressionRepository @Inject constructor(
 
     /** The trend weight in grams (TRD §5.2), or null before the primary source's first weigh-in. */
     suspend fun trendWeightG(): Int? = body.trendKg()?.let { (it * 1000).roundToInt() }
+
+    /** The trend weight in grams as it stood at [at] (a session's end), for rebuilding assisted PRs (WL-10). */
+    suspend fun trendWeightGAt(at: Long): Int? = body.trendKgAt(at)?.let { (it * 1000).roundToInt() }
 
     /** TRD §5.1: the target in force at [now] against the TDEE estimate stored with it. False until there's a target. */
     suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
@@ -208,6 +212,12 @@ class ProgressionRepository @Inject constructor(
             )
         }
     }
+
+    /** PO-09: every completed session of an exercise, for its chart. */
+    suspend fun chartExposures(exerciseId: Long): List<DatedExposure> =
+        workoutDao.exposureSets(exerciseId, limit = FULL_HISTORY_LIMIT).groupExposures().map { (first, rows) ->
+            DatedExposure(first.logDate, rows.map { it.set.toLogged() })
+        }
 
     @Serializable
     private data class RecommendationJson(

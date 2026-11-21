@@ -253,4 +253,19 @@ object Migrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_programme_review_week_start` ON `programme_review` (`week_start`)")
         }
     }
+
+    /**
+     * M13, Health Connect in: InBody measurements waiting to become scans (IB-07), and who wrote each night's sleep
+     * (AR-02). A night stored before this had to be typed, so a sync leaves it alone. SQL from schemas/12.json.
+     */
+    val MIGRATION_11_12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `scan_draft` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `measured_at` INTEGER NOT NULL, " +
+                    "`weight_g` INTEGER NOT NULL, `body_fat_pct` REAL, `bmr_kcal` INTEGER, `hc_ids` TEXT NOT NULL)",
+            )
+            db.execSQL("ALTER TABLE `daily_activity` ADD COLUMN `sleep_source` TEXT")
+            db.execSQL("UPDATE `daily_activity` SET `sleep_source` = 'TYPED' WHERE `sleep_hours` IS NOT NULL")
+        }
+    }
 }

@@ -17,6 +17,7 @@ import app.recomp.data.prefs.DayBoundary
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
 import app.recomp.domain.model.SetType
+import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.PlanRow
 import app.recomp.domain.training.PlanSession
@@ -197,10 +198,7 @@ class WorkoutRepository @Inject constructor(
     private suspend fun recomputeOverride(sessionExerciseId: Long) {
         val row = workoutDao.sessionExercise(sessionExerciseId) ?: return
         val rec = ProgressionRepository.decode(row.recommendationJson)
-        val target = rec?.loadG
-        val loads = workoutDao.completedSets(sessionExerciseId).filter { it.setType == SetType.WORKING }.map { it.loadG ?: 0 }
-        val top = if (rec?.assisted == true) loads.minOrNull() else loads.maxOrNull()
-        val overrode = target != null && top != null && top != target
+        val overrode = Targets.overrode(rec, workoutDao.completedSets(sessionExerciseId).map { it.toLogged() })
         if (overrode != row.userOverrode) workoutDao.setOverrode(row.id, overrode)
     }
 
@@ -310,9 +308,9 @@ class WorkoutRepository @Inject constructor(
 
     data class ExtraEntry(val style: String, val durationMin: Int, val intensity: Int?, val notes: String?)
 
-    /** Prefill for "Log class": the last session of this kind. */
+    /** Prefill for "Log class": the last session of this kind that you logged, never one imported from another app (AR-04). */
     suspend fun lastExtra(routineId: Long): ExtraEntry? {
-        val session = workoutDao.lastCompletedOfRoutine(routineId) ?: return null
+        val session = workoutDao.lastLoggedOfRoutine(routineId) ?: return null
         val detail = workoutDao.yogaDetail(session.id) ?: return null
         return ExtraEntry(detail.style, detail.durationMin, detail.intensity, session.notes)
     }

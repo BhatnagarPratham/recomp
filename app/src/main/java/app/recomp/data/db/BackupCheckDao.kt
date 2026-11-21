@@ -75,6 +75,9 @@ interface BackupCheckDao {
 
     @Query("SELECT * FROM programme_review")
     suspend fun programmeReview(): List<ProgrammeReviewEntity>
+
+    @Query("SELECT * FROM scan_draft")
+    suspend fun scanDraft(): List<ScanDraftEntity>
 }
 
 /** Every table's reader, by table name. */
@@ -101,4 +104,5 @@ fun BackupCheckDao.readers(): Map<String, suspend () -> List<Any>> = mapOf(
     "weekly_checkin" to { weeklyCheckin() },
     "daily_activity" to { dailyActivity() },
     "programme_review" to { programmeReview() },
+    "scan_draft" to { scanDraft() },
 )

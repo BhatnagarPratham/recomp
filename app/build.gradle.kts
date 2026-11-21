@@ -212,6 +212,10 @@ dependencies {
 
     implementation(libs.datastore.preferences)
     implementation(libs.health.connect)
+    // The daily Health Connect sync (M13); M16's backups use it too. Workers are built by Hilt.
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
     // HM-05: the home-screen widget (TRD §2).
     implementation(libs.glance.appwidget)
     implementation(libs.anthropic.java)

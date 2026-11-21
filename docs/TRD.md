@@ -145,8 +145,16 @@ weekly_checkin      week_start (PK, the Monday), computed_at, window_days, logge
                                           -- flag and proposed_kcal use the goal and body data as they were when the week was
                                           -- computed: weeks caught up together are judged by that day's goal, and the ones that
                                           -- close in the same catch-up keep no proposal
-daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
-                                          -- food_incomplete from the Food tab's day menu (M5); steps from HC, sleep typed in
+daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?,
+                    sleep_source?(TYPED|HEALTH_CONNECT)
+                                          -- food_incomplete from the Food tab's day menu (M5), by log date;
+                                          -- steps from Health Connect (M13) by CALENDAR date, so they match Google Fit:
+                                          --   the two dates differ only between midnight and "day starts at";
+                                          -- sleep_hours is the night that ended that morning, typed or synced, to the
+                                          --   half hour; a TYPED night is never replaced by a sync (M13, v12)
+scan_draft          id, measured_at, weight_g, body_fat_pct?, bmr_kcal?, hc_ids[]
+                                          -- an InBody measurement read from Health Connect (IB-07, M13, v12), waiting
+                                          -- for muscle and visceral fat; deleted once saved as a scan or dismissed
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
                     status (§6.2), latency_ms, response_json?,
@@ -170,8 +178,13 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
   - `ai_notices_seen`, a string set with one entry per provider and kind (`OPENAI:MEAL_TEXT`), and per server for the compatible provider (`COMPATIBLE/openrouter.ai:MEAL_TEXT`). The older boolean `ai_notice_seen` is still read as Anthropic's meal notice and never written.
   - The API keys are not here: one per provider, encrypted, in their own `secrets` DataStore file (`anthropic_api_key`, `openai_api_key`, `gemini_api_key`, `compatible_api_key`).
 - `scan_slot` (IB-02): the usual scan weekday and time of day.
+- From M13 (PRD §12.9): `health_features` (a string set of `STEPS`, `SLEEP`, `WORKOUTS`, `INBODY`: what's turned on in Settings → Health Connect), `steps_goal` (2,000 to 20,000; absent = 8,000) and `track_sleep`. They're exported; a restored phone shows a feature as turned on but not allowed until Health Connect grants its permission again.
 - `reminders` (RM-01, M12): JSON with each reminder's on or off and time in minutes after midnight (`weighIn`, `lunch`, `evening`, `workout`, `checkin`), the meal the lunch reminder watches (`lunchSlot`, a slot key; absent is the meal for its time), the workout reminder's ISO weekdays (`workoutDays`), and `scan` (on or off; its time follows `scan_slot`). Absent, or a reminder missing from it, is off at its default time. Exported like every other setting; import checks the times and weekdays.
-- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh. From M12 it holds `reminder_ledger`: the log day's reminders sent and handled (below, §6.6).
+- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file (`datastore/device.preferences_pb`, `DevicePrefs`), which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh. From M12 it holds `reminder_ledger`: the log day's reminders sent and handled (below, §6.6). M13's keys there:
+  - `hc_changes_<feature>`: Health Connect's change token for that feature's record types;
+  - `hc_database_stamp`: the database the tokens were issued against (`PRAGMA application_id`, which every import changes, §6.5). When it differs, the tokens are dropped and the last 30 days are read again;
+  - `hc_inbody_handled`: the record ids of InBody measurements already saved as a scan or dismissed;
+  - `hc_last_sync_at` and `hc_last_sync_error`, for Settings → Health Connect.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
@@ -180,8 +193,8 @@ A stored JSON value that no longer decodes (for example one saved by a newer bui
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
-- New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
-- New columns: `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13). (`ai_request_log.provider` landed with M7, above.)
+- New tables: `programme_review` (M11), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
+- New columns: `exercise.deload_pending` (M11). (`ai_request_log.provider` landed with M7, and `scan_draft` and `daily_activity.sleep_source` with M13, above.)
 - New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
@@ -285,7 +298,7 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
   - `INCREASE` takes one step off (two with the double step), never below zero. At zero it suggests added load or a harder variation, like bodyweight.
   - The big-jump guard and the double step measure the step against the *effective load*: today's trend weight (§5.2) minus the assistance. Before the first weigh-in that's unknown, so neither applies and the lift moves one step at a time.
   - `DELOAD` adds the assistance that takes about 10% off the effective load, rounded *up* to the step; before a weigh-in, one step.
-  - e1RM, PRs, the stall score and session volume use today's trend weight minus each set's assistance (`Loads.lifted`). Every session is judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall.
+  - e1RM, PRs, the stall score and session volume use the trend weight minus each set's assistance (`Loads.lifted`), with every session in one comparison judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall. Which trend weight depends on what's computed: stall detection, targets and displayed e1RMs compare at today's trend, while a session's stored PR records use the trend as of that session's end (the trend when it finished). A rebuild after an edit (M10) uses that same weight, so it reproduces what finishing wrote.
   - Before the first weigh-in, less assistance is the "least assistance" record, ties go to more reps, and there's no e1RM or volume. Records keep the assistance in `load_g`.
   - So an assisted MAX_LOAD record's `value` changes meaning at the first weigh-in: the assistance before it, trend weight minus assistance after. Charts and anything else that reads assisted records use `load_g` (or recompute from the sets), never `value`.
   - With no assistance left, targets and history read "BW", and the next step is added load or a harder variation.
@@ -300,6 +313,17 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 - **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `harderVariation`, and from M6 `steps` and `assisted`, which default to 1 and false). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
 - **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load (for an assisted lift, its least assistance) differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
 - **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
+- **Rebuilding PRs (WL-10, M10).** PRs are the only derived training data that's stored; the rotation, targets, stall flags and weekly plan are computed from the sessions on every read. So editing, moving or deleting a completed session rebuilds PRs and nothing else.
+  - `PrRebuilder` (`:domain`) takes every completed exposure of one exercise and returns the PRs of the sessions that start at or after `from`. It calls the same `PersonalRecords.detect` as finishing a workout, with the same history: sessions that started earlier (ties by session id), and never a second row of the same exercise in the same session.
+  - A PR depends only on earlier sets, so `from` is the earlier of the session's old and new start, and rows before it are never rewritten. `HistoryRepository.rebuildPrs` deletes the affected exercises' rows from there on and inserts the rebuilt ones, inside the edit's transaction. The affected exercises are every one the session had before the edit.
+  - A rebuild with no `from` recomputes everything. Tests compare the two after each kind of edit, and compare a full rebuild of untouched history with what finishing wrote.
+  - An assisted lift's sessions are each rebuilt at the trend weight as it stood when that session finished (`BodyRepository.trendKgAt`, from the weigh-ins measured by then), which is what finishing it used. So a rebuild gives back the records finishing wrote, however the trend has moved since, and a session finished before the first weigh-in keeps its least-assistance record in assistance grams. The "today's trend weight" rule above is for targets, stall detection and displayed e1RMs, not stored PRs. Finishing reads at most 500 earlier exposures of an exercise and a rebuild reads all of them, which differs only past 500 sessions of one lift.
+- **Editing a session (WL-10, M10).** `HistoryRepository.saveEdit` is one transaction over a draft the screen holds; only a COMPLETED strength session is accepted.
+  - `log_date` is recomputed from the new start, and every set's `completed_at` moves by the change in start. An added set takes the tick time of the set before it, or the session's end.
+  - `recommendation_json`, `target_sets`, the rep range and rest are never written: they're the plan as shown that day. `user_overrode` is recomputed with the same rule as in a live workout (`Targets.overrode`).
+  - Removing an exercise renormalizes the session's superset groups.
+  - While a workout is in progress, a past session can't be moved to start at or after it: finishing that workout judges its PRs against every finished session.
+  - A stall reset is "one millisecond before the start of the session it was chosen in". When that session's start moves, the reset moves with it; when the session is deleted or loses the exercise, the reset is cleared. Resets chosen in other sessions are plain timestamps and are left alone.
 
 ### 5.2 Weight trend (BM-01)
 
@@ -426,6 +450,10 @@ A proposal is always §5.3 recomputed with `tdee_new` at the current pace, and i
 ### 5.5 Weekly volume per muscle (PO-10, P1)
 
 Each working set counts as 1 set for the exercise's primary muscle and 0.5 for each secondary muscle. The weekly total per muscle is compared against an editable reference band (default 10–20). It's for information only and never triggers a notification.
+
+`MuscleVolume` (M10) counts in half sets, so the totals are exact. It takes completed sets of type `WORKING` from COMPLETED sessions whose `log_date` falls in the ISO week (Monday start, as `WeeklyPlan`), grouped per exercise by one query. A muscle listed as both primary and secondary counts once. The Train card also lists, at zero, the primary muscles of the exercises in the rotation's routines; `other` (custom exercises) is left out. The band lives in DataStore as `volume_band_min` and `volume_band_max`; a missing or invalid pair reads as 10–20, and a backup with an invalid pair is refused like any other bad setting.
+
+**Exercise charts (PO-09, M10).** `ExerciseChart` (`:domain`) turns an exercise's completed sessions into points by log date, warm-ups left out. Weighted lifts plot the best estimated 1RM per session (sets of 12 reps or fewer, as everywhere else) as a line and the heaviest set as hollow dots, both in kg. Weighted-bodyweight lifts (pull-ups, dips) plot reps like bodyweight ones until a session has added load; from then on, the e1RM line and the added load, for loaded sessions only, so a row of 0 kg is never drawn. Bodyweight lifts plot the best set's reps; assisted lifts plot the least assistance from the sets' own `load_g` (lower is better, said in the caption), never a record's `value`. The card uses M8's `ui/components/Chart` with the time axis from 12 weeks ago, or the first session, to today, and asks for two sessions within the chosen range before it draws (else it suggests *Everything*). Its "today" is the log date under "day starts at".
 
 ### 5.6 InBody trends (IB-02, IB-04)
 
@@ -752,20 +780,51 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 ### 6.3 Health Connect (P1)
 
-- **Step sources:** whichever app writes steps to Health Connect. On a phone without a watch, that's typically Google Fit or Samsung Health.
-  - Google has deprecated the Google Fit APIs in favour of Health Connect, so the app never calls Fit directly.
-  - Google Fit writes the phone's step count into Health Connect when its Health Connect sync is on. **M0 finding:** Fit declares `WRITE_STEPS`, but its Health Connect access was off on the reference phone. It has to be turned on in Google Fit's settings.
-- **Read:** daily step totals (`StepsRecord` aggregates).
-- **InBody import (P1, IB-07):** read body records whose data origin is the InBody app (`com.inbody2014.inbody`). Records with the same timestamp are grouped into one `body_composition` draft for you to complete.
+Reading is built (M13); writing comes with M16. `HealthSource` is what the sync sees, `HealthConnectSource` is Health Connect itself (connect-client 1.1.0), and `HealthRepository` does the syncing. Recomp writes nothing to Health Connect until M16.
+
+- **A permission per feature.** Settings → Health Connect lists four features, each off until you turn it on, which asks for that feature's permissions only:
+
+  | Feature | Permissions | What it fills |
+  |---------|-------------|---------------|
+  | Steps | `READ_STEPS` | `daily_activity.steps` |
+  | Sleep | `READ_SLEEP` | `daily_activity.sleep_hours` |
+  | Other apps' workouts | `READ_EXERCISE` | `workout_session` rows with `hc_record_id` |
+  | InBody body data | `READ_WEIGHT`, `READ_BODY_FAT`, `READ_BASAL_METABOLIC_RATE` | `scan_draft` |
+
+  A feature is read only while it's both turned on (the `health_features` setting) and granted. M0's spike asked for lean mass and body water too; nothing writes them, so those permissions are gone from the manifest.
+- **Sync** runs when the app opens (at launch, and when it comes back to the front after 15 minutes or more), from *Sync now*, and once a day from a WorkManager job (`HealthSyncWorker`, built by Hilt's worker factory).
+  - The daily job needs Health Connect's background-read permission (`READ_HEALTH_DATA_IN_BACKGROUND`), which Settings → Health Connect asks for with its own button, where `HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND` is available. The job is scheduled only while a feature is on and that permission is granted, and checks again when it runs. Without it, Recomp syncs whenever you open it, and Settings says so.
+  - Each feature syncs on its own: one failing leaves the others synced, and its error shows under *Last synced*. So does a failure of the daily job before it read anything.
+  - Without the background permission, Health Connect answers only while the app is in front, so a sync begun at launch stops at the next feature once the app is in the background; the next launch carries on. It isn't recorded as an error.
+  - Nothing is asked for from before 30 days ago, Health Connect's limit without the history permission: sleep's 24-hour look-back for a night's start stops there too, so a night that began before it is missed for the oldest morning.
+- **Change tokens.** Sleep, workouts and InBody each have a change token (`getChangesToken` for that feature's record types), kept in the `device` store (§4). A sync asks what changed since the token:
+  - nothing: nothing is read;
+  - changes: workouts apply the changed and deleted sessions themselves; sleep and InBody read their last 30 days again, since a night or a measurement is put together from several records, and a deletion carries only a record id. (Reading only the changed nights would merge only some apps' sessions, so the full re-read is on purpose.)
+  - no token, or one that expired (30 days without a sync): a fresh token is taken first, then the last 30 days are read in full. Every write is keyed (a session by its record id, or its start and end; a draft by its record ids or its time; a night by its date), so a full re-read creates no duplicates. A first read goes back 30 days, which needs no history permission.
+  - A token is stored only after its work succeeded. After an import the tokens are dropped (`hc_database_stamp`, §4). Records whose data origin is this app are skipped, in reads and in changes.
+- **Steps (AR-01)** are Health Connect's aggregate (`aggregateGroupByPeriod`, sliced by calendar day in the phone's time zone) for the last 30 days, read on every sync. The aggregate de-duplicates across apps by your priority list.
+  - **Phone steps without another app:** on Android 14 with SDK extension 20 or later, Health Connect counts the phone's own steps once any app holds `READ_STEPS`, and an unfiltered aggregate includes them. Their data origin is a per-device synthetic package name since the June 2026 Health Connect update, so it's never named or filtered on. (`getCurrentDeviceDataSource()` exists only in the platform API, not in connect-client.)
+  - **The sensor fallback isn't built.** The reference phone runs Android 15 with SDK extension 24 (checked for M13), so Health Connect's own count covers it. On a phone too old for that, steps need an app that writes them, such as Google Fit.
+  - Google Fit writes its step count into Health Connect when its Health Connect access is on. **M0 finding:** it was off on the reference phone; it's turned on in Google Fit's settings. Google has deprecated the Fit APIs, so the app never calls Fit directly.
+  - Steps are keyed by calendar day (PRD §12.9), not the log date.
+- **Sleep (AR-02).** "The night that ended that morning" is the `SleepSessionRecord`s that ended between 18:00 the day before and noon (or now, if that's earlier), with overlapping sessions from several apps merged, not summed, and awake, out-of-bed and awake-in-bed stages left out (`SleepNight`, in `:domain`). It's stored to the half hour with `sleep_source = HEALTH_CONNECT`. A typed night is `TYPED`, and no sync replaces it; a tracker's night goes when its sessions do.
+- **Other apps' workouts (AR-04).** `ExerciseSessionRecord`s from any app but Recomp become completed extra sessions with `hc_record_id` set, a `yoga_detail` row holding the type ("Walk") and the minutes, and `notes` saying "from Google Fit" (the writing app's label). They're never written back (M16).
+  - `ExerciseTypes` maps the exercise type to a session kind: walking, running, cycling, swimming, rowing and the like → cardio; yoga and pilates → yoga; stretching → mobility; sports → sport. Strength training, weightlifting and calisthenics are never imported, and neither are "other workout", "exercise class", guided breathing or a type the table doesn't know.
+  - A session that overlaps a **strength** workout you logged in Recomp is skipped; if you log one over an import later, the import is dropped at the next sync. Strength times are real.
+  - An extra you log with *Log class* is stored as *Save* minus its length, so its clock times don't say when you exercised. Against extras, an import matches by **day and kind**: on a day you logged an extra of its kind yourself, the import stays (read-only, in History) but its `routine_id` is cleared, so it counts toward nothing. Clock overlap with a logged extra means nothing, so a logged class never removes a walk.
+  - Two apps' copies of one session (Google Fit and a watch app, say) are imports of one kind that share more than half of the shorter one's time (`ImportedWorkouts.sameSession`). Only the longer is kept; when it's deleted in Health Connect, the window is read again so the other comes back.
+  - It counts toward an extra of its kind through `routine_id`, set at import: the extra scheduled that day first, else the first of that kind in the persona, else none. An edit keeps that choice unless it moves the session to another day or kind. One that counts toward nothing is checked again after each sync, so it counts once your own session that day is gone, or once an extra of its kind exists.
+  - A full re-read drops an import Health Connect no longer has only when that app returned other sessions in the same read. Right after a restore, Health Connect's own data may not be back yet, and the imports stay.
+  - *Log class* prefills only from sessions you logged (`hc_record_id IS NULL`).
+- **InBody import (IB-07).** Body records whose data origin is the InBody app (`com.inbody2014.inbody`) are grouped into `scan_draft`s: records within a minute of each other are one measurement, and a group needs a weight.
   - **M0 finding:** the InBody app (v2.8.40) can write only `WeightRecord`, `BodyFatRecord` and `BasalMetabolicRateRecord` (plus steps and blood pressure). It doesn't write lean mass or body water, and Health Connect has no types for skeletal muscle mass or visceral fat.
+  - A draft opens the scan form with the time, weight, body fat % and BMR filled in, and fat mass worked out from the first two. Skeletal muscle mass and visceral fat are always typed in, with a shared image beside the form if you have one (§6.7, M15). The saved scan's `source` is `HEALTH_CONNECT`.
+  - A measurement within 10 minutes of a scan you typed makes no draft. A draft you dismissed or saved stays gone (`hc_inbody_handled`, §4), and a measurement deleted in Health Connect takes its draft with it.
+  - `hc_inbody_handled` holds Health Connect's record ids, which change when Health Connect restores onto a new phone. Saved scans are still matched within 10 minutes there, so only a dismissed draft can come back once, to be dismissed again.
   - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
-  - Skeletal muscle mass and visceral fat are always typed in, with a shared image beside the form if you have one (§6.7, M15).
-  - The InBody app's Health Connect access was off; turn it on in the InBody app.
-- **Sleep (AR-02):** typed in at the morning weigh-in, since the reference phone has no tracker. When a tracker writes `SleepSessionRecord`, it prefills the typed value (M13).
-- **Write (DA-04):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow (M16).
-- **Phone steps without another app:** on Android 14 with SDK extension 20 or later, Health Connect counts the phone's own steps once any app holds `READ_STEPS`, under a device data origin found with `getCurrentDeviceDataSource()`, never hard-coded. Its daily aggregate de-duplicates across apps by the user's priority list. Only on an older Health Connect does M13 read the `TYPE_STEP_COUNTER` sensor itself, sampled at launch and by a periodic worker, with reboot resets handled. M13 checks the reference phone's extension level.
-- **Sync** runs when the app opens, plus a daily WorkManager job. Reads are incremental using change tokens. Records whose data origin is this app are skipped.
-- **The app works fully without Health Connect.**
+  - The InBody app's Health Connect access was off on the reference phone; turn it on in the InBody app.
+- **Write (DA-04, M16):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow.
+- **The app works fully without Health Connect.** When it's missing or needs an update, Settings → Health Connect says so and nothing else changes.
 
 ### 6.4 Food data (database P0, scanning P1)
 
@@ -1063,7 +1122,7 @@ It covers every P1 requirement in the PRD, in the 16 milestones of the table abo
 - Each session records its installs (milestone, Room version, date) in `phone-ledger.md` in the shared notes folder, so parallel sessions don't install over each other.
 - Screens that need weeks of data are checked in a separate debug install with invented data (`applicationIdSuffix`, never committed), as in M4.
 
-**Room versions,** in the planned merge order: M5 takes 8, M6 9, M7 10, M11 11, M13 12, M14 13 and M17 14. The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
+**Room versions,** in the merge order: M5 took 8, M6 9, M7 10; then M11 takes 11, M13 12, M14 13 and M17 14 (the order fixed on 2026-11-21, when M11, M13 and M14 were built at once). The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
 
 **Parallel waves.** Two sessions at a time (agreed on 2026-10-18):
 
@@ -1431,6 +1490,22 @@ Tests cover:
 - **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M16's Health Connect writes must follow these edits later.
 - **Parallel:** with M9.
 
+**M10 results (2026-11-21, reference phone on Android 15; no Room change, built on M8).** Built to PRD §12.6 and the block above; §5.1 (*Rebuilding PRs*, *Editing a session*) and §5.5 describe what was built. Where the spec was silent, M10 took the readings now written into PRD §12.6:
+- A workout in History opens its summary, which has *Edit workout*; the editor works on a draft saved in one transaction. A past workout's summary doesn't offer to save its plan to the routine.
+- Extra sessions are listed too, and can be redated, changed and deleted from a small sheet.
+- Only *Working* sets count toward weekly sets, and the summary's deficit line follows the target in force that day.
+- Deleting the workout a Hold or Deload was chosen in, or removing the lift from it, clears that reset.
+- The exercise chart plots assistance itself for assisted lifts, from the sets' loads, with "lower is better" in its caption.
+
+Tests cover:
+- `PrRebuilderTest`: a from-scratch rebuild equals what finishing each session found; a raised old set takes a later PR away and a lowered one gives it back; added sets move the volume PR; deleting the first session leaves the next one without PRs; an incremental rebuild plus the untouched earlier rows equals a full one after six kinds of edit, including moving a session before and after the others; bodyweight and assisted rules.
+- `HistoryFlowTest` (real SQLite): the same incremental-versus-scratch check through the repository after retyping, set-type changes, adding and deleting sets, removing an exercise, moving dates and deleting; rebuilt rows point at their set and the session's end; deleting the last strength workout moves the rotation back, and moving a workout behind another moves it too; frozen targets and plans byte-for-byte unchanged while today's recommendation follows the edit; a fixed typo clears a false override; stall resets follow, stay or clear; superset regrouping; times, log date, tick times and notes; edits that can't be saved write nothing, and active or discarded workouts can't be edited or deleted; History's list and counts; extra-session edits; weekly sets from working sets of finished workouts only, across the week boundary; the band; the chart after an edit and for an assisted lift.
+- `MuscleVolumeTest`, `SessionEditTest`, `ExerciseChartTest`, `HistoryTextTest` and a band case in `SettingsPrefsTest`.
+
+On the phone:
+- A dev install with invented data: editing a past workout and saving said PRs were recomputed and showed the new ones and the new next target; *Delete workout* asked first and moved Today's next workout back; a workout finished under a deficit target showed the deficit line; the chart drew over 12 weeks and everything; the band saved. It found exercise history opening scrolled past the chart, now fixed by loading both together. The stall card's line wasn't seen, because in a deficit the invented lift was a session short of the longer stall window, as designed.
+- The release over the real data, looked at only: no crash; Train shows History and the weekly sets card; History lists the real sessions; a past summary offers *Edit workout* and no save to the routine. Nothing was edited or deleted.
+
 #### M11: Weekly programme review with AI
 
 *HM-06; PRD §12.7; Room v11.*
@@ -1443,7 +1518,7 @@ Tests cover:
   - *Apply* uses the existing paths: `PersonaRepository`'s target preview and save (`reason = REVIEW`), `TrainingRepository`'s routine edits with *Undo*, and Training setup for strength days. A deload is marked on the exercise (`deload_pending`), and the next workout start turns it into the stall card's deload (90% and a reset point), then clears it. *Deload the whole week* marks every exercise in the active routines.
   - Scheduled deloads from the experience policy (`ExperiencePolicy.deloadEveryWeeks`, PRD §4.3), on a Train card: a deload week every 6–8 weeks for intermediate lifters and 4–6 for advanced. Accepting marks every exercise `deload_pending`, like the review's. It's offered, never applied on its own, and never shown to beginners, whose policy deloads only on a stall.
   - The prompt on M5's check-in card, which lives in `ui/checkin`, so M11 stays out of `TodayScreen.kt`.
-- **Data (v11):**
+- **Data (v12):**
   ```text
   programme_review  id, week_start, created_at, sections, sent_text, ai_request_id,
                     response_json?, applied_json   -- which suggestions you applied
@@ -1458,7 +1533,7 @@ Tests cover:
   - targets sent in relative terms unless body trends are ticked;
   - unknown exercises and values outside the guardrails downgraded to advice;
   - the request against a mock server;
-  - the migration to v11.
+  - the migration to v12.
 - **Risks:**
   - A suggestion can be poor. Nothing applies without your tap, the guardrails hold, and the progression engine stays rules.
   - The report grows with many routines. It's capped at about 4,000 tokens, trimming per-exercise detail first.
@@ -1566,6 +1641,17 @@ Tests cover:
   - A change token expires after 30 days without a sync.
   - Health Connect can be missing or out of date on other phones. Everything works without it.
 - **Parallel:** with M14.
+
+**Results (2026-11-21, PR #19).** Built as §6.3 describes. The reference phone runs Android 15 with SDK extension 24, so Health Connect counts its own steps and **the sensor fallback isn't built** (nor its reboot test). Developed as 10→11 on a v10 main, then rebased onto M11 (v11) and renumbered to 11→12 before the install over the real data.
+- Tests: `:domain` `HealthImportTest` (sleep merging, InBody grouping and the 10-minute match, which extra an import counts toward, overlap, two apps' copies, step averages); `:app` `HealthFlowTest` (the scope's list, plus a restored phone, an import of a backup, per-feature permissions, Health Connect missing, one feature failing, and M8's review showing steps, sleep and imports; from the review: a watched class plus the same class logged by hand counting once, two apps' copies of a walk, *Track sleep* following Health Connect sleep, the 30-day read limit, a sync stopping in the background, imports kept after a restore, and the daily job's error), `ExerciseTypesTest` (every type in connect-client 1.1.0 either mapped or left out on purpose, none to strength), the migration, backup round trip, backup rules (the device store is left out) and settings.
+- M10's History and M12's nudge weren't on main yet, so they're not tested here. Both read `workout_session` and `daily_activity`: History should show rows with `hc_record_id` as read-only, and the nudge's steps part reads `daily_activity.steps` by calendar date.
+
+| Check | Result |
+|-------|--------|
+| Dev install (`app.recomp.m13dev`, invented onboarding values, uninstalled afterwards) | ✅ Settings → Health Connect listed the four features with what each needs. Each switch asked Health Connect for that feature's permissions only (Steps; Sleep; Exercise; BMR, body fat and weight). *Allow background sync* asked for background reads, Settings then said "once a day in the background", and WorkManager's daily job was scheduled. Every sync finished with no error. Today showed "301 of 8,000 steps", the phone's own count with no Google Fit access, and "How long did you sleep?", which became "Slept 7 h" from the sheet; the weigh-in sheet prefilled 7. Body's Activity card showed the 7-day steps average and the night. Nothing was written to Health Connect. |
+| M12's widget with M13's WorkManager setup (dev install, invented data) | ✅ WorkManager now starts on demand with Hilt's worker factory, which hands workers it doesn't build itself (Glance's `SessionWorker`) to WorkManager's default. The widget, pinned through the system's *Add to home screen* dialog, drew today's numbers and the next workout, and redrew after a food entry ("Protein so far 23 g · Calories 1,650 left"). |
+| Not seen on the phone | No other app's workout and no InBody measurement in Health Connect in the last 30 days, so no import or draft appeared; the tests cover them. A tracker's night (no tracker on the phone). The daily job running: WorkManager won't force a periodic job early, so the Hilt worker factory isn't exercised on the phone. |
+| Over the real data (2026-11-21, release c81e0cf on main ee35d37 with M11 and M12) | ✅ After an export (Settings → Data, 17:06, schema 11), the release installed over M11's v11 and migration 11→12 ran with no crash. Body matched what it showed before; Today showed its targets, the check-in card, the next routine, the day's yoga class and the week line, with no steps or sleep lines since nothing is turned on. Settings → Body data has *Steps: Off* and *Track sleep*; the Developer row is gone; Settings → Health Connect lists the four features, all off, and "Not synced yet". A second export is schema 12 with the same row count in all 22 earlier tables and an empty `scan_draft`. No Health Connect permission was granted in the real app, and nothing was logged or changed. |
 
 #### M14: Recipes
 
