@@ -27,6 +27,7 @@ import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
+import app.recomp.data.repo.ProgrammeReviewRepository
 import app.recomp.data.repo.ReviewRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
@@ -230,6 +231,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var reviews: ReviewRepository
         private set
+    lateinit var programmeReviews: ProgrammeReviewRepository
+        private set
 
     init {
         open()
@@ -253,6 +256,7 @@ class TestApp(private val dir: File) {
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
+        programmeReviews = ProgrammeReviewRepository(db, db.programmeReviewDao(), db.exerciseDao(), db.routineDao(), db.nutritionDao(), prefs, days, personas, training, progression, reviews, ai)
     }
 
     /** Simulates process death: everything not written to disk is gone. */
