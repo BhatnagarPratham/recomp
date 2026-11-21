@@ -224,7 +224,7 @@ data class Persona(
     val strengthDaysPerWeek: Int,
     val extras: List<ExtraSession>,    // name, kind and weekdays, e.g. a yoga class on Saturdays
     val weightSource: WeightSource,    // HOME_SCALE | SCAN | GYM_SCALE
-    val units: Units,                  // METRIC | IMPERIAL (display only; metric only until v1.1)
+    val units: Units,                  // METRIC | IMPERIAL: display and entry only (PR-05, M20); storage is always grams and cm
     val proteinRamp: Boolean,          // NU-03; defaults on for vegan, lacto-vegetarian and eggetarian
 )
 
@@ -1988,6 +1988,15 @@ Tests cover:
 - **Tests:** kg ↔ lb round trips on stored grams (225 lb is 102,058 g and shows as 225.0 lb); lb steps on the engine's integer grams; rounding only at display.
 - **Risks:** it touches every screen with a weight or a length, so it runs alone and last.
 - **Parallel:** none.
+- **Built (2026-11-22):**
+  - **One place for units.** `:domain`'s `units/UnitMath.kt` holds `UnitStyle` (units and the decimal mark), `UnitMath` (exact: 453.59237 g a pound, 2.54 cm an inch) and `LoadUnits`. The app formats through `Labels` (loads, steps, records), `BodyText` (body weight, lengths, height, scan text) and `GoalText`, with `LocalUnitStyle` provided at the root from the persona's `units`.
+    - Domain text builders (`Loads.describe`, `Targets`, `WarmupPlanner`, `ProgrammeReport`) take a required `UnitStyle`, so the compiler finds every caller.
+    - `UnitsGuardTest` fails on a string literal that spells "kg", "lb" or "cm" outside the formatters, the SI outputs (CSV, Health Connect) and the food parser.
+  - **No drift.** In lb every value comes from a lb number, never from adding grams: steppers work on the 0.01 lb grid (`LoadUnits.step`, `BodyText.weightStep`). The engine's targets are snapped before they're frozen (`ProgressionRepository`): an increase to the nearest grid point above what you lifted (`LoadUnits.increase`), a deload and warm-ups down, a repeat to 0.01 lb. So a typed 225 lb (102,058 g) hits a 225 lb target exactly.
+  - **Unchanged text keeps the stored value** (`LoadEntry`, the scan form, the weigh-in and waist sheets, onboarding's fields): opening and saving without a change never rewrites history.
+  - **The switch** (`UnitSwitch`, Settings → Body data → *Units*) moves only `exercise.increment_g`, to the nearest offered step in the new unit (`LoadUnits.nearestIncrementG`). Onboarding in lb moves the seeded library's kg default steps the same way (`LoadUnits.defaultIn`), keeping any step typed in the walkthrough.
+  - **What stays metric:** storage, protein (g per kg), internal thresholds, the CSV export and Health Connect writes. The M11 report to the AI uses display units, with a units line at the top and "." as its decimal mark.
+  - **Not converted, because it isn't built yet:** M17's tape sites and sit-and-reach. They should format through `BodyText.length`/`lengthStep` with the style, and the guard test checks that.
 
 ## 11. Risks and mitigations
 
