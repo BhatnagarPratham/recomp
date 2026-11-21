@@ -52,7 +52,8 @@ interface BackupStorage {
      * Copies [source] to [name] in the folder, replacing a file of that name, or to the single file when [name] is
      * null. It streams, so a backup with photos is never held in memory.
      */
-    suspend fun write(target: BackupTarget, name: String?, source: File)
+    /** Returns the document written, by the address the provider gave it: its name may not be [name] (a taken name gets "(n)"). */
+    suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile
 
     suspend fun delete(file: StoredFile)
 }
@@ -89,8 +90,9 @@ class AutoBackup @Inject constructor(
             backups.export(scratch.outputStream(), now, includePhotos = state.includePhotos)
             val result = if (target.folder) {
                 val name = BackupRotation.fileName(days.of(now))
-                storage.write(target, name, scratch)
-                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name, justWritten = name)
+                val written = storage.write(target, name, scratch)
+                // The file just written is known by its address, never its name: the provider may have renamed it.
+                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name) { it.uri == written.uri }
                 old.forEach { runCatching { storage.delete(it) } }
                 BackupRun.Done(name, old.size)
             } else {
@@ -219,14 +221,14 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
      * the file written in place. The single file (Google Drive) can't be renamed, so it's overwritten in place and
      * its size checked afterwards; a cut-short write is reported, and the next run writes it again.
      */
-    override suspend fun write(target: BackupTarget, name: String?, source: File) = withContext(Dispatchers.IO) {
+    override suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile = withContext(Dispatchers.IO) {
         val size = source.length()
         fun copyTo(uri: Uri) = open(uri).use { out -> source.inputStream().use { it.copyTo(out) } }
         if (name == null) {
             val uri = Uri.parse(target.uri)
             copyTo(uri)
             check(uri, size)
-            return@withContext
+            return@withContext StoredFile(target.label, uri.toString())
         }
         val before = files(target)
         // A part left by an earlier run that didn't finish goes first.
@@ -245,7 +247,8 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
             existing?.let { DocumentsContract.deleteDocument(resolver, it) }
             DocumentsContract.renameDocument(resolver, part, name)
         }.getOrNull()
-        if (renamed == null) {
+        if (renamed != null) return@withContext StoredFile(name, renamed.toString())
+        run {
             // No rename here: write the day's file in place, as before, and drop the part.
             runCatching { DocumentsContract.deleteDocument(resolver, part) }
             val uri = (if (existing != null && runCatching { resolver.openFileDescriptor(existing, "r")?.close() }.isSuccess) existing else null)
@@ -253,6 +256,7 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
                 ?: throw IOException("The folder didn't take a new file")
             copyTo(uri)
             check(uri, size)
+            StoredFile(name, uri.toString())
         }
     }
 

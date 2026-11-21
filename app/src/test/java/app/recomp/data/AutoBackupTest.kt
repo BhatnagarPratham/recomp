@@ -38,10 +38,22 @@ class FakeBackupStorage : BackupStorage {
 
     override suspend fun files(target: BackupTarget): List<StoredFile> = files.keys.map { StoredFile(it, "uri:$it") }
 
-    override suspend fun write(target: BackupTarget, name: String?, source: File) {
+    /** Like a provider that won't replace a taken name: the new file gets the next free "(n)". */
+    var renameTaken = false
+
+    override suspend fun write(target: BackupTarget, name: String?, source: File): StoredFile {
         fail?.let { throw it }
         val bytes = source.readBytes()
-        if (name == null) single = bytes else files[name] = bytes
+        if (name == null) {
+            single = bytes
+            return StoredFile(target.label, target.uri)
+        }
+        val actual = if (renameTaken && name in files) {
+            val base = name.removeSuffix(".zip")
+            (1..99).map { "$base ($it).zip" }.first { it !in files }
+        } else name
+        files[actual] = bytes
+        return StoredFile(actual, "uri:$actual")
     }
 
     override suspend fun delete(file: StoredFile) {
@@ -282,5 +294,19 @@ class AutoBackupTest {
         assertEquals("recomp-backup-2026-09-13.zip", run.name)
         assertEquals(listOf("recomp-backup-2026-09-13.zip"), storage.files.keys.filter { BackupRotation.dateOf(it) != null })
         assertTrue(storage.files.getValue(run.name).size > 2)
+    }
+
+    @Test
+    fun `a new backup the provider renamed is still the one kept, found by its address`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        storage.renameTaken = true
+        // The day already has two files; this run's lands as "(2)".
+        storage.files["recomp-backup-2026-09-13.zip"] = byteArrayOf(1)
+        storage.files["recomp-backup-2026-09-13 (1).zip"] = byteArrayOf(2)
+        app.clock.instant = sunday(1)
+        assertTrue(backup.run() is BackupRun.Done)
+        val left = storage.files.keys.filter { BackupRotation.dateOf(it) != null }
+        assertEquals(listOf("recomp-backup-2026-09-13 (2).zip"), left)
+        assertTrue("the new backup, not an old one", storage.files.getValue(left.single()).size > 2)
     }
 }
