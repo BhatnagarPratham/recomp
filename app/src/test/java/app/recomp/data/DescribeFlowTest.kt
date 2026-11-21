@@ -21,6 +21,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -64,9 +65,18 @@ class DescribeFlowTest {
 
     @After
     fun tearDown() {
+        // An estimate a test cancelled or let go of can still be finishing on another thread, and it ends on the main
+        // dispatcher. Resetting Main under it fails (CI saw it), so every view model's work is stopped and waited for first.
+        runBlocking {
+            withTimeout(5_000) {
+                viewModels.forEach { vm -> vm.viewModelScope.coroutineContext.job.run { cancel(); join() } }
+            }
+        }
         app.close()
         Dispatchers.resetMain()
     }
+
+    private val viewModels = mutableListOf<DescribeViewModel>()
 
     private fun viewModel(draftId: Long = 0) = DescribeViewModel(
         SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to draftId)),
@@ -74,7 +84,7 @@ class DescribeFlowTest {
         app.foodLog,
         app.foods,
         app.describer,
-    )
+    ).also(viewModels::add)
 
     private val phulka = EstimatedItem("Phulka", 2.0, "piece", 70.0, 210.0, 6.5, 42.0, 1.5, 4.0, Confidence.HIGH, "no ghee")
 
