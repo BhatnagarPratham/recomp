@@ -187,6 +187,7 @@ fun DataSettings(viewModel: DataViewModel = hiltViewModel()) {
     SettingRow("Export all data", "Save a file") { save.launch(BackupManager.fileName(LocalDate.now())) }
     SettingRow("Import a backup", "Replace") { open.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
     SettingRow("Export as CSV", "For spreadsheets") { saveCsv.launch(CsvExport.fileName(LocalDate.now())) }
+    AutoBackupSettings()
     safetyCopy?.let { at ->
         SettingRow("Restore the data from before the import", DataViewModel.dateTime(at), onClick = viewModel::openSafetyCopy)
     }
