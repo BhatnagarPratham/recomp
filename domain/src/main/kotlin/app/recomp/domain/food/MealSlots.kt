@@ -4,7 +4,13 @@ package app.recomp.domain.food
  * A meal slot (NU-10). Log rows store [key], so renaming keeps history. A [removed] slot isn't offered
  * for new entries but still shows on days that have entries in it.
  */
-data class MealSlot(val key: String, val name: String, val removed: Boolean = false)
+data class MealSlot(
+    val key: String,
+    val name: String,
+    val removed: Boolean = false,
+    /** When the meal usually starts, in minutes after midnight (PRD §12.5); see [MealTimes.start] for the defaults. */
+    val startMinutes: Int? = null,
+)
 
 object MealSlots {
     val DEFAULT: List<MealSlot> = listOf(

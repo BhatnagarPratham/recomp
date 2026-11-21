@@ -6,6 +6,7 @@ import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.AiResult
 import app.recomp.data.ai.AiSchema
 import app.recomp.data.ai.AiSender
+import app.recomp.data.ai.GoalSchema
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
@@ -32,6 +33,9 @@ import app.recomp.domain.ai.AiUrl
 import app.recomp.domain.ai.CheckedMeal
 import app.recomp.domain.ai.Clarification
 import app.recomp.domain.ai.EstimatorReply
+import app.recomp.domain.ai.GoalInterpretation
+import app.recomp.domain.ai.GoalPrompt
+import app.recomp.domain.ai.TokenUsage
 import app.recomp.domain.ai.MealCheck
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealPrompt
@@ -57,6 +61,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.SerializationException
 
 /**
  * The gate as screens show it: the state, plus the cap and the day a reached cap lifts (PRD §7.7 *Not ready*),
@@ -79,6 +84,13 @@ sealed interface EstimateResult {
     data class NotReady(val state: AiState) : EstimateResult
     /** [draftId] is the draft the description was kept as, when the caller asked for one (AI-02). */
     data class Failed(val status: AiStatus, val requestId: Long?, val draftId: Long? = null) : EstimateResult
+}
+
+/** How a goal description's reading ended (GL-03). Anything but [Read] with an intent falls back to the three questions. */
+sealed interface GoalReading {
+    data class Read(val reading: GoalInterpretation) : GoalReading
+    data class NotReady(val state: AiState) : GoalReading
+    data class Failed(val status: AiStatus) : GoalReading
 }
 
 /**
@@ -172,30 +184,56 @@ class AiRepository @Inject constructor(
 
     /** The gate right now, read fresh, for the check just before sending. */
     suspend fun state(): AiState {
+        locate()
+        return stateNow()
+    }
+
+    /**
+     * Finds where the server's name leads, when that matters (see [place]). It can take up to the resolver's
+     * limit on a network whose DNS hangs, so it's never done while holding the send lock.
+     */
+    private suspend fun locate() {
+        localNetwork.refresh()
+        place(prefs.ai.first().url)
+    }
+
+    /** The gate from what's already known, with no name lookup: what the send lock checks. */
+    private suspend fun stateNow(): AiState {
         val s = prefs.ai.first()
         val month = AiGate.monthStart(LocalDate.now(clock))
-        localNetwork.refresh()
-        place(s.url)
         return state(s, keys.stored.first(), aiDao.spendSince(startMs(month)), connectivity.online.first(), localNetwork.allowed.value, lookedUp.value)
     }
 
     /**
      * Estimates one meal (NU-17). The request always runs to completion, even if the caller stops waiting
      * (*Cancel*), so its spend is logged; the caller then just ignores the result.
+     *
+     * [kind] is what it's for: a meal to log, or *Will it fit?* (NU-18). [counted] lists what the local parser
+     * already matched (PRD §12.5): the model gets the whole description and returns only the rest, so with a
+     * counted list a reply with no items is a fine answer, not an unreadable one.
      */
-    suspend fun estimate(text: String, origin: Origin, clarification: Clarification? = null, draft: DraftPlan? = null): EstimateResult = withContext(NonCancellable) {
+    suspend fun estimate(
+        text: String,
+        origin: Origin,
+        clarification: Clarification? = null,
+        draft: DraftPlan? = null,
+        kind: AiKind = AiKind.MEAL_TEXT,
+        counted: List<String> = emptyList(),
+    ): EstimateResult = withContext(NonCancellable) {
+        // The name lookup first, outside the lock: a hanging DNS then holds up this estimate only.
+        locate()
         // Check the gate and reserve the request's cost in one step, so requests made at the same time each see the
         // others' reservations and the cap holds (AI-03).
         val (request, pending) = sending.withLock {
-            val state = state()
+            val state = stateNow()
             if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
             val s = prefs.ai.first()
             // The key of the provider in use, and only over https: a server reached over plain http is never sent one.
             // A compatible server gets its key only if it's the server the key was entered for.
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
             val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
-            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification))
-            request to reserve(request)
+            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification, counted))
+            request to reserve(kind, request.target, request.upperBound)
         }
         val reply = try {
             estimator.estimate(request)
@@ -204,7 +242,8 @@ class AiRepository @Inject constructor(
             EstimatorReply(AiStatus.UNEXPECTED, null, request.model, emptyList(), latencyMs = 0, responseText = null, detail = e.javaClass.simpleName)
         }
         val checked = reply.estimate?.takeIf { reply.status == AiStatus.OK }?.let(MealCheck::check)
-        val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty()) AiStatus.INVALID else reply.status
+        val nothingNew = checked != null && checked.items.isEmpty() && checked.rejected.isEmpty() && counted.isNotEmpty()
+        val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty() && !nothingNew) AiStatus.INVALID else reply.status
         aiDao.updateRequest(
             pending.copy(
                 model = reply.servedBy,
@@ -232,8 +271,10 @@ class AiRepository @Inject constructor(
      * upper bound. Like a meal, it runs to completion even if the caller stops waiting, so its spend is logged.
      */
     suspend fun coach(system: String, user: String, schema: AiSchema): CoachSent = withContext(NonCancellable) {
+        // As for a meal: the name lookup outside the lock, so a hanging DNS never holds up other requests.
+        locate()
         val (call, pending) = sending.withLock {
-            val state = state()
+            val state = stateNow()
             if (state != AiState.READY) return@withContext CoachSent(AiStatus.UNEXPECTED, null, null, null, notReady = state)
             val s = prefs.ai.first()
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext CoachSent(AiStatus.AUTH, null, null, null, notReady = AiState.NO_KEY) else null
@@ -268,10 +309,58 @@ class AiRepository @Inject constructor(
         aiDao.request(requestId)?.let { aiDao.updateRequest(it.copy(status = AiStatus.INVALID)) }
     }
 
+    /**
+     * Reads a goal description (GL-03, TRD §5.7): the text you typed in, an intent and at most one follow-up question
+     * out. The request carries [text] and, the second time, [followUp]'s question and answer: nothing else, no body
+     * data. Like an estimate it runs to completion and is logged and costed whatever happens; every failure comes back
+     * as a [GoalReading] for the caller to fall back to the three questions.
+     */
+    suspend fun interpretGoal(text: String, followUp: Clarification? = null): GoalReading = withContext(NonCancellable) {
+        val (call, pending) = sending.withLock {
+            val state = state()
+            if (state != AiState.READY) return@withContext GoalReading.NotReady(state)
+            val s = prefs.ai.first()
+            val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext GoalReading.NotReady(AiState.NO_KEY) else null
+            val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
+            val user = GoalPrompt.user(text, followUp)
+            val bound = AiPricing.upperBound(target.model, GoalPrompt.SYSTEM.length + user.length, target.provider.outputBound, rates = target.rates)
+            AiCall(target, GoalPrompt.SYSTEM, user, GoalSchema.schema, bound) to reserve(AiKind.GOAL, target, bound)
+        }
+        val result = try {
+            sender.send(call)
+        } catch (e: Exception) {
+            // A provider returns its failures; anything thrown is a bug, which still falls back to the questions.
+            AiResult(AiStatus.UNEXPECTED, null, null, call.target.model, emptyList(), latencyMs = 0, detail = e.javaClass.simpleName)
+        }
+        val reading = result.json?.takeIf { result.status == AiStatus.OK }?.let { json ->
+            try {
+                GoalSchema.parse(json.toString(), answered = followUp != null)
+            } catch (e: SerializationException) {
+                null
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+        }
+        val status = if (result.status == AiStatus.OK && reading == null) AiStatus.INVALID else result.status
+        aiDao.updateRequest(
+            pending.copy(
+                model = result.servedBy,
+                inputTokens = result.attempts.sumOf { it.inputTokens },
+                outputTokens = result.attempts.sumOf { it.outputTokens },
+                cacheReadTokens = result.attempts.sumOf { it.cacheReadTokens },
+                cacheWriteTokens = result.attempts.sumOf { it.cacheWriteTokens },
+                costUsd = AiPricing.cost(result.attempts, LocalDate.now(clock)),
+                status = status,
+                latencyMs = result.latencyMs,
+                responseJson = result.text,
+            ),
+        )
+        if (reading != null) GoalReading.Read(reading) else GoalReading.Failed(status)
+    }
+
     /** Serializes the gate check with the reservation it leads to. */
     private val sending = Mutex()
 
-    private suspend fun reserve(request: MealRequest): AiRequestLogEntity = reserve(AiKind.MEAL_TEXT, request.target, request.upperBound)
 
     /**
      * Logs the request as PENDING at its upper-bound cost before it's sent. Monthly spend counts it at once, and

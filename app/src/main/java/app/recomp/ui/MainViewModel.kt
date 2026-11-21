@@ -12,6 +12,7 @@ import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.food.FoodSeeder
 import app.recomp.data.repo.CheckinRepository
+import app.recomp.data.repo.GoalRepository
 import app.recomp.data.repo.HealthRepository
 import app.recomp.healthconnect.HealthSyncScheduler
 import app.recomp.data.repo.PersonaRepository
@@ -70,6 +71,7 @@ class MainViewModel @Inject constructor(
     backups: BackupManager,
     private val checkins: CheckinRepository,
     reminders: app.recomp.reminders.ReminderScheduler,
+    goals: GoalRepository,
     private val scanImages: ScanImages,
     private val body: BodyRepository,
     private val health: HealthRepository,
@@ -107,6 +109,8 @@ class MainViewModel @Inject constructor(
             _restoreNotice.value = backups.finishPendingRestore()
             // Weeks that ended while the app was closed, against the data as the restore left it (PRD §12.1).
             checkins.catchUp()
+            // GL-06: a maintenance break whose end date has passed resumes now, and the finish line is checked.
+            runCatching { goals.refresh() }
             // After the restore, so an import's data is what Health Connect is read against (TRD §6.3).
             syncHealthNow()
         }

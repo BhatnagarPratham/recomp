@@ -48,7 +48,6 @@ import app.recomp.domain.persona.FoodRegion
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.GuardrailNote
 import app.recomp.domain.persona.Intent
-import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
@@ -129,6 +128,17 @@ fun OnboardingScreen(onDone: () -> Unit, onExit: () -> Unit, viewModel: Onboardi
         }
     }
 
+    if (ui.askGoalNotice) {
+        ConfirmDialog(
+            title = ui.goalNoticeTitle,
+            text = ui.goalNotice,
+            confirm = "Continue",
+            dismiss = "Cancel",
+            onDismiss = viewModel::dismissGoalNotice,
+            onConfirm = viewModel::confirmGoalNotice,
+        )
+    }
+
     if (ui.askAggressive) {
         ConfirmDialog(
             title = "An aggressive pace",
@@ -158,7 +168,7 @@ private fun LazyListScope.presetStep(ui: OnboardingUi, vm: OnboardingViewModel) 
         if (ui.currentSplit != null) "Your training setup stays as it is. The preset fills in the rest, and you can change everything."
         else "Every value is pre-filled for you to review, and you can change any of them later in Settings.",
     )
-    items(Presets.all, key = { it.key }) { preset ->
+    items(ui.presets, key = { it.key }) { preset ->
         OptionCard(preset.name, preset.summary, selected = preset.key == ui.presetKey) { vm.pickPreset(preset.key) }
     }
 }
@@ -199,6 +209,13 @@ private fun LazyListScope.aboutStep(ui: OnboardingUi, vm: OnboardingViewModel) {
     items(ActivityLevel.entries) { level ->
         OptionCard(Labels.activity(level), "× ${level.factor} on your resting calories", selected = level == ui.about.activity) { vm.updateAbout { it.copy(activity = level) } }
     }
+    // GL-09: shown to everyone (PRD §12.15).
+    item {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SwitchRow(GoalText.PREGNANT_TITLE, GoalText.PREGNANT_BODY, ui.about.pregnant) { on -> vm.updateAbout { it.copy(pregnant = on) } }
+            if (ui.about.pregnant) Text(GoalText.PREGNANT_ON, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+        }
+    }
 }
 
 // 3. Goal (PRD §4.6, GL-01)
@@ -213,22 +230,63 @@ private fun LazyListScope.goalStep(ui: OnboardingUi, vm: OnboardingViewModel) {
             GoalText.cardDescription(goal),
             selected = goal == ui.goal.goal && !ui.goal.notSure,
             enabled = available,
-            note = if (available) null else GoalText.LOW_BMI_CARD,
+            note = if (available) null else GoalText.unavailable(profile?.let(Guardrails::deficitBlock)),
         ) { vm.pickGoal(goal) }
     }
-    item {
-        // With AI off (all of M3a) nothing would read free text, so there's no text box (PRD §4.6).
-        // TODO(GL-03): with AI on, "Describe your goal" adds a text box that Claude maps to an intent.
-        OptionCard("Not sure? Answer 3 quick questions", "Get a suggestion with the reason for it.", selected = ui.goal.notSure, onClick = vm::notSure)
+    if (ui.aiReady) {
+        item { DescribeGoalCard(ui, vm) }
+    } else {
+        // With AI off, or not ready, nothing would read free text, so there's no text box (PRD §4.6).
+        item { OptionCard("Not sure? Answer 3 quick questions", "Get a suggestion with the reason for it.", selected = ui.goal.notSure, onClick = vm::notSure) }
+    }
+}
+
+/** *Describe your goal* (GL-03): free text, at most one follow-up question, then the same rules as the three questions. */
+@Composable
+private fun DescribeGoalCard(ui: OnboardingUi, vm: OnboardingViewModel) {
+    val form = ui.goal
+    val question = form.aiQuestion
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(GoalText.DESCRIBE_TITLE, style = MaterialTheme.typography.titleMedium)
+            Text(GoalText.DESCRIBE_BODY, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(
+                value = form.describe,
+                onValueChange = vm::setDescription,
+                label = { Text("Your goal") },
+                enabled = !ui.aiBusy,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (question != null) {
+                Text(question, style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = form.aiAnswer,
+                    onValueChange = vm::setFollowUpAnswer,
+                    label = { Text("Your answer") },
+                    enabled = !ui.aiBusy,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Button(
+                onClick = vm::describeGoal,
+                enabled = !ui.aiBusy && form.describe.isNotBlank() && (question == null || form.aiAnswer.isNotBlank()),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) { Text(if (ui.aiBusy) "Reading…" else if (question != null) "Send answer" else "Suggest a goal") }
+            Text("Sends only what you type here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = vm::notSure, enabled = !ui.aiBusy, modifier = Modifier.heightIn(min = 48.dp)) { Text(GoalText.THREE_QUESTIONS) }
+        }
     }
 }
 
 private fun LazyListScope.questionsStep(ui: OnboardingUi, vm: OnboardingViewModel) {
     heading("Three quick questions")
+    ui.goal.aiNote?.let { note -> item { Text(note, color = MaterialTheme.colorScheme.secondary) } }
     item {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("What matters most to you?", style = MaterialTheme.typography.titleMedium)
-            ChoiceChips(Intent.entries, ui.goal.intent, ::intentLabel, { i -> vm.answer { it.copy(intent = i) } })
+            ChoiceChips(Intent.entries, ui.goal.intent, GoalText::intent, { i -> vm.answer { it.copy(intent = i) } })
         }
     }
     item {
@@ -252,13 +310,6 @@ private fun LazyListScope.questionsStep(ui: OnboardingUi, vm: OnboardingViewMode
             }
         }
     }
-}
-
-private fun intentLabel(i: Intent) = when (i) {
-    Intent.LOSE_FAT -> "Lose fat"
-    Intent.BUILD_MUSCLE -> "Build muscle"
-    Intent.BOTH -> "Both"
-    Intent.MAINTAIN -> "Stay as I am"
 }
 
 private fun LazyListScope.suggestionStep(ui: OnboardingUi, vm: OnboardingViewModel) {
@@ -495,6 +546,19 @@ private fun LazyListScope.targetsStep(ui: OnboardingUi, vm: OnboardingViewModel)
     val policy = ui.plan?.policy ?: return
     heading("Your targets", "The same every day, judged on your 7-day average.")
     guardrailNotes(ui.guarded?.notes.orEmpty().filter { it != GuardrailNote.AGGRESSIVE_NEEDS_ACK })
+    // PS-04: what the scale will do after this change of goal, and the fresh baseline.
+    ui.expectation?.let { e ->
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("What to expect", style = MaterialTheme.typography.titleMedium)
+                    Text(GoalText.expect(e))
+                    if (ui.switching) Text(GoalText.FRESH_START, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    if (ui.endsBreak) item { Text(GoalText.ENDS_BREAK, color = MaterialTheme.colorScheme.secondary) }
     item {
         TargetList(
             targets = targets,

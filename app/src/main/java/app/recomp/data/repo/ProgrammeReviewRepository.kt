@@ -37,10 +37,12 @@ import app.recomp.domain.coach.TargetTerms
 import app.recomp.domain.coach.TrainingFacts
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.nutrition.GoalPolicy
+import app.recomp.domain.nutrition.NutritionCalculator
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.FinishLine
 import app.recomp.domain.persona.GoalPlan
+import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.progression.Action
 import app.recomp.domain.training.WeeklyPlan
@@ -126,11 +128,18 @@ class ProgrammeReviewRepository @Inject constructor(
         return Guardrails.apply(profile, stored, day).plan
     }
 
+    /**
+     * GL-09 (M19): while pregnant or breastfeeding, an estimate below the formula's TDEE is never maintenance, in the
+     * report or the check of its suggestions, so no suggestion can land under it.
+     */
+    private suspend fun maintenanceFor(profile: Profile, plan: GoalPlan, day: LocalDate, estimate: Double): Double =
+        if (profile.pregnant) maxOf(estimate, NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, day, personas.leanMassKg(day))).tdeeKcal) else estimate
+
     private suspend fun goalFacts(day: LocalDate): GoalFacts? {
         val plan = plan(day) ?: return null
         val target = nutritionDao.targetOn(day) ?: return null
         val profile = personas.currentProfile() ?: return null
-        val maintenance = personas.maintenance()?.kcal?.toDouble() ?: target.tdeeEstimate.toDouble()
+        val maintenance = maintenanceFor(profile, plan, day, personas.maintenance()?.kcal?.toDouble() ?: target.tdeeEstimate.toDouble())
         return GoalFacts(
             goal = plan.goal,
             pace = plan.pace?.name?.lowercase()?.replaceFirstChar { it.uppercase() },
@@ -257,7 +266,8 @@ class ProgrammeReviewRepository @Inject constructor(
         val day = days.today()
         val profile = personas.currentProfile()
         val plan = plan(day)
-        val maintenance = personas.maintenance()?.kcal?.toDouble() ?: nutritionDao.targetOn(day)?.tdeeEstimate?.toDouble() ?: 0.0
+        val estimate = personas.maintenance()?.kcal?.toDouble() ?: nutritionDao.targetOn(day)?.tdeeEstimate?.toDouble() ?: 0.0
+        val maintenance = if (profile != null && plan != null) maintenanceFor(profile, plan, day, estimate) else estimate
         // A reply's % and g/kg mean the report's numbers; the guardrails are today's.
         val routineIds = stored.routines.values.toSet()
         val kcalRange = if (profile != null && plan != null && maintenance > 0) {

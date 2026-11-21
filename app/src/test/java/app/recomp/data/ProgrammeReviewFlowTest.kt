@@ -1,5 +1,6 @@
 package app.recomp.data
 
+import app.recomp.domain.nutrition.TargetOverrides
 import app.recomp.data.ai.AiEffort
 import app.recomp.data.ai.AiResult
 import app.recomp.data.db.TargetReason
@@ -70,10 +71,9 @@ class ProgrammeReviewFlowTest {
     private fun at(day: LocalDate, hour: Int = 12): Long = day.atTime(hour, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     /** Invented: a fat-loss plan for a 175 cm, 84 kg man of 30; [weightKg] 54 puts him under BMI 18.5. */
-    private suspend fun onboard(weightKg: Double = 84.0) {
+    private suspend fun onboard(weightKg: Double = 84.0, profile: Profile = Profile(Sex.MALE, LocalDate.of(1996, 1, 1), heightCm = 175.0, weightKg = weightKg)) {
         val start = week.minusWeeks(3)
         val plan = GoalPlan.of(Goal.FAT_LOSS, Pace.STANDARD, 76.0, FinishLine.GoalWeight, start)
-        val profile = Profile(Sex.MALE, LocalDate.of(1996, 1, 1), heightCm = 175.0, weightKg = weightKg)
         app.personas.completeOnboarding(OnboardingResult(Presets.REFERENCE.draft.copy(goal = plan), Presets.REFERENCE.key, emptyList(), profile, LocalTime.MIDNIGHT), now = at(start))
     }
 
@@ -368,6 +368,28 @@ class ProgrammeReviewFlowTest {
         // Advice can't be applied.
         assertNull(reviews.apply(id, 0))
         assertEquals(emptySet<Int>(), reviews.view(id)!!.applied)
+    }
+
+    @Test
+    fun `no deficit while pregnant or breastfeeding, even from a low maintenance estimate (M19, GL-09)`() = runBlocking {
+        // Invented: the switch arrives in the body data after a fat-loss plan, and a check-in estimate sits low.
+        onboard()
+        app.prefs.edit { setProfile(Profile(Sex.FEMALE, LocalDate.of(1994, 3, 1), heightCm = 165.0, weightKg = 62.0, pregnant = true)) }
+        app.db.checkinDao().upsert(WeeklyCheckinEntity(week.minusWeeks(1), computedAt = 1, windowDays = 21, loggedDays = 21, weighIns = 21, tdeeObs = 1400, tdeePrev = 1500, tdeeNew = 1450))
+        ready()
+        reply("""{"summary":"s","suggestions":[${suggestion("CALORIES", value = -10.0)},${suggestion("CALORIES", value = 0.0)},${suggestion("CALORIES", value = 5.0)}]}""")
+        val id = (reviews.send(week, ReportSections()) as ReviewSendResult.Done).reviewId
+        val view = reviews.view(id)!!
+        // 10% under maintenance is refused outright.
+        assertEquals(AdviceOnly.OUTSIDE_GUARDRAILS, view.suggestions[0].adviceOnly)
+        assertNull(reviews.apply(id, 0))
+        // Whatever can be applied is at or above the formula's maintenance, never the low estimate.
+        val formula = app.personas.targetsFor(app.personas.currentProfile()!!, GoalPlan.of(Goal.MAINTAIN, Pace.STANDARD, null, null, LocalDate.now()), TargetOverrides(), LocalDate.now()).tdeeKcal
+        view.suggestions.drop(1).forEach { s ->
+            val change = s.change as? Change.Calories
+            assertTrue("$s", change == null || change.kcal >= Math.round(formula / 10.0) * 10 - 10)
+        }
+        assertTrue(view.suggestions.drop(1).any { it.change != null })
     }
 
     @Test

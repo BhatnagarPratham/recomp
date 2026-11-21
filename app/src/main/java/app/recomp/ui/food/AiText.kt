@@ -80,6 +80,9 @@ object AiText {
             "AI is paused until ${day(gate.resumesOn)}: this month's ${usd(gate.capUsd ?: 0.0)} cap is reached. Keep this as a draft for later."
     }
 
+    /** The reason alone, without the draft advice that follows it: for *Will it fit?*, which keeps no drafts. */
+    fun firstSentence(text: String): String = text.substringBefore(". ").removeSuffix(".") + "."
+
     /** Android's local-network permission was refused: said outright, since the request itself would only time out. */
     const val LOCAL_NETWORK_REFUSED =
         "Your AI server is on your local network, and Recomp isn't allowed to reach devices there. Allow it (Android lists it " +
@@ -141,26 +144,45 @@ object AiText {
      * in Settings. [host] is an OpenAI-compatible server's.
      */
     fun privacy(provider: AiProviderId, host: String? = null): String {
-        val to = when (provider) {
-            AiProviderId.ANTHROPIC -> "Anthropic"
-            AiProviderId.OPENAI -> "OpenAI"
-            AiProviderId.GEMINI -> "Google"
-            AiProviderId.COMPATIBLE -> if (host != null) "the server at $host" else "the server you set"
-        }
+        val to = recipient(provider, host)
         val sends = "Describe it sends your description and its origin to $to, with your diet and food region, your portion " +
             "sizes and your most-used own foods (names and values), so the estimate fits how you eat. It never sends your " +
             "name, body data, targets or food log."
-        val after = when (provider) {
+        return sends + after(provider)
+    }
+
+    /**
+     * What a goal description sends (GL-03, TRD §5.7): shown before the first one with each provider. Only the text
+     * you typed, and your answer to the one follow-up question.
+     */
+    fun goalPrivacy(provider: AiProviderId, host: String? = null): String =
+        "Describe your goal sends the text you type to ${recipient(provider, host)}, and your answer if it asks one question. Nothing else: " +
+            "not your name, body data, targets or history. The reply only says what you're after; the same rules as the three " +
+            "questions pick the goal." + after(provider)
+
+    fun goalPrivacy(s: AiSettings): String = goalPrivacy(s.provider, s.url?.host)
+
+    private fun recipient(provider: AiProviderId, host: String?) = when (provider) {
+        AiProviderId.ANTHROPIC -> "Anthropic"
+        AiProviderId.OPENAI -> "OpenAI"
+        AiProviderId.GEMINI -> "Google"
+        AiProviderId.COMPATIBLE -> if (host != null) "the server at $host" else "the server you set"
+    }
+
+    private fun after(provider: AiProviderId): String {
+        return when (provider) {
             AiProviderId.ANTHROPIC -> " Requests use your API key and are billed to your Anthropic account."
             AiProviderId.OPENAI -> " Requests use your API key and are billed to your OpenAI account."
             AiProviderId.GEMINI -> " Requests use your API key. On Google's free tier, Google may use what you send to improve its " +
                 "products and reviewers may read it; on the paid tier it doesn't."
             AiProviderId.COMPATIBLE -> " What happens to it there is up to whoever runs that server."
         }
-        return sends + after
     }
 
     fun privacy(s: AiSettings): String = privacy(s.provider, s.url?.host)
+
+    /** The same for *Will it fit?* (NU-18), which is its own kind of request and sends the same things. */
+    fun fitPrivacy(s: AiSettings): String = privacy(s).replaceFirst("Describe it sends", "Will it fit? sends")
 
     /** Where the key comes from, per provider. Every key is stored the same way. */
     fun keyHelp(provider: AiProviderId): String = when (provider) {

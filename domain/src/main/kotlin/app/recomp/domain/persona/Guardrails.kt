@@ -1,7 +1,9 @@
 package app.recomp.domain.persona
 
+import app.recomp.domain.checkin.AdaptiveTdee
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
+import app.recomp.domain.nutrition.KcalRounding
 import app.recomp.domain.nutrition.Pace
 import java.time.LocalDate
 import kotlin.math.min
@@ -10,6 +12,10 @@ import kotlin.math.min
 enum class GuardrailNote {
     /** BMI below 18.5: deficit goals are unavailable, so the plan became Maintain. */
     LOW_BMI_MAINTAIN,
+    /** Pregnant or breastfeeding: deficit goals are unavailable, so the plan became Maintain (GL-09). */
+    PREGNANT_MAINTAIN,
+    /** Pregnant or breastfeeding: a calorie target you set below maintenance isn't used. */
+    PREGNANT_KCAL_AT_MAINTENANCE,
     /** Under 18: deficits are limited to Gentle, with a note to involve a parent or doctor. */
     UNDER_18_GENTLE_ONLY,
     /** An aggressive pace needs one acknowledgement of its warning. */
@@ -30,11 +36,37 @@ object Guardrails {
 
     fun isDeficitGoal(goal: Goal): Boolean = goal == Goal.FAT_LOSS || goal == Goal.RECOMP
 
-    fun deficitAllowed(profile: Profile): Boolean = profile.bmi >= MIN_DEFICIT_BMI
+    /**
+     * Whether anything may put this person in a deficit: a goal, a check-in proposal (M5) or a review suggestion
+     * (M11). Not below BMI 18.5, and not while pregnant or breastfeeding.
+     */
+    fun deficitAllowed(profile: Profile): Boolean = deficitBlock(profile) == null
+
+    /** Why deficits are unavailable, or null when they aren't. Pregnancy is named first: it's the one you can switch. */
+    fun deficitBlock(profile: Profile): GuardrailNote? = when {
+        profile.pregnant -> GuardrailNote.PREGNANT_MAINTAIN
+        profile.bmi < MIN_DEFICIT_BMI -> GuardrailNote.LOW_BMI_MAINTAIN
+        else -> null
+    }
+
+    /**
+     * The check-in doesn't judge the week ending [weekEnd] (GL-09): while pregnant or breastfeeding, and afterwards until
+     * the estimate's longest window (28 days) starts on or after the day it was switched off, since until then it still
+     * holds the pregnancy's gain. Its estimate is floored at the formula's TDEE for those weeks too.
+     */
+    fun pregnancyQuiet(profile: Profile, weekEnd: LocalDate): Boolean =
+        profile.pregnant || profile.pregnantUntil?.let { weekEnd.minusDays(AdaptiveTdee.WEEKLY_WINDOW_DAYS - 1L).isBefore(it) } == true
+
+    /**
+     * Your own calorie target as the guardrails allow it (GL-09): while pregnant or breastfeeding, one below
+     * [maintenanceKcal] isn't used. The intake floor is applied by the calculator, as for every target.
+     */
+    fun kcalOverride(profile: Profile, kcal: Int?, maintenanceKcal: Double): Int? =
+        kcal?.takeUnless { profile.pregnant && it < KcalRounding.nearest(maintenanceKcal) }
 
     fun isMinor(profile: Profile, today: LocalDate): Boolean = profile.ageOn(today) < ADULT_AGE
 
-    /** Goals offered on the goal cards; deficits are greyed out below BMI 18.5. */
+    /** Goals offered on the goal cards; deficits are greyed out below BMI 18.5 and while pregnant or breastfeeding. */
     fun goalAvailable(goal: Goal, profile: Profile): Boolean = !isDeficitGoal(goal) || deficitAllowed(profile)
 
     fun allowedPaces(goal: Goal, profile: Profile, today: LocalDate): List<Pace> =
@@ -53,8 +85,9 @@ object Guardrails {
     fun apply(profile: Profile, plan: GoalPlan, today: LocalDate): Guarded {
         val notes = mutableListOf<GuardrailNote>()
         var result = plan
-        if (isDeficitGoal(plan.goal) && !deficitAllowed(profile)) {
-            notes += GuardrailNote.LOW_BMI_MAINTAIN
+        val block = deficitBlock(profile)
+        if (isDeficitGoal(plan.goal) && block != null) {
+            notes += block
             result = GoalPlan.of(Goal.MAINTAIN, Pace.STANDARD, goalWeightKg = null, finishLine = null, startedOn = plan.startedOn)
         } else if (isDeficitGoal(plan.goal) && isMinor(profile, today)) {
             notes += GuardrailNote.UNDER_18_GENTLE_ONLY

@@ -194,13 +194,16 @@ abstract class HttpProvider : AiProvider {
          *
          * A usage with no input and no output isn't one: an empty object, zeros from a proxy, or counts that aren't
          * numbers. The request was answered, so it's costed at its upper bound, as a reply with no usage at all is.
+         * A usage with only one of the two is half a usage: the missing count is costed at its upper bound, so a
+         * server that reports only its prompt (or only its reply) never gets the other half free.
          */
         fun usage(call: AiCall, prompt: Long, cached: Long, output: Long, cacheWrite: Long = 0): TokenUsage {
             if (prompt <= 0 && output <= 0) return call.upperBound
-            val total = prompt.coerceAtLeast(0)
-            val read = cached.coerceIn(0, total)
-            val written = cacheWrite.coerceIn(0, total - read)
-            return TokenUsage(call.target.model, total - read - written, output.coerceAtLeast(0), read, written, call.target.rates)
+            val bound = call.upperBound
+            if (prompt <= 0) return TokenUsage(call.target.model, bound.inputTokens, output, 0, 0, call.target.rates)
+            val read = cached.coerceIn(0, prompt)
+            val written = cacheWrite.coerceIn(0, prompt - read)
+            return TokenUsage(call.target.model, prompt - read - written, if (output <= 0) bound.outputTokens else output, read, written, call.target.rates)
         }
     }
 }

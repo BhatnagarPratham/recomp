@@ -19,8 +19,11 @@ import org.junit.Test
 
 /** What a History row and the weekly sets card say. */
 class HistoryTextTest {
-    private fun row(kind: SessionKind, routine: String?, minutes: Long, exercises: Int = 0, sets: Int = 0, style: String? = null, durationMin: Int? = null) = HistoryRow(
-        WorkoutSessionEntity(1, 1, kind, SessionStatus.COMPLETED, startedAt = 0, endedAt = minutes * 60_000, logDate = LocalDate.of(2026, 11, 10)),
+    private fun row(
+        kind: SessionKind, routine: String?, minutes: Long, exercises: Int = 0, sets: Int = 0, style: String? = null, durationMin: Int? = null,
+        notes: String? = null, hcRecordId: String? = null,
+    ) = HistoryRow(
+        WorkoutSessionEntity(1, 1, kind, SessionStatus.COMPLETED, startedAt = 0, endedAt = minutes * 60_000, logDate = LocalDate.of(2026, 11, 10), notes = notes, hcRecordId = hcRecordId),
         routine, exercises, sets, style, durationMin,
     )
 
@@ -69,5 +72,11 @@ class HistoryTextTest {
         assertEquals("A chart appears after two sessions.", ExerciseChartText.notEnough(one))
         val two = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d.minusDays(200), 8.0), ChartValue(d, 10.0)), emptyList())
         assertEquals("Fewer than two sessions in the last 12 weeks. Choose Everything to see them all.", ExerciseChartText.notEnough(two))
+    }
+
+    @Test
+    fun `another app's session says where it came from, and your own notes never show in the list`() {
+        assertEquals("35 min · Walk · from Google Fit", historyDetail(row(SessionKind.CARDIO, null, 35, style = "Walk", durationMin = 35, notes = "from Google Fit", hcRecordId = "hc-1")))
+        assertEquals("60 min · Vinyasa", historyDetail(row(SessionKind.YOGA, "Yoga class", 60, style = "Vinyasa", durationMin = 60, notes = "Hips")))
     }
 }

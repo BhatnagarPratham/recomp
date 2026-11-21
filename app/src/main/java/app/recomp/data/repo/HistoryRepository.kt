@@ -77,7 +77,7 @@ class HistoryRepository @Inject constructor(
 
     /** A completed strength workout with its logged sets, or null if it can't be edited here. */
     suspend fun editable(sessionId: Long): EditableSession? {
-        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind == SessionKind.STRENGTH } ?: return null
+        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind == SessionKind.STRENGTH && it.hcRecordId == null } ?: return null
         val exercises = workoutDao.sessionExercises(sessionId).map { row ->
             row.copy(sets = row.sets.filter { it.completedAt != null }.sortedWith(compareBy({ it.setIndex }, { it.id })))
         }
@@ -97,7 +97,7 @@ class HistoryRepository @Inject constructor(
      * - PRs are rebuilt for every exercise the workout had, from the earlier of its old and new start.
      */
     suspend fun saveEdit(sessionId: Long, edit: EditedSession, now: Long = System.currentTimeMillis()): String? = db.withTransaction {
-        val old = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind == SessionKind.STRENGTH }
+        val old = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind == SessionKind.STRENGTH && it.hcRecordId == null }
             ?: return@withTransaction "This workout can't be edited."
         SessionEdit.timeProblem(edit.startedAt, edit.endedAt, now)?.let { return@withTransaction it }
         // A workout in progress compares itself with every finished one when it ends, so nothing may move after its start.
@@ -160,7 +160,7 @@ class HistoryRepository @Inject constructor(
      * moves the rotation back, because the rotation follows the newest workout that's left.
      */
     suspend fun deleteSession(sessionId: Long): Boolean = db.withTransaction {
-        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED } ?: return@withTransaction false
+        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.hcRecordId == null } ?: return@withTransaction false
         val exercises = workoutDao.sessionExercises(sessionId).map { it.exercise.id }.distinct()
         historyDao.deleteSession(sessionId)
         moveStallResets(exercises, session.startedAt) { null }
@@ -227,7 +227,8 @@ class HistoryRepository @Inject constructor(
     // Extra sessions
 
     suspend fun extra(sessionId: Long): Pair<WorkoutSessionEntity, YogaDetailEntity>? {
-        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind.isExtra } ?: return null
+        // Another app's session (AR-04) is read-only here: Health Connect owns it, and a sync would undo any change.
+        val session = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind.isExtra && it.hcRecordId == null } ?: return null
         return workoutDao.yogaDetail(sessionId)?.let { session to it }
     }
 

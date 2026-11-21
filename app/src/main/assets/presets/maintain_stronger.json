@@ -1,0 +1,8 @@
+{
+  "key": "maintain_stronger",
+  "order": 4,
+  "name": "Maintain and get stronger",
+  "summary": "Keep your weight steady and get stronger. Two full-body days, A and B.",
+  "goal": "MAINTAIN",
+  "split": "FULL_BODY_AB"
+}

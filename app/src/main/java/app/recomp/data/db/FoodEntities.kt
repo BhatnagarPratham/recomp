@@ -159,3 +159,9 @@ data class LoggedDayRow(
     val kcal: Double,
     @ColumnInfo(name = "protein_g") val proteinG: Double,
 )
+
+/** The unit a food was last logged in (AI-04). */
+data class LastUnitRow(
+    @ColumnInfo(name = "food_id") val foodId: Long,
+    @ColumnInfo(name = "unit_label") val unitLabel: String,
+)
