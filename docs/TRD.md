@@ -113,8 +113,8 @@ body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CON
                     skeletal_muscle_g, body_fat_g, body_fat_pct, visceral_fat_level, bmr_kcal?,
                     ecw_tbw_ratio?, inbody_score?, segmental_lean_json?,
                     mins_since_meal, workout_before_scan, mins_from_slot?, protocol_ok, image_path?, notes?  -- IB-01/02
-measurement         id, log_date, measured_at, type(WAIST|CHEST|ARM|THIGH|HIP), value   -- cm; YG-04 adds mobility types
-progress_photo      id, log_date, pose(FRONT|SIDE|BACK), file_path   -- app-private storage
+measurement         id, log_date, measured_at, type(WAIST|CHEST|ARM|THIGH|HIP|SIT_AND_REACH|SQUAT_HOLD|TOE_TOUCH), value   -- cm; squat hold in s; toe touch 1/0 (M17)
+progress_photo      id, log_date, taken_at, pose(FRONT|SIDE|BACK), file_path   -- file_path relative to files/, always photos/<name>.jpg (M17)
 food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR), barcode?,
                     source_key?           -- unique: "seed:paneer", "indb:ASC001"; ties a row to its bundled file
                     diet(VEGAN|VEGETARIAN|EGG|FISH|MEAT), region(INDIAN|INTERNATIONAL)?   -- null = every region
@@ -870,10 +870,15 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
 
 | Entry | Contents |
 |-------|----------|
-| `manifest.json` | `format: "recomp-backup"`, `formatVersion` (the zip layout, 1), `schemaVersion` (the Room version that wrote it), `exportedAt`, `appVersion`, and a row count per table |
+| `manifest.json` | `format: "recomp-backup"`, `formatVersion` (the zip layout: 1, or 2 with photos), `schemaVersion` (the Room version that wrote it), `exportedAt`, `appVersion`, a row count per table, and `photos` (how many `photos/` entries follow; 0 or absent without them) |
+| `photos/<name>.jpg` | M17, only with *Include photos*: each progress photo's bytes, streamed file by file after the JSON |
 | `database.json` | `schema`: every `CREATE` statement from `sqlite_master` (tables, indexes, triggers), and `tables`: per table, `columns` and `rows` as arrays of typed values |
 | `settings.json` | every key in the `settings` DataStore, each with its type (`string`, `int`, `long`, `boolean`, `float`, `double`, `string_set`) |
 
+- **Photos (M17).** A backup without photos is still written as format 1, so an older build reads it. With *Include photos* (off by default; it's off again each time Settings opens), the progress photos follow the JSON as `photos/<name>.jpg` entries and the file is format 2.
+  - Import streams each photo into `files/backups/incoming-photos/` as it's read: at most 25 MB a file and 2 GB in all, neither counted against the JSON's 16 MB. A name must be a plain `[A-Za-z0-9._-]` name ending `.jpg`, so no entry can write outside the folder; a duplicate, or a count different from the manifest's `photos`, is refused. A refused or discarded import deletes the staged files.
+  - Only after the database commits are the staged photos swapped in for `files/photos/`: the old folder is renamed aside, the staged one renamed in, then the old one deleted. An import without photos leaves `files/photos/` as it is, so a restored row whose file isn't on the phone shows a placeholder.
+  - The safety copy is always written with photos, so *Restore the data from before the import* brings the replaced ones back. If an import is interrupted after its commit, the launch-time finish (below) swaps the staged photos in too.
 - **Generic over the schema.**
   - Export reads `sqlite_master`, so a table added by a later milestone (M3c's `meal_draft` and `ai_request_log`, for example) is included with no code change.
   - Left out: SQLite's and Room's own tables (`sqlite_*`, `android_metadata`, `room_master_table`), plus FTS virtual tables and their shadow tables. Those are rebuilt from their content table.
