@@ -95,4 +95,8 @@ interface AiDao {
 
     @Query("DELETE FROM meal_draft WHERE id = :id")
     suspend fun deleteDraft(id: Long)
+
+    /** Every draft's kept meal photo (NU-20), so photos no draft points at can be swept. */
+    @Query("SELECT photo_path FROM meal_draft WHERE photo_path IS NOT NULL")
+    suspend fun draftPhotos(): List<String>
 }
