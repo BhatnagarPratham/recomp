@@ -1484,6 +1484,12 @@ After a fresh-session review (pr15-review.md: 0 blockers, 3 should-fix, 6 nits, 
 
 The review's probes over the real INDB build, as a throwaway test (not committed; the phone wasn't connected for this round): lacto-vegetarian "2 eggs", "1 egg", "1 apple", "2 bananas", "2 slices bread", "2 gulab jamun", "khichdi" and "subji" are now guesses, never matches, and the coffee in "1 cup coffee with milk" too; "2 boiled eggs" is unmatched. Non-vegetarian "2 eggs" is Egg, whole (high). Sure matches stay sure: "paratha" is Plain parantha/paratha, "1 bowl khichdi" Plain khitchdi, "1 cup tea" Hot tea, "1 plate rice" Boiled rice (all medium), "1 katori curd" and "1,5 roti" high (1.5 roti).
 
+After the re-check (R1: on a tie the part that was sent wins, so "Coffee with milk" keeps its coffee; R2: the per-piece cap applies only to foods that come as small pieces, so a 209 g masala dosa stays a sure match), with main's M11 and M12 merged in: M12's stand-in for "the meal for the time of day" now uses `MealTimes.slotAt`, and M11's programme review looks up the server's name outside the send lock, like meals.
+
+| Check | Result |
+|-------|--------|
+| The review fixes on the phone (dev install `app.recomp.m9dev`, AI off, real INDB build, invented data; uninstalled afterwards) | ✅ "2 roti, 2 bananas, 1 cup coffee with milk, 1,5 roti" showed Chapati/Roti ×2 (high), Milk, whole (medium) and Chapati/Roti ×1½ (high), plus "Not sure about: 2 bananas · Best guess: Banana raita" and "Not sure about: 1 cup coffee · Best guess: Espreso coffee", each with *Use it*, *Search*, *Quick add* and *Leave out*. *Use it* moved the guess into the items, *Leave out* dropped the coffee, and *Save* logged the four items. No crash. |
+
 #### M10: Training history
 
 *WL-10, PO-09, PO-10; PRD §12.6; no Room change.*
