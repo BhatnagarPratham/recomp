@@ -35,7 +35,6 @@ import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.checkin.LocalOpenProgrammeReview
 import app.recomp.ui.checkin.ProgrammeReviewScreen
-import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
@@ -72,7 +71,7 @@ import kotlinx.serialization.Serializable
 @Serializable data object BodyRoute
 
 /** A scan's form (IB-01); 0 is a new scan. */
-@Serializable data class ScanRoute(val scanId: Long = 0)
+@Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0)
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
@@ -82,7 +81,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object SettingsRoute
 
-@Serializable data object DevRoute
+/** Settings → Health Connect (PRD §12.9). */
+@Serializable data object HealthConnectRoute
 
 /** Onboarding (PS-01); with [goalOnly], Settings → Goal runs the same goal flow (PRD §4.6). */
 @Serializable data class OnboardingRoute(val goalOnly: Boolean = false)
@@ -198,7 +198,7 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
-            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
+            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }, onOpenDraft = { nav.navigate(ScanRoute(draftId = it)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
@@ -236,15 +236,15 @@ fun RecompNavHost(main: MainViewModel) {
                     SettingsScreen(
                         onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
                         onOpenTraining = { nav.navigate(SetupRoute) },
-                        onOpenDev = { nav.navigate(DevRoute) },
+                        onOpenHealth = { nav.navigate(HealthConnectRoute) },
                         onOpenMeals = { nav.navigate(MealSlotsRoute) },
                         onOpenPortions = { nav.navigate(PortionSizesRoute) },
                         onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
                     )
                 }
             }
+            composable<HealthConnectRoute> { app.recomp.ui.health.HealthConnectScreen(onBack = { nav.popBackStack() }) }
             composable<RemindersRoute> { RemindersScreen(onBack = { nav.popBackStack() }) }
-            composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
             composable<LibraryRoute> { LibraryScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) }) }
             composable<ExerciseRoute> { ExerciseScreen(onBack = { nav.popBackStack() }, onOpenHistory = { nav.navigate(ExerciseHistoryRoute(it)) }) }
