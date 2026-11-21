@@ -6,6 +6,7 @@ import app.recomp.domain.model.RepClass
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
+import app.recomp.domain.persona.Units
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,6 +76,10 @@ class SeedDataTest {
         assertEquals(8 to 12, bench.defaultRepMin to bench.defaultRepMax)
         val pushdown = byKey.getValue("triceps_pushdown").toEntity(beginner)
         assertEquals(10 to 15, pushdown.defaultRepMin to pushdown.defaultRepMax)
+        // PR-05: kg steps by default; on a lb install 5 lb (2,268 g), and 10 lb (4,536 g) for a cable.
+        assertEquals(2_500, bench.incrementG)
+        assertEquals(2_268, byKey.getValue("bench_press").toEntity(beginner, Units.IMPERIAL).incrementG)
+        assertEquals(4_536, byKey.getValue("triceps_pushdown").toEntity(beginner, Units.IMPERIAL).incrementG)
     }
 
     @Test

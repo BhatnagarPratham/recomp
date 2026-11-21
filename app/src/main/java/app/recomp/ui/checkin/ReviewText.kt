@@ -61,10 +61,10 @@ object ReviewText {
      * The week's PRs, one line per lift in the order they were set: each kind of record with its latest value that week
      * (a later workout beats an earlier one), worded as the workout summary words them.
      */
-    fun records(rows: List<WeekRecordRow>): List<String> = rows.groupBy { it.exercise }.map { (exercise, prs) ->
+    fun records(rows: List<WeekRecordRow>, style: UnitStyle): List<String> = rows.groupBy { it.exercise }.map { (exercise, prs) ->
         val assisted = prs.first().loadType == LoadType.ASSISTED
         exercise + ": " + prs.associateBy { it.type }.values.sortedBy { it.type.ordinal }
-            .joinToString(" · ") { "${Labels.record(it.type, assisted)} ${Labels.recordValue(it.type, it.value, it.loadG, assisted)}" }
+            .joinToString(" · ") { "${Labels.record(it.type, assisted)} ${Labels.recordValue(it.type, it.value, it.loadG, assisted, style)}" }
     }
 
     fun moreRecords(n: Int): String = "and $n more ${if (n == 1) "lift" else "lifts"} with PRs"

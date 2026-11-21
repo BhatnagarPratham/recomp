@@ -46,6 +46,8 @@ import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.progression.Action
 import app.recomp.domain.training.WeeklyPlan
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitStyle
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,7 +61,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import app.recomp.data.prefs.TrainingSettings
-import app.recomp.domain.units.UnitStyle
 import app.recomp.domain.units.UnitMath
 
 /** A review as its screen shows it: what was sent, and the reply's suggestions checked against the app as it is now. */
@@ -118,7 +119,7 @@ class ProgrammeReviewRepository @Inject constructor(
     suspend fun facts(weekStart: LocalDate, today: LocalDate? = null): ProgrammeFacts {
         val day = today ?: days.today()
         val week = reviews.week(weekStart, day)
-        return ProgrammeFacts(goal = goalFacts(day), food = foodFacts(week), training = trainingFacts(weekStart, week), body = bodyFacts(week, reportStyle()))
+        return ProgrammeFacts(goal = goalFacts(day), food = foodFacts(week), training = trainingFacts(weekStart, week, reportStyle()), body = bodyFacts(week, reportStyle()))
     }
 
     suspend fun report(weekStart: LocalDate, sections: ReportSections, today: LocalDate? = null): ProgrammeReport =
@@ -176,7 +177,8 @@ class ProgrammeReviewRepository @Inject constructor(
         )
     }
 
-    private suspend fun trainingFacts(weekStart: LocalDate, week: WeekReview): TrainingFacts {
+    /** [style] is the persona's units with a point for the decimal mark: the report is read by the AI, not shown. */
+    private suspend fun trainingFacts(weekStart: LocalDate, week: WeekReview, style: UnitStyle): TrainingFacts {
         val settings = prefs.currentTraining()
         val routines = routineDao.rotation().map { r ->
             RoutineFacts(
@@ -184,7 +186,7 @@ class ProgrammeReviewRepository @Inject constructor(
                 r.name,
                 routineDao.exercises(r.id).map { row ->
                     val rec = progression.recommend(row.exercise, row.entry.targetSets, row.entry.repMin, row.entry.repMax)
-                    val load = rec.loadG?.takeIf { rec.action != Action.BASELINE }?.let { kg(it) + if (rec.assisted) " assistance" else "" }
+                    val load = rec.loadG?.takeIf { rec.action != Action.BASELINE }?.let { loadText(it, style) + if (rec.assisted) " assistance" else "" }
                     RoutineLine(row.exercise.id, row.exercise.name, row.entry.targetSets, row.entry.repMin, row.entry.repMax, load)
                 },
             )
@@ -508,7 +510,8 @@ class ProgrammeReviewRepository @Inject constructor(
             return ReportSections(goal = "goal" in parts, food = "food" in parts, training = "training" in parts, body = "body" in parts)
         }
 
-        fun kg(grams: Int): String = (Math.round(grams / 100.0) / 10.0).toString().removeSuffix(".0") + " kg"
+        /** A routine's next load, "62.5 kg" or "225 lb" (PR-05). */
+        fun loadText(grams: Int, style: UnitStyle): String = "${LoadUnits.format(grams, style)} ${style.weight}"
 
         fun signed(v: Double): String {
             val r = Math.round(v * 10) / 10.0

@@ -47,6 +47,7 @@ import app.recomp.domain.training.Loads
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.DateDialog
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.SupersetLabel
 import app.recomp.ui.components.TimeDialog
 import java.time.LocalTime
@@ -210,13 +211,14 @@ private fun SetRow(
             }
         }
         if (Loads.logsLoad(exercise.loadType)) {
+            val unit = LocalUnitStyle.current.weight
             OutlinedTextField(
                 value = set.load,
                 onValueChange = onLoad,
                 singleLine = true,
-                label = { Text(loadLabel(exercise.loadType)) },
+                label = { Text(loadLabel(exercise.loadType, unit)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.weight(1.3f).semantics { contentDescription = "Set $number weight in kg" },
+                modifier = Modifier.weight(1.3f).semantics { contentDescription = "Set $number weight in $unit" },
             )
         }
         OutlinedTextField(
@@ -242,10 +244,10 @@ private fun typeBadge(type: SetType) = when (type) {
     SetType.FAILURE -> "Fail"
 }
 
-private fun loadLabel(loadType: LoadType) = when (loadType) {
-    LoadType.ASSISTED -> "Assist kg"
-    LoadType.BODYWEIGHT_PLUS -> "+ kg"
-    else -> "kg"
+private fun loadLabel(loadType: LoadType, unit: String) = when (loadType) {
+    LoadType.ASSISTED -> "Assist $unit"
+    LoadType.BODYWEIGHT_PLUS -> "+ $unit"
+    else -> unit
 }
 
 private fun rirText(rir: Int?) = when (rir) {

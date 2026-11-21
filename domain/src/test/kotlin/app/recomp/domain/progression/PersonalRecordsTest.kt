@@ -7,7 +7,11 @@ import app.recomp.domain.training.SetValues
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import app.recomp.domain.units.UnitStyle
 import org.junit.Test
+
+private val M = UnitStyle.METRIC
+private val LB = UnitStyle.IMPERIAL
 
 class PersonalRecordsTest {
     private val earlier = listOf(
@@ -61,24 +65,37 @@ class PersonalRecordsTest {
     @Test
     fun `live feedback compares a set that meets its target with last time`() {
         val target = SetValues(45_000, 12)
-        assertEquals("+1 rep", Targets.feedback(target, LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 11)))
-        assertEquals("+2.5 kg", Targets.feedback(SetValues(47_500, 8), LoggedSet(WORKING, 47_500, 8), LoggedSet(WORKING, 45_000, 12)))
-        assertEquals("target hit", Targets.feedback(target, LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 12)))
-        assertNull(Targets.feedback(target, LoggedSet(WORKING, 45_000, 11), LoggedSet(WORKING, 45_000, 10)))
-        assertNull(Targets.feedback(null, LoggedSet(WORKING, 45_000, 12), null))
-        assertNull(Targets.feedback(target, LoggedSet(WARMUP, 45_000, 12), null))
+        assertEquals("+1 rep", Targets.feedback(target, LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 11), M))
+        assertEquals("+2.5 kg", Targets.feedback(SetValues(47_500, 8), LoggedSet(WORKING, 47_500, 8), LoggedSet(WORKING, 45_000, 12), M))
+        assertEquals("target hit", Targets.feedback(target, LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 12), M))
+        assertNull(Targets.feedback(target, LoggedSet(WORKING, 45_000, 11), LoggedSet(WORKING, 45_000, 10), M))
+        assertNull(Targets.feedback(null, LoggedSet(WORKING, 45_000, 12), null, M))
+        assertNull(Targets.feedback(target, LoggedSet(WARMUP, 45_000, 12), null, M))
     }
 
     @Test
     fun `targets describe themselves and grade a session`() {
         val rec = Recommendation(Action.ADD_REPS, 45_000, listOf(12, 12, 10))
-        assertEquals("45 × 12/12/10", Targets.describe(rec))
-        assertEquals("BW × 15", Targets.describe(Recommendation(Action.ADD_REPS, null, listOf(15, 15, 15))))
-        assertEquals("× 12", Targets.describe(Recommendation(Action.BASELINE, null, listOf(12, 12, 12))))
+        assertEquals("45 × 12/12/10", Targets.describe(rec, M))
+        assertEquals("BW × 15", Targets.describe(Recommendation(Action.ADD_REPS, null, listOf(15, 15, 15)), M))
+        assertEquals("× 12", Targets.describe(Recommendation(Action.BASELINE, null, listOf(12, 12, 12)), M))
         val hit = listOf(LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 11))
         assertTrue(Targets.hit(rec, hit))
         assertTrue(!Targets.hit(rec, hit.take(2)))
         assertTrue(!Targets.hit(rec, listOf(LoggedSet(WORKING, 42_500, 12), LoggedSet(WORKING, 45_000, 12), LoggedSet(WORKING, 45_000, 10))))
-        assertEquals("Lat pulldown goes to 50 kg", Targets.nextTime("Lat pulldown", Recommendation(Action.INCREASE, 50_000, listOf(8, 8, 8)), 47_500))
+        assertEquals("Lat pulldown goes to 50 kg", Targets.nextTime("Lat pulldown", Recommendation(Action.INCREASE, 50_000, listOf(8, 8, 8)), 47_500, M))
+    }
+
+    @Test
+    fun `targets, feedback and next time read in lb (PR-05)`() {
+        // 225 lb is 102,058 g and 220 lb is 99,790 g; a 5 lb step is 2,268 g.
+        val rec = Recommendation(Action.INCREASE, 102_058, listOf(5, 5, 5))
+        assertEquals("225 × 5", Targets.describe(rec, LB))
+        assertEquals("Squat goes to 225 lb", Targets.nextTime("Squat", rec, 99_790, LB))
+        assertEquals("Squat deloads to 200 lb", Targets.nextTime("Squat", Recommendation(Action.DELOAD, 90_718, listOf(5, 5, 5)), 99_790, LB))
+        assertEquals("Squat: repeat 220 lb, every set in the range", Targets.nextTime("Squat", Recommendation(Action.REPEAT, 99_790, listOf(5, 5, 5)), 99_790, LB))
+        assertEquals("+5 lb", Targets.feedback(SetValues(102_058, 5), LoggedSet(WORKING, 102_058, 5), LoggedSet(WORKING, 99_790, 5), LB))
+        // A kg-era load shows to 0.1 lb, with the phone's decimal mark.
+        assertEquals("93,7 × 8", Targets.describe(Recommendation(Action.REPEAT, 42_500, listOf(8)), UnitStyle(LB.units, ',')))
     }
 }

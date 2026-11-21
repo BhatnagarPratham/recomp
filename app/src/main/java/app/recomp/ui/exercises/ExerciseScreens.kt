@@ -44,9 +44,10 @@ import app.recomp.data.repo.TrainingRepository
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.Mechanic
-import app.recomp.domain.training.Loads
+import app.recomp.domain.units.LoadUnits
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.NewExercise
 import app.recomp.ui.components.NewExerciseDialog
 import app.recomp.ui.components.NumberEntryDialog
@@ -72,6 +73,7 @@ class LibraryViewModel @Inject constructor(private val training: TrainingReposit
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(onBack: () -> Unit, onOpenExercise: (Long) -> Unit, viewModel: LibraryViewModel = hiltViewModel()) {
+    val style = LocalUnitStyle.current
     val library by viewModel.library.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf(false) }
@@ -104,7 +106,7 @@ fun LibraryScreen(onBack: () -> Unit, onOpenExercise: (Long) -> Unit, viewModel:
                     Column(Modifier.fillMaxWidth().clickable { onOpenExercise(ex.id) }.heightIn(min = 56.dp).padding(vertical = 8.dp)) {
                         Text(ex.name + if (ex.isCustom) " · custom" else "", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "${Labels.muscle(ex.primaryMuscle)} · ${Labels.equipment(ex.equipment)} · step ${Labels.kg(ex.incrementG)}",
+                            "${Labels.muscle(ex.primaryMuscle)} · ${Labels.equipment(ex.equipment)} · step ${Labels.step(ex.incrementG, style)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -143,6 +145,7 @@ fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel:
     val loaded by viewModel.exercise.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf<ExerciseEntity?>(null) }
     LaunchedEffect(loaded) { if (draft == null) draft = loaded }
+    val style = LocalUnitStyle.current
     var typing by remember { mutableStateOf<String?>(null) }
     val ex = draft
 
@@ -175,9 +178,9 @@ fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel:
 
             if (ex.loadType != LoadType.BODYWEIGHT) {
                 Label(if (ex.equipment == Equipment.DUMBBELL) "Smallest step (per dumbbell)" else "Smallest step")
-                val choices = (Loads.incrementChoicesG + ex.incrementG).distinct().sorted()
+                val choices = (LoadUnits.incrementChoicesG(style.units) + ex.incrementG).distinct().sorted()
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ChoiceChips(choices, ex.incrementG, { Labels.kg(it) }, { draft = ex.copy(incrementG = it) }, Modifier.weight(1f))
+                    ChoiceChips(choices, ex.incrementG, { Labels.step(it, style) }, { draft = ex.copy(incrementG = it) }, Modifier.weight(1f))
                 }
                 OutlinedButton(onClick = { typing = "increment" }) { Text("Other step…") }
             }
@@ -216,7 +219,7 @@ fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel:
     typing?.let { field ->
         val current = ex ?: return@let
         val initial = when (field) {
-            "increment" -> Loads.formatKg(current.incrementG)
+            "increment" -> LoadUnits.formatStep(current.incrementG, style)
             "min" -> "${current.defaultRepMin}"
             else -> "${current.defaultRepMax}"
         }
@@ -224,12 +227,12 @@ fun ExerciseScreen(onBack: () -> Unit, onOpenHistory: (Long) -> Unit, viewModel:
             if (field == "increment") "Smallest step" else "Reps",
             initial,
             decimal = field == "increment",
-            suffix = if (field == "increment") "kg" else null,
+            suffix = if (field == "increment") style.weight else null,
             onDismiss = { typing = null },
         ) { text ->
             typing = null
             when (field) {
-                "increment" -> Loads.parseKg(text)?.takeIf { it > 0 }?.let { draft = current.copy(incrementG = it) }
+                "increment" -> (if (text.trim() == initial) current.incrementG else LoadUnits.parse(text, style.units))?.takeIf { it > 0 }?.let { draft = current.copy(incrementG = it) }
                 "min" -> text.trim().toIntOrNull()?.takeIf { it > 0 }?.let { draft = current.copy(defaultRepMin = it, defaultRepMax = maxOf(it, current.defaultRepMax)) }
                 else -> text.trim().toIntOrNull()?.takeIf { it > 0 }?.let { draft = current.copy(defaultRepMax = it, defaultRepMin = minOf(it, current.defaultRepMin)) }
             }

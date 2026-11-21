@@ -8,7 +8,8 @@ import app.recomp.domain.model.Mechanic
 import app.recomp.domain.model.RepClass
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
-import app.recomp.domain.training.Loads
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -35,7 +36,8 @@ data class ExerciseSeed(
     /** Overrides the equipment's default increment. */
     val incrementG: Int? = null,
 ) {
-    fun toEntity(policy: ExperiencePolicy): ExerciseEntity {
+    /** [units] picks the default step: an exercise added by an update to a lb install starts on lb plates (PRD §12.16). */
+    fun toEntity(policy: ExperiencePolicy, units: Units = Units.METRIC): ExerciseEntity {
         val reps = policy.repsFor(repClass)
         return ExerciseEntity(
             name = name,
@@ -45,7 +47,8 @@ data class ExerciseSeed(
             mechanic = mechanic,
             movementPattern = movementPattern,
             loadType = loadType,
-            incrementG = incrementG ?: Loads.defaultIncrementG(equipment),
+            incrementG = incrementG?.let { if (units == Units.METRIC) it else LoadUnits.nearestIncrementG(it, units) }
+                ?: LoadUnits.defaultIncrementG(equipment, units),
             defaultRepMin = reps.first,
             defaultRepMax = reps.last,
             defaultRestSec = restSec,
