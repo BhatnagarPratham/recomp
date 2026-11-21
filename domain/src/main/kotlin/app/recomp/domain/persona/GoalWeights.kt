@@ -2,6 +2,7 @@ package app.recomp.domain.persona
 
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.NutritionCalculator
+import app.recomp.domain.nutrition.Sex
 import java.time.LocalDate
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -16,10 +17,27 @@ object GoalWeights {
     const val LEAN_SUGGESTION_FRACTION = 0.95
     const val LEAN_BULK_WEEKS = 16L
 
+    /** The body fat % a scan-based suggestion aims at (IB-05): the low end of a healthy, athletic range. */
+    fun suggestedBodyFatPct(sex: Sex): Double = if (sex == Sex.MALE) 15.0 else 23.0
+
+    /** A body-fat finish line's goal weight (IB-05, PRD §12.11): lean mass ÷ (1 − target %), to 0.1 kg. */
+    fun forBodyFat(leanKg: Double, targetPct: Double): Double {
+        require(targetPct > 0 && targetPct < 100) { "A body-fat target is a percentage" }
+        return Math.round(leanKg / (1 - targetPct / 100) * 10) / 10.0
+    }
+
+    /**
+     * With a recent on-protocol scan ([leanKg]), the weight at [suggestedBodyFatPct] for your sex, rounded to the
+     * nearest kg (PRD §4.2). When you're already that lean, or without a scan, the BMI rule below.
+     */
+    fun suggest(heightCm: Double, weightKg: Double, leanKg: Double?, sex: Sex): Double {
+        val fromScan = leanKg?.let { forBodyFat(it, suggestedBodyFatPct(sex)) }?.takeIf { it < weightKg }
+        return fromScan?.roundToInt()?.toDouble() ?: suggest(heightCm, weightKg)
+    }
+
     /**
      * The BMI-25 weight for your height; at a BMI of 25 or less, 5% below your current weight but not
      * below BMI 20, and never above your current weight. Rounded to the nearest kg.
-     * TODO(M4): with a recent scan, suggest lean mass ÷ (1 − target body fat) instead (IB-05).
      */
     fun suggest(heightCm: Double, weightKg: Double): Double {
         val raw = if (Bmi.of(weightKg, heightCm) > SUGGESTED_BMI) {

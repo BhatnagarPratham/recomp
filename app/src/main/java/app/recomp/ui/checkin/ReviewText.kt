@@ -82,8 +82,12 @@ object ReviewText {
                 BodyText.roundsToZero(change) -> "no change this week"
                 else -> "${BodyText.signed(change, "kg")} this week (${CheckinText.pct(b.changePct ?: 0.0)})"
             } +
-            (b.pace?.let { ", ${BodyText.pace(it)}" } ?: "")
+            (b.pace?.let { ", ${BodyText.pace(it)}" } ?: "") +
+            (if (b.atMaintenance) MAINTENANCE_WEEK else "")
     }
+
+    /** GL-06: a week that ended inside a maintenance break has no pace or finish line. */
+    const val MAINTENANCE_WEEK = ", at maintenance on a break"
 
     /** The week's waist and its change against a reading at most 4 weeks older, named by that reading's date. */
     fun waist(b: BodyWeek): String? {

@@ -1,11 +1,14 @@
 package app.recomp.ui.food
 
 import app.recomp.data.db.FoodEntity
+import app.recomp.data.repo.ItemFrom
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
 import app.recomp.domain.food.FoodCaveat
 import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.Macros
+import app.recomp.domain.food.MealSlot
+import app.recomp.domain.food.MealTimes
 import app.recomp.domain.food.Origin
 import app.recomp.domain.food.Portions
 import app.recomp.ui.onboarding.GoalText
@@ -83,5 +86,25 @@ object FoodText {
             today.minusDays(1) -> "Yesterday · $short"
             else -> short
         }
+    }
+
+    /** Where a described item's numbers came from (PRD §12.5). */
+    fun from(from: ItemFrom) = when (from) {
+        ItemFrom.YOUR_FOOD -> "Your food"
+        ItemFrom.DATABASE -> "Database"
+        ItemFrom.AI -> "AI"
+        ItemFrom.QUICK_ADD -> "Quick add"
+    }
+
+    /** NU-06, on the day view: the allowance is inside the calorie target. */
+    fun allowanceIncluded(kcal: Int) = "includes a ${GoalText.kcal(kcal)} snack allowance"
+
+    /** NU-06, on the allowance's meal: "60 of 150 kcal". Over is a plain number. */
+    fun allowanceUsed(eatenKcal: Double, allowanceKcal: Int) = "${eatenKcal.roundToInt()} of ${GoalText.kcal(allowanceKcal)}"
+
+    /** A meal's usual time in Settings → Food → Meals (PRD §12.5): its start to the next meal's start. */
+    fun slotTime(slots: List<MealSlot>, slot: MealSlot): String {
+        val (from, to) = MealTimes.range(slots, slot) ?: return "No usual time"
+        return if (from == to) "From ${MealTimes.clock(from)}" else "${MealTimes.clock(from)}–${MealTimes.clock(to)}"
     }
 }

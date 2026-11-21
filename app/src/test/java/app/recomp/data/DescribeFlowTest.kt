@@ -24,6 +24,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -67,9 +68,18 @@ class DescribeFlowTest {
 
     @After
     fun tearDown() {
+        // An estimate a test cancelled or let go of can still be finishing on another thread, and it ends on the main
+        // dispatcher. Resetting Main under it fails (CI saw it), so every view model's work is stopped and waited for first.
+        runBlocking {
+            withTimeout(5_000) {
+                viewModels.forEach { vm -> vm.viewModelScope.coroutineContext.job.run { cancel(); join() } }
+            }
+        }
         app.close()
         Dispatchers.resetMain()
     }
+
+    private val viewModels = mutableListOf<DescribeViewModel>()
 
     private fun viewModel(draftId: Long = 0) = DescribeViewModel(
         SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to draftId)),
@@ -77,7 +87,8 @@ class DescribeFlowTest {
         app.foodLog,
         app.foods,
         PhotoStore(ApplicationProvider.getApplicationContext()),
-    )
+        app.describer,
+    ).also(viewModels::add)
 
     private val phulka = EstimatedItem("Phulka", 2.0, "piece", 70.0, 210.0, 6.5, 42.0, 1.5, 4.0, Confidence.HIGH, "no ghee")
 
@@ -147,8 +158,12 @@ class DescribeFlowTest {
         app.connectivity.online.value = false
         val vm = viewModel()
         vm.setText("chai and biscuits")
+        // From M9 Estimate still answers, from the local parser (AI-04): here it finds nothing, and says so.
         vm.estimate()
-        eventually { if (vm.phase.value == DescribePhase.Input) true else null }
+        val review = eventually { vm.phase.value as? DescribePhase.Review }
+        assertTrue(review.items.isEmpty())
+        assertEquals(listOf("chai", "biscuits"), review.unmatched.map { it.typed })
+        vm.backToText()
         vm.saveDraft()
         val outcome = eventually { vm.outcome.value }
         assertTrue(outcome.message.contains("Kept as a draft"))
@@ -168,7 +183,7 @@ class DescribeFlowTest {
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertEquals(listOf("Phulka"), review.items.map { it.current.name })
 
-        vm.update(0, review.items[0].current.scaledTo(80.0))
+        vm.update(0, review.items[0].copy(current = review.items[0].current.scaledTo(80.0)))
         assertTrue((vm.phase.value as DescribePhase.Review).items[0].edited)
         vm.save(null)
         val outcome = eventually { vm.outcome.value }
@@ -278,7 +293,7 @@ class DescribeFlowTest {
         assertEquals(AiKind.MEAL_TEXT, first.kind())
         // Invented photo, invented meal: the test's own bitmap, never a real one.
         val handle = SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L, "photo" to path))
-        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, store)
+        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, store, app.describer).also(viewModels::add)
         assertEquals(AiKind.MEAL_PHOTO, vm.kind())
         vm.estimate()
         eventually { vm.outcome.value }

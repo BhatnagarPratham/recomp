@@ -354,9 +354,41 @@ class HttpProvidersTest {
             assertEquals(usage, AiStatus.OK, r.status)
             assertEquals(usage, listOf(call.upperBound), r.attempts)
         }
-        // A real count with one side zero is still a count: a blocked prompt has no output.
+        // A real count is kept as it is; see the next test for the side that's missing.
         server.enqueue(chat(usage = """{"prompt_tokens":900,"completion_tokens":0}""", content = null, refusal = "No."))
         assertEquals(900L, openAi.send(call(openAiTarget())).attempts.single().inputTokens)
+    }
+
+    @Test
+    fun `a usage with only one of its two counts costs the missing one at the upper bound`() = runBlocking {
+        val priced = AiPricing.typed(1.0, 2.0)
+        // Only the prompt: the reply isn't free.
+        server.enqueue(chat(usage = """{"prompt_tokens":1200}""", model = "test-model"))
+        val call = call(localTarget(rates = priced))
+        val promptOnly = openAi.send(call).attempts.single()
+        assertEquals(1_200L, promptOnly.inputTokens)
+        assertEquals(call.upperBound.outputTokens, promptOnly.outputTokens)
+        assertEquals(1_200 * 1.0 / 1e6 + call.upperBound.outputTokens * 2.0 / 1e6, AiPricing.cost(listOf(promptOnly)), 1e-9)
+
+        // Only the reply: the prompt isn't free.
+        server.enqueue(chat(usage = """{"completion_tokens":300}""", model = "test-model"))
+        val replyOnly = openAi.send(call).attempts.single()
+        assertEquals(call.upperBound.inputTokens, replyOnly.inputTokens)
+        assertEquals(300L, replyOnly.outputTokens)
+        assertEquals(0L, replyOnly.cacheReadTokens)
+        assertEquals(call.upperBound.inputTokens * 1.0 / 1e6 + 300 * 2.0 / 1e6, AiPricing.cost(listOf(replyOnly)), 1e-9)
+
+        // Gemini shares the mapping.
+        server.enqueue(generated(usage = """{"promptTokenCount":800}"""))
+        val g = call(geminiTarget())
+        val gemini = gemini.send(g).attempts.single()
+        assertEquals(800L, gemini.inputTokens)
+        assertEquals(g.upperBound.outputTokens, gemini.outputTokens)
+
+        // Both present: nothing is padded.
+        server.enqueue(chat(usage = """{"prompt_tokens":1200,"completion_tokens":300}""", model = "test-model"))
+        val both = openAi.send(call).attempts.single()
+        assertEquals(1_200L to 300L, both.inputTokens to both.outputTokens)
     }
 
     @Test

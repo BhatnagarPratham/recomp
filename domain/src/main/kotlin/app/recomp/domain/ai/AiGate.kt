@@ -92,8 +92,8 @@ enum class AiModel(val provider: AiProviderId, val id: String, val label: String
     }
 }
 
-/** What an AI request was for (TRD §4, `ai_request_log.kind`). M3c sends only [MEAL_TEXT]. */
-enum class AiKind { MEAL_TEXT, MEAL_PHOTO, LABEL, INBODY, FIT_CHECK, COACH }
+/** What an AI request was for (TRD §4, `ai_request_log.kind`). M3c sends only [MEAL_TEXT]; M19 adds [GOAL], a goal description (GL-03). */
+enum class AiKind { MEAL_TEXT, MEAL_PHOTO, LABEL, INBODY, FIT_CHECK, COACH, GOAL }
 
 /**
  * One privacy notice: what a kind of request sends is shown before its first send to each provider (TRD §6.2),

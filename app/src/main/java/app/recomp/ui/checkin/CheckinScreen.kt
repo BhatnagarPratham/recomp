@@ -1,5 +1,6 @@
 package app.recomp.ui.checkin
 
+import app.recomp.ui.goal.GoalStatusCard
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -120,6 +121,9 @@ class CheckinViewModel @Inject constructor(
         return checkin
     }
 
+    /** Loads the week on screen again, after the goal card changed the targets (GL-06). */
+    fun reload() = viewModelScope.launch { load(_ui.value.week) }
+
     /** ‹ and › move a week at a time, within the weeks there are. The week shown stays until the next has loaded. */
     fun show(previous: Boolean) {
         val ui = _ui.value
@@ -219,6 +223,9 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
 
 @Composable
 private fun CheckinContent(v: CheckinView, busy: Boolean, viewModel: CheckinViewModel) {
+    // M19 (GL-06): Goal reached, and the break suggestion after 12 weeks in a deficit. An answer reloads the week.
+    GoalStatusCard(checkinWeek = v.row.weekStart, onChanged = viewModel::reload)
+
     // The goal's headline and one verdict.
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CheckinText.headline(v), style = MaterialTheme.typography.headlineSmall)

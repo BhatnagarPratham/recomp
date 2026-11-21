@@ -264,8 +264,12 @@ private data class FoodForm(val id: Long?, val initial: CustomFood?, val name: S
 fun AddFoodScreen(
     onDone: () -> Unit,
     onDescribe: (LocalDate, String) -> Unit,
+    onFit: (String) -> Unit,
     describeOutcome: DescribeOutcome?,
     onDescribeOutcomeShown: () -> Unit,
+    onRecipe: (id: Long?, name: String) -> Unit,
+    recipeOutcome: RecipeOutcome?,
+    onRecipeOutcomeShown: () -> Unit,
     /** *Scan barcode* (NU-21); null hides it, e.g. on a phone without a camera. */
     onScanBarcode: (() -> Unit)? = null,
     /** *Scan label* (NU-19), with New food's name so far. */
@@ -352,6 +356,15 @@ fun AddFoodScreen(
         }
     }
 
+    // Back from the recipe editor (NU-22): a new recipe is usually about to be logged, like a new food.
+    LaunchedEffect(recipeOutcome) {
+        val outcome = recipeOutcome ?: return@LaunchedEffect
+        onRecipeOutcomeShown()
+        viewModel.refresh()
+        if (outcome.created) open(outcome.foodId)
+        else scope.launch { snackbar.showSnackbar("Saved the recipe. Entries already logged keep their numbers.") }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -393,12 +406,16 @@ fun AddFoodScreen(
                 )
             }
             item {
-                val state = gate?.state
-                if (state != null && state != AiState.OFF) {
+                // AI-04: always here. With AI off or not ready the local parser answers.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
                     FilledTonalButton(
                         onClick = { onDescribe(viewModel.date, viewModel.slot) },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(top = 4.dp),
-                    ) { Text(if (state == AiState.READY) "Describe it" else "Describe it · keep a draft") }
+                        modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                    ) { Text("Describe it") }
+                    // NU-18 is about today's numbers, so it's offered when adding to today.
+                    if (viewModel.date == today) {
+                        OutlinedButton(onClick = { onFit(viewModel.slot) }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("Will it fit?") }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                     OutlinedButton(onClick = { quickAdding = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Quick add") }
@@ -438,10 +455,14 @@ fun AddFoodScreen(
                     FoodRow(
                         hit,
                         onOpen = { open(hit.food.id) },
-                        onEdit = if (hit.food.source in FoodRepository.EDITABLE) {
-                            { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
-                        } else {
-                            null
+                        onEdit = when (hit.food.source) {
+                            in FoodRepository.EDITABLE -> {
+                                { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
+                            }
+                            FoodSource.RECIPE -> {
+                                { onRecipe(hit.food.id, hit.food.name) }
+                            }
+                            else -> null
                         },
                         onHide = {
                             scope.launch {
@@ -514,6 +535,11 @@ fun AddFoodScreen(
                     form = null
                     scan(name)
                 }
+            },
+            onRecipe = if (f.id == null) {
+                { name -> form = null; onRecipe(null, name) }
+            } else {
+                null
             },
         ) { food ->
             form = null
@@ -623,6 +649,7 @@ private fun FoodRow(hit: FoodHit, onOpen: () -> Unit, onEdit: (() -> Unit)?, onH
                 FoodSource.CUSTOM -> " · yours"
                 FoodSource.LABEL_OCR -> " · yours, from a label"
                 FoodSource.OFF -> " · Open Food Facts"
+                FoodSource.RECIPE -> " · your recipe"
                 FoodSource.AI -> " · AI-learned"
                 else -> ""
             }

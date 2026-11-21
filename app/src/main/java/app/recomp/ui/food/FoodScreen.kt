@@ -187,6 +187,7 @@ private sealed interface Editing {
 fun FoodScreen(
     onAdd: (LocalDate, String) -> Unit,
     onEstimateDraft: (MealDraftEntity) -> Unit,
+    onFit: () -> Unit,
     describeOutcome: DescribeOutcome?,
     onDescribeOutcomeShown: () -> Unit,
     viewModel: FoodViewModel = hiltViewModel(),
@@ -254,6 +255,14 @@ fun FoodScreen(
                         MenuItem("Copy from another day") { close(); copying = CopyTarget(null) }
                         MenuItem(if (incomplete) "Mark day as complete" else "Mark day as incomplete") { close(); viewModel.setIncomplete(!incomplete) }
                         if (date != today) MenuItem("Go to today") { close(); viewModel.goTo(today) }
+                    }
+                }
+            }
+            // NU-18 is about today's numbers, so it's offered on today's view.
+            if (date == today) {
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        OutlinedButton(onClick = onFit, modifier = Modifier.heightIn(min = 48.dp)) { Text("Will it fit?") }
                     }
                 }
             }
@@ -413,6 +422,8 @@ private fun SummaryCard(day: DayLog) {
                         Text("Calories left", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(if (left >= 0) GoalText.kcal(left) else "${GoalText.kcal(-left)} over", style = MaterialTheme.typography.headlineMedium)
                         Text("of ${GoalText.kcal(targets.target.kcal)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // NU-06: part of the target, not extra.
+                        day.allowance?.let { Text(FoodText.allowanceIncluded(it.kcal), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     } else {
                         Text("Calories", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(GoalText.kcal(t.kcal), style = MaterialTheme.typography.headlineMedium)
@@ -462,7 +473,13 @@ private fun MealCard(
                 Column(Modifier.weight(1f)) {
                     Text(meal.slot.name, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (meal.entries.isEmpty()) "Nothing yet" else FoodText.kcalProtein(Macros(meal.totals.kcal, meal.totals.proteinG)),
+                        when {
+                            // NU-06: the snack allowance's meal counts against it, "60 of 150 kcal".
+                            meal.allowanceKcal != null -> FoodText.allowanceUsed(meal.totals.kcal, meal.allowanceKcal) +
+                                if (meal.entries.isEmpty()) "" else " · ${FoodText.g(meal.totals.proteinG)} protein"
+                            meal.entries.isEmpty() -> "Nothing yet"
+                            else -> FoodText.kcalProtein(Macros(meal.totals.kcal, meal.totals.proteinG))
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

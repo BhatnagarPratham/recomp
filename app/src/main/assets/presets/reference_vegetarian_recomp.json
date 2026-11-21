@@ -1,0 +1,13 @@
+{
+  "key": "reference_vegetarian_recomp",
+  "order": 1,
+  "name": "Vegetarian recomp",
+  "summary": "Lose fat and build muscle on home-cooked Indian vegetarian food. Push/Pull/Legs, a weekly yoga class and body-composition scans.",
+  "goal": "RECOMP",
+  "experience": "BEGINNER",
+  "diet": "LACTO_VEGETARIAN",
+  "region": "INDIAN",
+  "split": "PPL",
+  "extras": [{ "name": "Yoga class", "kind": "YOGA" }],
+  "weightSource": "HOME_SCALE"
+}

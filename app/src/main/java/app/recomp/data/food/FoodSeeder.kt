@@ -2,6 +2,7 @@ package app.recomp.data.food
 
 import android.content.Context
 import androidx.room.withTransaction
+import app.recomp.data.repo.RecipeTags
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodEntity
@@ -100,6 +101,8 @@ class FoodSeeder @Inject constructor(
             import(FoodSource.SEED, seeds, now)
             // Without INDB in this build, INDB rows already on the phone stay as they are.
             if (indb != null) import(FoodSource.INDB, indb, now)
+            // A re-imported food's new diet tag reaches the recipes that hold it (M14).
+            RecipeTags.refresh(db)
         }
         prefs.setFoodDataVersion(version)
     }

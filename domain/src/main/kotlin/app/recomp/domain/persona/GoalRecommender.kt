@@ -15,6 +15,8 @@ enum class AdviceReason {
     MUSCLE_HIGH_FAT,
     MUSCLE,
     STAY,
+    /** Pregnant or breastfeeding (GL-09): a deficit the rules would suggest becomes Maintain. */
+    NO_DEFICIT,
 }
 
 /** What decided a fat-based rule: a body-fat % when known, otherwise BMI. */
@@ -44,8 +46,15 @@ object GoalRecommender {
     /**
      * @param experience training age: under a year is [Experience.BEGINNER].
      * @param bodyFatPct from a scan in the last 60 days, or typed for this suggestion only; null falls back to BMI.
+     * @param deficitAllowed false while pregnant or breastfeeding (`Guardrails.deficitAllowed`): a deficit the rules
+     *   would suggest becomes Maintain, so the suggestion is never a card that's greyed out.
      */
-    fun recommend(intent: Intent, experience: Experience, sex: Sex, bmi: Double, bodyFatPct: Double? = null): GoalAdvice {
+    fun recommend(intent: Intent, experience: Experience, sex: Sex, bmi: Double, bodyFatPct: Double? = null, deficitAllowed: Boolean = true): GoalAdvice {
+        val advice = rules(intent, experience, sex, bmi, bodyFatPct)
+        return if (!deficitAllowed && Guardrails.isDeficitGoal(advice.goal)) GoalAdvice(Goal.MAINTAIN, AdviceReason.NO_DEFICIT, advice.basis) else advice
+    }
+
+    private fun rules(intent: Intent, experience: Experience, sex: Sex, bmi: Double, bodyFatPct: Double?): GoalAdvice {
         val basis = FatBasis(bodyFatPct, bmi)
         val underweight = bmi < GoalThresholds.UNDERWEIGHT_BMI
         val highFat = bodyFatPct?.let { it >= GoalThresholds.highFatPct(sex) } ?: (bmi >= GoalThresholds.HIGH_FAT_BMI)

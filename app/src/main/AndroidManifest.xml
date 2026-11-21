@@ -66,6 +66,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share to Recomp (IB-03, TRD §6.7): an image, such as an InBody screenshot, opens "What is this?". -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
         <!-- Health Connect shows this when you tap the app's privacy policy in its permission screen. -->

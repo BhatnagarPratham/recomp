@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.data.health.HealthFeature
@@ -23,6 +24,8 @@ import app.recomp.domain.ai.Rates
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealSlots
+import app.recomp.domain.food.MealTimes
+import app.recomp.domain.food.SnackAllowance
 import app.recomp.domain.nudge.Reminder
 import app.recomp.domain.nudge.Reminders
 import app.recomp.domain.nutrition.Goal
@@ -102,6 +105,11 @@ data class StoredGoal(
     val finishLine: StoredFinishLine? = null,
     @Serializable(with = LocalDateIso::class) val startedOn: LocalDate,
     val aggressiveAcknowledged: Boolean = false,
+    // GL-06 (M19). Absent in a persona stored before it, which reads as no reached mark and no break.
+    @Serializable(with = LocalDateIso::class) val reachedOn: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val breakUntil: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val lastBreakEndedOn: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val breakSnoozedUntil: LocalDate? = null,
 ) {
     init {
         // GoalPolicy's own rules: rates are magnitudes, and a policy can't both lose and gain.
@@ -121,6 +129,10 @@ data class StoredGoal(
         },
         startedOn = startedOn,
         aggressiveAcknowledged = aggressiveAcknowledged,
+        reachedOn = reachedOn,
+        breakUntil = breakUntil,
+        lastBreakEndedOn = lastBreakEndedOn,
+        breakSnoozedUntil = breakSnoozedUntil,
     )
 
     companion object {
@@ -139,6 +151,10 @@ data class StoredGoal(
             },
             startedOn = plan.startedOn,
             aggressiveAcknowledged = plan.aggressiveAcknowledged,
+            reachedOn = plan.reachedOn,
+            breakUntil = plan.breakUntil,
+            lastBreakEndedOn = plan.lastBreakEndedOn,
+            breakSnoozedUntil = plan.breakSnoozedUntil,
         )
     }
 }
@@ -174,11 +190,15 @@ data class StoredProfile(
     val heightCm: Double,
     val weightKg: Double,
     val activity: ActivityLevel = ActivityLevel.MODERATE,
+    /** GL-09 (M19): pregnant or breastfeeding. Body data, so it lives here and never in the persona. */
+    val pregnant: Boolean = false,
+    /** R4: the day the switch last went off; absent before it ever has. */
+    @Serializable(with = LocalDateIso::class) val pregnantUntil: LocalDate? = null,
 ) {
-    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity)
+    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity, pregnant, pregnantUntil)
 
     companion object {
-        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity)
+        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity, p.pregnant, p.pregnantUntil)
     }
 }
 
@@ -204,13 +224,26 @@ data class StoredRamp(
     }
 }
 
-/** A meal slot as stored under `meal_slots` (NU-10). */
+/**
+ * A meal slot as stored under `meal_slots` (NU-10). [start] is its usual start in minutes after midnight
+ * (PRD §12.5); slots stored before M9 have none, and the four default meals then use their default starts.
+ */
 @Serializable
-data class StoredMealSlot(val key: String, val name: String, val removed: Boolean = false) {
-    fun toSlot() = MealSlot(key, name, removed)
+data class StoredMealSlot(val key: String, val name: String, val removed: Boolean = false, val start: Int? = null) {
+    fun toSlot() = MealSlot(key, name, removed, start?.takeIf { it in 0 until MealTimes.DAY_MINUTES })
 
     companion object {
-        fun of(slot: MealSlot) = StoredMealSlot(slot.key, slot.name, slot.removed)
+        fun of(slot: MealSlot) = StoredMealSlot(slot.key, slot.name, slot.removed, slot.startMinutes)
+    }
+}
+
+/** The snack allowance as stored under `snack_allowance` (NU-06). No value means it's off. */
+@Serializable
+data class StoredSnackAllowance(val kcal: Int, val slot: String = SnackAllowance.DEFAULT_SLOT) {
+    fun toAllowance(): SnackAllowance = SnackAllowance(kcal, slot).also { require(it.valid) { "No such allowance: $kcal kcal" } }
+
+    companion object {
+        fun of(a: SnackAllowance) = StoredSnackAllowance(a.kcal, a.slotKey)
     }
 }
 
@@ -365,6 +398,9 @@ internal object SettingsKeys {
     /** Household measures you calibrated, label → grams (NU-12). Missing labels use the region's defaults. */
     val PORTION_SIZES = stringPreferencesKey("portion_sizes")
 
+    /** NU-06: `{kcal, slot}`; absent when the allowance is off. */
+    val SNACK_ALLOWANCE = stringPreferencesKey("snack_allowance")
+
     /** IB-02: the usual scan weekday and time. */
     val SCAN_SLOT = stringPreferencesKey("scan_slot")
 
@@ -377,6 +413,9 @@ internal object SettingsKeys {
 
     /** RM-01: each reminder's on or off, time and weekdays (PRD §12.8). Absent is every reminder off. */
     val REMINDERS = stringPreferencesKey("reminders")
+
+    /** M15: the scan (by its measured-at time) whose *Preview targets with your scan* card you dismissed. */
+    val SCAN_TARGETS_DISMISSED = longPreferencesKey("scan_targets_dismissed")
 
     /** The bundled food files last imported (TRD §6.4), so launches only re-import when they change. */
     val FOOD_DATA_VERSION = stringPreferencesKey("food_data_version")
@@ -510,6 +549,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         if (unreadable<StoredRamp>(SettingsKeys.PROTEIN_RAMP)) add(SettingsKeys.PROTEIN_RAMP)
         if (unreadable<List<StoredMealSlot>>(SettingsKeys.MEAL_SLOTS)) add(SettingsKeys.MEAL_SLOTS)
         if (unreadable<Map<String, Double>>(SettingsKeys.PORTION_SIZES)) add(SettingsKeys.PORTION_SIZES)
+        if (unreadable<StoredSnackAllowance>(SettingsKeys.SNACK_ALLOWANCE)) add(SettingsKeys.SNACK_ALLOWANCE)
         if (unreadable<StoredScanSlot>(SettingsKeys.SCAN_SLOT)) add(SettingsKeys.SCAN_SLOT)
         if (unreadable<StoredReminders>(SettingsKeys.REMINDERS)) add(SettingsKeys.REMINDERS)
     }
@@ -568,6 +608,20 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     suspend fun setCheckinSeen(weekStart: LocalDate) = store.edit { it[SettingsKeys.CHECKIN_SEEN] = weekStart.toString() }
 
+    /** NU-06. Null when it's off, or when the stored value isn't one of the offered amounts. */
+    val snackAllowance: Flow<SnackAllowance?> =
+        store.data.map { prefs -> prefs.decode<StoredSnackAllowance>(SettingsKeys.SNACK_ALLOWANCE)?.let { runCatching { it.toAllowance() }.getOrNull() } }.distinctUntilChanged()
+
+    suspend fun setSnackAllowance(allowance: SnackAllowance?) = store.edit { prefs ->
+        prefs.keepUnreadable()
+        if (allowance == null) {
+            prefs.remove(SettingsKeys.SNACK_ALLOWANCE)
+        } else {
+            require(allowance.valid) { "No such allowance: ${allowance.kcal} kcal" }
+            prefs[SettingsKeys.SNACK_ALLOWANCE] = settingsJson.encodeToString(StoredSnackAllowance.of(allowance))
+        }
+    }
+
     private fun date(key: Preferences.Key<String>): Flow<LocalDate?> =
         store.data.map { prefs -> prefs[key]?.let { runCatching { LocalDate.parse(it) }.getOrNull() } }.distinctUntilChanged()
 
@@ -579,6 +633,11 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
         it[SettingsKeys.DELOAD_WEEK] = day.toString()
         it.remove(SettingsKeys.DELOAD_SNOOZED_UNTIL)
     }
+
+    /** M15: the scan whose targets card was dismissed; a newer scan offers it again. */
+    val scanTargetsDismissed: Flow<Long?> = store.data.map { it[SettingsKeys.SCAN_TARGETS_DISMISSED] }.distinctUntilChanged()
+
+    suspend fun setScanTargetsDismissed(measuredAt: Long) = store.edit { it[SettingsKeys.SCAN_TARGETS_DISMISSED] = measuredAt }
 
     suspend fun setDeloadSnoozedUntil(day: LocalDate) = store.edit { it[SettingsKeys.DELOAD_SNOOZED_UNTIL] = day.toString() }
 
@@ -602,7 +661,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             (values[key.name] as? String)?.let { text -> runCatching { valid(decode(text)) }.getOrDefault(false) } ?: true
         val strings = listOf(
             SettingsKeys.PERSONA, SettingsKeys.PROFILE, SettingsKeys.TARGET_OVERRIDES, SettingsKeys.PROTEIN_RAMP, SettingsKeys.MEAL_SLOTS,
-            SettingsKeys.PORTION_SIZES, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
+            SettingsKeys.PORTION_SIZES, SettingsKeys.SNACK_ALLOWANCE, SettingsKeys.SCAN_SLOT, SettingsKeys.FOOD_DATA_VERSION, SettingsKeys.LEGACY_TRAINING,
             SettingsKeys.AI_MODE, SettingsKeys.AI_MODEL, SettingsKeys.CHECKIN_SEEN, SettingsKeys.DELOAD_WEEK, SettingsKeys.DELOAD_SNOOZED_UNTIL,
             SettingsKeys.REMINDERS,
             SettingsKeys.AI_PROVIDER, SettingsKeys.AI_MODEL_OPENAI, SettingsKeys.AI_MODEL_GEMINI, SettingsKeys.AI_MODEL_COMPATIBLE, SettingsKeys.AI_BASE_URL,
@@ -613,6 +672,7 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
                 add(SettingsKeys.DAY_START_MINUTES.name)
             }
             if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
+            if (wrongType(SettingsKeys.SCAN_TARGETS_DISMISSED, Long::class)) add(SettingsKeys.SCAN_TARGETS_DISMISSED.name)
             if (wrongType(SettingsKeys.VOLUME_BAND_MIN, Int::class)) add(SettingsKeys.VOLUME_BAND_MIN.name)
             if (wrongType(SettingsKeys.VOLUME_BAND_MAX, Int::class)) add(SettingsKeys.VOLUME_BAND_MAX.name)
             val bandMin = values[SettingsKeys.VOLUME_BAND_MIN.name] as? Int
@@ -636,7 +696,10 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (!decodes(SettingsKeys.PROFILE, { settingsJson.decodeFromString<StoredProfile>(it).toProfile() })) add(SettingsKeys.PROFILE.name)
             if (!decodes(SettingsKeys.TARGET_OVERRIDES, { settingsJson.decodeFromString<StoredOverrides>(it) })) add(SettingsKeys.TARGET_OVERRIDES.name)
             if (!decodes(SettingsKeys.PROTEIN_RAMP, { settingsJson.decodeFromString<StoredRamp>(it) })) add(SettingsKeys.PROTEIN_RAMP.name)
-            if (!decodes(SettingsKeys.MEAL_SLOTS, { settingsJson.decodeFromString<List<StoredMealSlot>>(it) })) add(SettingsKeys.MEAL_SLOTS.name)
+            if (!decodes(SettingsKeys.MEAL_SLOTS, { settingsJson.decodeFromString<List<StoredMealSlot>>(it) }) { slots -> slots.all { it.start == null || it.start in 0 until MealTimes.DAY_MINUTES } }) {
+                add(SettingsKeys.MEAL_SLOTS.name)
+            }
+            if (!decodes(SettingsKeys.SNACK_ALLOWANCE, { settingsJson.decodeFromString<StoredSnackAllowance>(it).toAllowance() })) add(SettingsKeys.SNACK_ALLOWANCE.name)
             if (!decodes(SettingsKeys.PORTION_SIZES, { settingsJson.decodeFromString<Map<String, Double>>(it) })) add(SettingsKeys.PORTION_SIZES.name)
             if (!decodes(SettingsKeys.SCAN_SLOT, { settingsJson.decodeFromString<StoredScanSlot>(it).toSlot() })) add(SettingsKeys.SCAN_SLOT.name)
             if (!decodes(SettingsKeys.CHECKIN_SEEN, LocalDate::parse)) add(SettingsKeys.CHECKIN_SEEN.name)

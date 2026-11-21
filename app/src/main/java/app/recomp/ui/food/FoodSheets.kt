@@ -246,7 +246,8 @@ private fun NumberField(label: String, value: String, suffix: String, modifier: 
 
 /**
  * A custom food (NU-12): per 100 g or per serving. A serving is a unit (the region's, or "serving") and its
- * weight, prefilled for household measures. Switching between the two converts the numbers.
+ * weight, prefilled for household measures. Switching between the two converts the numbers. A new food also
+ * offers [onRecipe], the recipe editor (NU-22), carrying the name typed so far.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -261,6 +262,7 @@ fun CustomFoodSheet(
     prefill: FoodPrefill? = null,
     /** *Scan label* on a new food (NU-19), carrying the name typed so far. */
     onScanLabel: ((name: String) -> Unit)? = null,
+    onRecipe: ((name: String) -> Unit)? = null,
     onSave: (CustomFood) -> Unit,
 ) {
     fun num(d: Double?) = d?.let { if (it % 1.0 == 0.0) "${it.toLong()}" else "%.1f".format(java.util.Locale.ROOT, it) }.orEmpty()
@@ -311,6 +313,12 @@ fun CustomFoodSheet(
                 }
             }
             prefill?.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary) }
+            // NU-22: a dish made of several foods is built from them, not typed in from a label.
+            if (onRecipe != null) {
+                OutlinedButton(onClick = { onRecipe(name.trim()) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text("Recipe · build it from ingredients")
+                }
+            }
             OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = brand, onValueChange = { brand = it }, label = { Text("Brand (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Text("Serving", style = MaterialTheme.typography.labelLarge)

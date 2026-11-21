@@ -40,6 +40,10 @@ object MealPrompt {
                 "confidence instead. Leave clarifying_question empty unless one answer would change the meal's total by more " +
                 "than about a fifth; then ask that one short question.",
         )
+        appendLine(
+            "The user message may list parts of the meal as already counted from the user's own data. Never return those; " +
+                "return only the other items, and an empty items list when nothing else is left.",
+        )
         appendLine()
         appendLine("Diet: ${dietRule(diet)}")
         appendLine(
@@ -70,10 +74,17 @@ object MealPrompt {
 
     /**
      * The meal itself: which origin applies, the description, and, for a re-estimate, the earlier question and your
-     * answer. With a [photo] (NU-20) the words are optional, and they say what the photo can't: counts, hidden
-     * fillings, what's in the glass.
+     * answer. [counted] lists what the local parser already matched (PRD §12.5): the model gets the whole meal for
+     * context and estimates only the rest. With a [photo] (NU-20) the words are optional, and they say what the photo
+     * can't: counts, hidden fillings, what's in the glass.
      */
-    fun user(text: String, origin: Origin, clarification: Clarification? = null, photo: Boolean = false): String = buildString {
+    fun user(
+        text: String,
+        origin: Origin,
+        clarification: Clarification? = null,
+        counted: List<String> = emptyList(),
+        photo: Boolean = false,
+    ): String = buildString {
         appendLine("Origin: ${originName(origin)}")
         if (photo) {
             appendLine(
@@ -83,6 +94,11 @@ object MealPrompt {
             appendLine("Meal: ${text.trim().ifEmpty { "(no words; use the photo)" }}")
         } else {
             appendLine("Meal: ${text.trim()}")
+        }
+        if (counted.isNotEmpty()) {
+            appendLine()
+            appendLine("Already counted, do not return these:")
+            counted.forEach { appendLine("- ${it.trim()}") }
         }
         if (clarification != null) {
             appendLine()
