@@ -259,8 +259,10 @@ class AiRepository @Inject constructor(
      * upper bound. Like a meal, it runs to completion even if the caller stops waiting, so its spend is logged.
      */
     suspend fun coach(system: String, user: String, schema: AiSchema): CoachSent = withContext(NonCancellable) {
+        // As for a meal: the name lookup outside the lock, so a hanging DNS never holds up other requests.
+        locate()
         val (call, pending) = sending.withLock {
-            val state = state()
+            val state = stateNow()
             if (state != AiState.READY) return@withContext CoachSent(AiStatus.UNEXPECTED, null, null, null, notReady = state)
             val s = prefs.ai.first()
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext CoachSent(AiStatus.AUTH, null, null, null, notReady = AiState.NO_KEY) else null
