@@ -1,5 +1,6 @@
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -20,6 +21,13 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        // Open Food Facts asks apps to identify themselves with a contact (TRD §10 M18). It's each builder's own,
+        // from local.properties (`recomp.off.contact=you@example.com`), so it never enters the public repo.
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+        }
+        val offContact = localProps.getProperty("recomp.off.contact").orEmpty().replace("\\", "").replace("\"", "")
+        buildConfigField("String", "OFF_CONTACT", "\"$offContact\"")
     }
 
     buildTypes {
@@ -39,6 +47,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
