@@ -170,6 +170,18 @@ class BodyRepository @Inject constructor(
 
     suspend fun deleteMeasurement(id: Long): MeasurementEntity? = bodyDao.measurement(id)?.also { bodyDao.delete(it) }
 
+    /** A tape site's or mobility marker's readings, newest first, for editing and deleting them (M17). */
+    fun observeReadings(type: MeasurementType): Flow<List<MeasurementEntity>> =
+        bodyDao.observeAllMeasurements().map { rows -> rows.filter { it.type == type }.sortedByDescending { it.measuredAt } }
+
+    /** Changes a tape or mobility reading; refuses a value out of its range. Returns whether it saved. */
+    suspend fun updateReading(id: Long, value: Double, measuredAt: Long): Boolean {
+        val old = bodyDao.measurement(id) ?: return false
+        if (!validReading(old.type, value)) return false
+        updateMeasurement(id, value, measuredAt)
+        return true
+    }
+
     suspend fun restoreMeasurement(row: MeasurementEntity) {
         bodyDao.insert(row)
     }
@@ -308,6 +320,17 @@ fun TapeSite.type(): MeasurementType = when (this) {
 }
 
 fun MeasurementType.tapeSite(): TapeSite? = TapeSite.entries.firstOrNull { it.type() == this }
+
+fun MeasurementType.mobilityMarker(): MobilityMarker? = MobilityMarker.entries.firstOrNull { it.type() == this }
+
+/** Tape readings are 10 to 250 cm; mobility values keep the ranges their sheet allows (YG-04). */
+fun validReading(type: MeasurementType, value: Double): Boolean = when {
+    type.tapeSite() != null -> value in 10.0..250.0
+    type == MeasurementType.SIT_AND_REACH -> MobilityMarkers.validReach(value)
+    type == MeasurementType.SQUAT_HOLD -> value == Math.floor(value) && MobilityMarkers.validHold(value.toInt())
+    type == MeasurementType.TOE_TOUCH -> value == 0.0 || value == 1.0
+    else -> true
+}
 
 fun MobilityMarker.type(): MeasurementType = when (this) {
     MobilityMarker.SIT_AND_REACH -> MeasurementType.SIT_AND_REACH

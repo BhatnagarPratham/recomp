@@ -408,7 +408,7 @@ class TestApp(private val dir: File) {
         snapshots = app.recomp.data.repo.TodaySnapshotRepository(days, prefs, nutrition, training, workouts, progression, checkins, foods, foodLog, db.nudgeDao())
         reminders = app.recomp.reminders.ReminderRunner(prefs, device, days, snapshots, checkins, notifier)
         history = HistoryRepository(db, db.historyDao(), db.workoutDao(), db.exerciseDao(), progression, prefs, days)
-        photos = app.recomp.data.repo.PhotoRepository(context, db.photoDao(), days)
+        photos = app.recomp.data.repo.PhotoRepository(context, db.photoDao(), days, backup)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

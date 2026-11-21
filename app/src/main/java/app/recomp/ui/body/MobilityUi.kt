@@ -1,5 +1,6 @@
 package app.recomp.ui.body
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,8 +25,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import app.recomp.data.db.MeasurementEntity
 import app.recomp.domain.body.MobilityMarker
@@ -60,7 +63,7 @@ object MobilityText {
 
 /** YG-04: the monthly card. It shows each marker's latest and asks again every 4 weeks; hidden while the setting is off. */
 @Composable
-fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: LocalDate, onLog: () -> Unit) {
+fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: LocalDate, onLog: () -> Unit, onOpen: (MobilityMarker) -> Unit = {}) {
     val last = history.values.flatten().maxOfOrNull { it.logDate }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -69,9 +72,12 @@ fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: L
             MobilityMarker.entries.forEach { m ->
                 val rows = history[m].orEmpty()
                 rows.firstOrNull()?.let { latest ->
-                    Text("${MobilityText.name(m)}: ${MobilityText.value(m, latest.value)}", style = MaterialTheme.typography.bodyLarge)
-                    rows.getOrNull(1)?.let { before ->
-                        Text("Before: ${MobilityText.value(m, before.value)} on ${BodyText.date(before.logDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // Tapping a marker lists its readings to change or delete one.
+                    Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "${MobilityText.name(m)} readings") { onOpen(m) }) {
+                        Text("${MobilityText.name(m)}: ${MobilityText.value(m, latest.value)}", style = MaterialTheme.typography.bodyLarge)
+                        rows.getOrNull(1)?.let { before ->
+                            Text("Before: ${MobilityText.value(m, before.value)} on ${BodyText.date(before.logDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -89,8 +95,15 @@ fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: L
 data class MobilityDraft(val reachTenths: Int?, val holdSeconds: Int?, val toeTouch: Boolean?, val at: Long) {
     fun values(): Map<MobilityMarker, Double> = buildMap {
         reachTenths?.let { put(MobilityMarker.SIT_AND_REACH, it / 10.0) }
-        holdSeconds?.let { put(MobilityMarker.SQUAT_HOLD, it.toDouble()) }
+        holdSeconds?.let { put(MobilityMarker.SQUAT_HOLD, clampHold(it).toDouble()) }
         toeTouch?.let { put(MobilityMarker.TOE_TOUCH, if (it) 1.0 else 0.0) }
+    }
+
+    companion object {
+        /** 30 minutes, the longest hold `MobilityMarkers.validHold` takes. */
+        const val MAX_HOLD = 1_800
+
+        fun clampHold(seconds: Int): Int = seconds.coerceIn(0, MAX_HOLD)
     }
 }
 
@@ -98,18 +111,25 @@ data class MobilityDraft(val reachTenths: Int?, val holdSeconds: Int?, val toeTo
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (MobilityDraft) -> Unit) {
-    var reach by remember { mutableStateOf<Int?>(null) }
-    var hold by remember { mutableStateOf<Int?>(null) }
-    var toe by remember { mutableStateOf<Boolean?>(null) }
-    var at by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var running by remember { mutableStateOf(false) }
-    var elapsed by remember { mutableIntStateOf(0) }
-    var typing by remember { mutableStateOf<MobilityMarker?>(null) }
+    // Saveable, so a rotation keeps what's entered and a running stopwatch keeps counting from when it started.
+    var reach by rememberSaveable { mutableStateOf<Int?>(null) }
+    var hold by rememberSaveable { mutableStateOf<Int?>(null) }
+    var toe by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var at by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    var startedAt by rememberSaveable { mutableStateOf<Long?>(null) }
+    val running = startedAt != null
+    var elapsed by rememberSaveable { mutableIntStateOf(0) }
+    var typing by rememberSaveable { mutableStateOf<MobilityMarker?>(null) }
 
-    LaunchedEffect(running) {
-        val start = System.currentTimeMillis() - elapsed * 1000L
-        while (running) {
-            elapsed = ((System.currentTimeMillis() - start) / 1000).toInt()
+    LaunchedEffect(startedAt) {
+        val start = startedAt ?: return@LaunchedEffect
+        while (startedAt != null) {
+            elapsed = MobilityDraft.clampHold(((System.currentTimeMillis() - start) / 1000).toInt())
+            // A stopwatch left running stops at the longest hold a reading can have.
+            if (elapsed >= MobilityDraft.MAX_HOLD) {
+                startedAt = null
+                hold = elapsed
+            }
             delay(200)
         }
     }
@@ -144,16 +164,16 @@ fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (Mobility
                 Button(
                     onClick = {
                         if (running) {
-                            running = false
-                            hold = elapsed
+                            startedAt = null
+                            hold = MobilityDraft.clampHold(elapsed)
                         } else {
                             elapsed = 0
-                            running = true
+                            startedAt = System.currentTimeMillis()
                         }
                     },
                     modifier = Modifier.weight(1f).heightIn(min = 56.dp),
                 ) { Text(if (running) "Stop" else "Start") }
-                OutlinedButton(onClick = { running = false; typing = MobilityMarker.SQUAT_HOLD }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("Type it") }
+                OutlinedButton(onClick = { startedAt = null; typing = MobilityMarker.SQUAT_HOLD }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("Type it") }
             }
 
             Text(MobilityText.name(MobilityMarker.TOE_TOUCH), style = MaterialTheme.typography.titleMedium)
@@ -162,7 +182,7 @@ fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (Mobility
 
             WhenRow(at, BodyText::dateTime, { at = it })
             val draft = MobilityDraft(reach, hold, toe, at)
-            Button(onClick = { running = false; onSave(draft) }, enabled = draft.values().isNotEmpty() && !running, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
+            Button(onClick = { startedAt = null; onSave(draft) }, enabled = draft.values().isNotEmpty() && !running, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
         }
     }
 

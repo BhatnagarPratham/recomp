@@ -5,6 +5,8 @@ import app.recomp.data.repo.TrainingRepository
 import app.recomp.domain.body.MobilityMarker
 import kotlinx.coroutines.flow.map
 import app.recomp.domain.body.TapeSite
+import app.recomp.data.db.MeasurementType
+import app.recomp.data.repo.type
 import app.recomp.domain.body.TapeReading
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -178,6 +180,11 @@ class BodyViewModel @Inject constructor(
     suspend fun deleteWeighIn(id: Long) = body.deleteWeighIn(id)
     suspend fun restore(row: BodyWeightEntity) = body.restoreWeighIn(row)
     suspend fun deleteWaist(id: Long) = body.deleteMeasurement(id)
+
+    /** Tape and mobility readings, to change or delete one (M17). */
+    fun readings(type: MeasurementType) = body.observeReadings(type)
+    suspend fun update(d: ReadingDraft): Boolean = body.updateReading(d.id, d.value, d.at)
+    suspend fun deleteReading(id: Long) = body.deleteMeasurement(id)
     suspend fun restore(row: MeasurementEntity) = body.restoreMeasurement(row)
 }
 
@@ -209,6 +216,8 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
     val scope = rememberCoroutineScope()
     var weighIn by remember { mutableStateOf<WeighInDraft?>(null) }
     var waistDraft by remember { mutableStateOf<WaistDraft?>(null) }
+    var readingsOf by remember { mutableStateOf<MeasurementType?>(null) }
+    var readingDraft by remember { mutableStateOf<ReadingDraft?>(null) }
     var tapeDraft by remember { mutableStateOf<TapeDraft?>(null) }
     var mobilitySheet by remember { mutableStateOf(false) }
     val mobilityOn by viewModel.mobilityOn.collectAsStateWithLifecycle()
@@ -267,7 +276,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
                 Column {
                     SectionTitle("Waist")
                     WaistCard(waist, today, onLog = { scope.launch { tapeDraft = viewModel.entries.newMeasurements() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
-                    TapeCard(tape)
+                    TapeCard(tape, onOpen = { readingsOf = it.type() })
                 }
             }
 
@@ -293,7 +302,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
                 item {
                     Column {
                         SectionTitle("Mobility")
-                        MobilityCard(mobility, today, onLog = { mobilitySheet = true })
+                        MobilityCard(mobility, today, onLog = { mobilitySheet = true }, onOpen = { readingsOf = it.type() })
                     }
                 }
             }
@@ -369,6 +378,24 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
         MeasurementsSheet(d, onDismiss = { tapeDraft = null }) { saved ->
             tapeDraft = null
             viewModel.save(saved)
+        }
+    }
+    readingsOf?.let { type ->
+        val rows by remember(type) { viewModel.readings(type) }.collectAsStateWithLifecycle(emptyList())
+        ReadingsDialog(type, rows, onPick = { readingDraft = ReadingDraft(it); readingsOf = null }, onDismiss = { readingsOf = null })
+    }
+    readingDraft?.let { d ->
+        ReadingSheet(
+            d,
+            onDismiss = { readingDraft = null },
+            onDelete = {
+                readingDraft = null
+                val what = ReadingText.name(d.type).lowercase()
+                scope.launch { viewModel.deleteReading(d.id)?.let { row -> undoable("Deleted the $what reading") { viewModel.restore(row) } } }
+            },
+        ) { saved ->
+            readingDraft = null
+            scope.launch { viewModel.update(saved) }
         }
     }
     waistDraft?.let { d ->
@@ -520,12 +547,15 @@ private val TABLE_W: Dp = DATE_W + NUM_W * 5
 
 /** BM-03: each chosen site's latest reading and its change since the one before. Hidden until there is one. */
 @Composable
-private fun TapeCard(rows: List<TapeReading>) {
+private fun TapeCard(rows: List<TapeReading>, onOpen: (TapeSite) -> Unit) {
     if (rows.isEmpty()) return
     Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             rows.forEach { r ->
-                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "${BodyText.site(r.site)} readings") { onOpen(r.site) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(BodyText.site(r.site), Modifier.weight(1f))
                     Text(BodyText.cm(r.cm) + (r.changeCm?.let { " (${BodyText.signed(it, "cm")})" } ?: ""))
                 }

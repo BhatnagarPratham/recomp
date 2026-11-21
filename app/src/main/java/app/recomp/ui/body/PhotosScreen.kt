@@ -3,7 +3,9 @@ package app.recomp.ui.body
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.content.ActivityNotFoundException
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -61,6 +64,8 @@ import java.io.File
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -69,15 +74,54 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @HiltViewModel
-class PhotosViewModel @Inject constructor(private val photos: PhotoRepository, days: DayBoundary) : ViewModel() {
+class PhotosViewModel @Inject constructor(
+    private val photos: PhotoRepository,
+    private val days: DayBoundary,
+    private val state: SavedStateHandle,
+) : ViewModel() {
     val items: StateFlow<List<PhotoItem>?> = photos.observe().map { photos.items(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val today: StateFlow<LocalDate> = days.observeToday().stateIn(viewModelScope, SharingStarted.Eagerly, LocalDate.now())
 
-    fun newCaptureFile(pose: PhotoPose): File = photos.newCaptureFile(pose)
+    /** A one-off message: a capture with no camera app, or a file that couldn't be deleted. */
+    val message = MutableStateFlow<String?>(null)
 
-    fun saved(file: File, pose: PhotoPose) = viewModelScope.launch { photos.saveCapture(file, pose) }
+    init {
+        // Files no row points at (a capture whose app was killed before this fix, or left by an import) can't be
+        // seen or deleted, so they go; a capture the camera may still be writing is never that old.
+        viewModelScope.launch { photos.sweepOrphans() }
+    }
 
-    fun delete(id: Long) = viewModelScope.launch { photos.delete(id) }
+    /**
+     * The camera app's target for [pose]. The pose and file name are kept in the saved state, so a result that
+     * arrives after Android recreated Recomp (memory, or a rotation) still saves the photo.
+     */
+    fun startCapture(pose: PhotoPose): File = photos.newCaptureFile(pose).also { file ->
+        state[CAPTURE_POSE] = pose.name
+        state[CAPTURE_FILE] = file.name
+    }
+
+    /** The camera's answer: saves the capture, or removes an empty or cancelled one. */
+    fun finishCapture(ok: Boolean): Job = viewModelScope.launch {
+        val pose = state.get<String>(CAPTURE_POSE)?.let { name -> PhotoPose.entries.firstOrNull { it.name == name } }
+        val file = state.get<String>(CAPTURE_FILE)?.let(photos::captureFile)
+        state.remove<String>(CAPTURE_POSE)
+        state.remove<String>(CAPTURE_FILE)
+        if (file == null) return@launch
+        if (ok && pose != null) photos.saveCapture(file, pose) else file.delete()
+    }
+
+    /** No app answers the camera intent (the camera is optional in the manifest): nothing is left behind. */
+    fun cameraMissing(): Job = finishCapture(false).also { message.value = PhotoText.NO_CAMERA }
+
+    /** Whether a new [pose] photo would replace one from today, so the screen asks first. */
+    suspend fun replaces(pose: PhotoPose): Boolean = photos.has(pose, days.today())
+
+    fun delete(id: Long): Job = viewModelScope.launch { if (!photos.delete(id)) message.value = PhotoText.NOT_DELETED }
+
+    companion object {
+        const val CAPTURE_POSE = "capture_pose"
+        const val CAPTURE_FILE = "capture_file"
+    }
 }
 
 object PhotoText {
@@ -90,24 +134,31 @@ object PhotoText {
     const val PRIVATE = "Photos stay in Recomp's own storage: not in your gallery, not sent to AI, and not in Android's backup. A backup file holds them only when you include them."
     const val SUGGEST = "It's been 4 weeks: time for new photos. Same spot, same light, same time of day."
     const val FIRST = "Take front, side and back photos to compare later. Same spot, same light, same time of day."
+    const val NO_CAMERA = "There's no camera app on this phone to take the photo with."
+    const val NOT_DELETED = "Couldn't delete the photo. Try again."
+
+    fun replace(p: PhotoPose) = "Replace today's ${pose(p).lowercase()} photo?"
+    const val REPLACE_TEXT = "The one you took earlier today is deleted once the new one is saved."
 }
 
 /** A downscaled bitmap of [file], decoded off the main thread; null while loading or when the file is missing. */
 @Composable
-private fun rememberPhoto(file: File, maxPx: Int): Bitmap? = produceState<Bitmap?>(null, file, maxPx) {
+private fun rememberPhoto(file: File, maxPx: Int, rotation: Int): Bitmap? = produceState<Bitmap?>(null, file, maxPx, rotation) {
     value = withContext(Dispatchers.IO) {
         if (!file.isFile) return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= maxPx && bounds.outHeight / (sample * 2) >= maxPx) sample *= 2
-        runCatching { BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) }.getOrNull()
+        val bitmap = runCatching { BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) }.getOrNull()
+        // BitmapFactory ignores EXIF orientation, so a portrait shot saved sideways is turned upright here.
+        if (bitmap == null || rotation == 0) bitmap else Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, Matrix().apply { postRotate(rotation.toFloat()) }, true)
     }
 }.value
 
 @Composable
 private fun PhotoTile(item: PhotoItem?, label: String, modifier: Modifier = Modifier, maxPx: Int = 400, onClick: (() -> Unit)? = null) {
-    val bitmap = item?.takeIf { it.present }?.let { rememberPhoto(it.file, maxPx) }
+    val bitmap = item?.takeIf { it.present }?.file?.let { rememberPhoto(it, maxPx, item.rotation) }
     Box(
         modifier.aspectRatio(3f / 4f).background(MaterialTheme.colorScheme.surfaceVariant)
             .then(if (onClick != null) Modifier.clickable(role = Role.Image, onClickLabel = "Open $label", onClick = onClick) else Modifier),
@@ -141,7 +192,8 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
     val today by viewModel.today.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var pending by remember { mutableStateOf<Pair<PhotoPose, File>?>(null) }
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    var replacing by remember { mutableStateOf<PhotoPose?>(null) }
     var askingFor by remember { mutableStateOf<PhotoPose?>(null) }
     var denied by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<PhotoItem?>(null) }
@@ -149,16 +201,15 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
     var comparePose by remember { mutableStateOf(PhotoPose.FRONT) }
     var compare by remember { mutableStateOf(false) }
 
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val (pose, file) = pending ?: return@rememberLauncherForActivityResult
-        pending = null
-        if (ok) viewModel.saved(file, pose) else file.delete()
-    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> viewModel.finishCapture(ok) }
     fun launch(pose: PhotoPose) {
-        val file = viewModel.newCaptureFile(pose)
-        pending = pose to file
+        val file = viewModel.startCapture(pose)
         val uri = FileProvider.getUriForFile(context, PhotoCapture.authority(context.packageName), file)
-        camera.launch(uri)
+        try {
+            camera.launch(uri)
+        } catch (e: ActivityNotFoundException) {
+            viewModel.cameraMissing()
+        }
     }
     fun take(pose: PhotoPose, askedBefore: Boolean = false) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -183,7 +234,7 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
                     if (PhotoRepository.suggest(latest, today)) Text(if (latest == null) PhotoText.FIRST else PhotoText.SUGGEST, color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         PhotoPose.entries.forEach { pose ->
-                            OutlinedButton(onClick = { take(pose) }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text(PhotoText.pose(pose)) }
+                            OutlinedButton(onClick = { scope.launch { if (viewModel.replaces(pose)) replacing = pose else take(pose) } }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text(PhotoText.pose(pose)) }
                         }
                     }
                     Text(PhotoText.PRIVATE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -194,10 +245,13 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(BodyText.date(date), style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PhotoPose.entries.forEach { pose ->
-                                val item = photos.firstOrNull { it.photo.pose == pose }
-                                PhotoTile(item, PhotoText.pose(pose).lowercase(), Modifier.weight(1f), onClick = item?.let { { open = it } })
+                        // Every photo of the date shows, so each can be opened and deleted; a pose without one gets a placeholder.
+                        tiles(photos).chunked(3).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { (pose, item) ->
+                                    PhotoTile(item, PhotoText.pose(pose).lowercase(), Modifier.weight(1f), onClick = item?.let { { open = it } })
+                                }
+                                repeat(3 - row.size) { Box(Modifier.weight(1f)) }
                             }
                         }
                     }
@@ -221,6 +275,19 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
             scope.launch { viewModel.delete(item.photo.id) }
         }
     }
+    replacing?.let { pose ->
+        ConfirmDialog(PhotoText.replace(pose), PhotoText.REPLACE_TEXT, "Take a new one", onDismiss = { replacing = null }) {
+            replacing = null
+            take(pose)
+        }
+    }
+    message?.let { text ->
+        AlertDialog(
+            onDismissRequest = { viewModel.message.value = null },
+            text = { Text(text) },
+            confirmButton = { TextButton(onClick = { viewModel.message.value = null }) { Text("OK") } },
+        )
+    }
     if (denied) {
         AlertDialog(
             onDismissRequest = { denied = false },
@@ -231,6 +298,11 @@ fun PhotosScreen(onBack: () -> Unit, viewModel: PhotosViewModel = hiltViewModel(
     if (compare) {
         CompareDialog(items.orEmpty(), comparePose, onPose = { comparePose = it }, onDismiss = { compare = false })
     }
+}
+
+/** A date's tiles: each pose's photos, newest first, or one empty placeholder for a pose with none. */
+internal fun tiles(photos: List<PhotoItem>): List<Pair<PhotoPose, PhotoItem?>> = PhotoPose.entries.flatMap { pose ->
+    photos.filter { it.photo.pose == pose }.sortedByDescending { it.photo.takenAt }.map { pose to it }.ifEmpty { listOf(pose to null) }
 }
 
 /** *Compare* (BM-04): one pose, two dates side by side; the earliest and the latest to start with. */

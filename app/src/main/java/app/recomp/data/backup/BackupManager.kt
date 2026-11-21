@@ -19,6 +19,7 @@ import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteStatement
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.db.PhotoPaths
 import app.recomp.data.db.readers
 import app.recomp.data.prefs.SettingsPrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -29,6 +30,7 @@ import java.io.OutputStream
 import java.util.Base64
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
@@ -45,6 +47,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromStream
 import kotlinx.serialization.json.encodeToStream
 import kotlinx.serialization.json.jsonArray
@@ -136,13 +139,21 @@ class BackupManager @Inject constructor(
     /** `files/photos/`: the progress photos (M17). Android's own backup never includes it. */
     private val photoDir: File get() = File(context.filesDir, PHOTO_DIR)
 
-    /** The photo files a backup carries: plain names only, so nothing outside the folder can be named. */
-    private fun photoFiles(): List<File> = photoDir.listFiles()?.filter { it.isFile && PHOTO_NAME.matches(it.name) }?.sortedBy { it.name }.orEmpty()
+    /**
+     * The photo files a backup carries: only those a `progress_photo` row points at, so a backup holds exactly
+     * the photos the app shows (a file no row names is never exported), and plain names only.
+     */
+    private fun photoFiles(data: DatabaseData): List<File> {
+        val table = data.tables[PHOTO_TABLE] ?: return emptyList()
+        val column = table.columns.indexOf(FILE_PATH)
+        val names = table.rows.mapNotNull { row -> row.getOrNull(column)?.jsonPrimitive?.contentOrNull?.let(PhotoPaths::name) }.toSet()
+        return names.map { File(photoDir, it) }.filter { it.isFile }.sortedBy { it.name }
+    }
 
     private suspend fun exportTo(out: OutputStream, now: Long, includePhotos: Boolean): BackupManifest {
         val data = db.withTransaction { DatabaseSnapshot.read(db.openHelper.writableDatabase::query) }
         val settings = encodeSettings(prefs.exportable())
-        val photos = if (includePhotos) photoFiles() else emptyList()
+        val photos = if (includePhotos) photoFiles(data) else emptyList()
         val version = if (includePhotos) FORMAT_VERSION else FORMAT_VERSION_WITHOUT_MEDIA
         val manifest = BackupManifest(FORMAT, version, schemaVersion(), now, appVersion(), data.tables.mapValues { it.value.rows.size }, photos.size)
         // Each entry is written straight into the zip, never held as one big string; photos stream file by file.
@@ -339,6 +350,52 @@ class BackupManager @Inject constructor(
     internal fun readPending(): PendingRestore? =
         pendingFile.takeIf { it.isFile }?.let { runCatching { json.decodeFromString<PendingRestore>(it.readText()) }.getOrNull() ?: run { it.delete(); null } }
 
+    /** Whether an import is between its database commit and its photos and settings, so photos must be left alone. */
+    fun importInProgress(): Boolean = pendingFile.isFile || incomingPhotos.exists()
+
+    /**
+     * Takes a deleted photo out of the safety copy too, file and row, so *Delete* holds ("This can't be undone")
+     * and *Restore the data from before the import* doesn't bring it back (M17). Does nothing without a safety
+     * copy or when the photo isn't in it.
+     */
+    suspend fun dropFromSafetyCopy(filePath: String) = withContext(NonCancellable + Dispatchers.IO) {
+        val file = safetyCopyFile
+        val name = PhotoPaths.name(filePath) ?: return@withContext
+        if (!file.isFile) return@withContext
+        val entry = "$PHOTO_DIR/$name"
+        val part = File(file.parentFile, "${file.name}.part")
+        val changed = ZipFile(file).use { zip ->
+            val data = zip.getEntry(DATABASE)?.let { e -> zip.getInputStream(e).use { decode<DatabaseData>(it) } } ?: return@use false
+            val table = data.tables[PHOTO_TABLE]
+            val column = table?.columns?.indexOf(FILE_PATH) ?: -1
+            val kept = table?.rows?.filterNot { it.getOrNull(column)?.jsonPrimitive?.contentOrNull == filePath }
+            val hasFile = zip.getEntry(entry) != null
+            if (!hasFile && kept?.size == table?.rows?.size) return@use false
+            val newData = if (table != null && kept != null) data.copy(tables = data.tables + (PHOTO_TABLE to table.copy(rows = kept))) else data
+            ZipOutputStream(part.outputStream()).use { out ->
+                zip.entries().asSequence().forEach { e ->
+                    if (e.name == entry) return@forEach
+                    out.putNextEntry(ZipEntry(e.name))
+                    when (e.name) {
+                        MANIFEST -> {
+                            val m = zip.getInputStream(e).use { decode<BackupManifest>(it) }
+                            val rows = m.rows + (PHOTO_TABLE to (newData.tables[PHOTO_TABLE]?.rows?.size ?: 0))
+                            json.encodeToStream(m.copy(rows = rows, photos = m.photos - if (hasFile) 1 else 0), out)
+                        }
+                        DATABASE -> json.encodeToStream(newData, out)
+                        else -> zip.getInputStream(e).use { it.copyTo(out) }
+                    }
+                }
+                out.closeEntry()
+            }
+            true
+        }
+        if (changed && !part.renameTo(file)) {
+            part.delete()
+            throw BackupException("Couldn't remove the photo from the safety copy.")
+        }
+    }
+
     /** When the safety copy was made, or null without one. */
     suspend fun safetyCopyDate(): Long? = withContext(Dispatchers.IO) {
         if (!safetyCopyFile.isFile) return@withContext null
@@ -405,6 +462,10 @@ class BackupManager @Inject constructor(
         try {
             val scratch = room.openHelper.writableDatabase
             brokenLinks(scratch::query)?.let { throw BackupException.damaged("entries that point at rows it doesn't have ($it)") }
+            // A photo row may only name a file in files/photos, or Delete could remove any app file (M17).
+            scratch.query("SELECT $FILE_PATH FROM $PHOTO_TABLE").use { c ->
+                while (c.moveToNext()) if (!PhotoPaths.valid(c.getString(0) ?: "")) throw BackupException.damaged("a photo that points outside the photos folder")
+            }
             room.backupCheckDao().readers().forEach { (table, read) ->
                 try {
                     read()
@@ -529,9 +590,10 @@ class BackupManager @Inject constructor(
         /** Format 2 (M17) can carry `photos/<name>` entries; a backup without photos is still written as format 1. */
         const val FORMAT_VERSION = 2
         const val FORMAT_VERSION_WITHOUT_MEDIA = 1
-        const val PHOTO_DIR = "photos"
-        /** What a photo file may be called: the camera capture's own name, and nothing that could leave the folder. */
-        internal val PHOTO_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,120}\\.jpg")
+        const val PHOTO_DIR = PhotoPaths.DIR
+        private const val PHOTO_TABLE = "progress_photo"
+        private const val FILE_PATH = "file_path"
+        internal val PHOTO_NAME = PhotoPaths.NAME
         /** A phone photo is a few MB; 25 MB allows for any camera. */
         private const val MAX_PHOTO_FILE_BYTES = 25L * 1024 * 1024
         /** Years of monthly front, side and back photos. */

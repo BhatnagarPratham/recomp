@@ -23,6 +23,7 @@ import app.recomp.domain.trend.WeightPace
 import java.io.File
 import kotlinx.coroutines.flow.flowOf
 import app.recomp.domain.body.MobilityMarker
+import app.recomp.data.db.MeasurementType
 import app.recomp.domain.body.TapeSite
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -317,5 +318,31 @@ class BodyFlowTest {
         // Mobility readings never count as tape.
         assertTrue(body.observeTape().first().isEmpty())
     }
-}
 
+    @Test
+    fun `a tape or mobility reading can be changed in range, deleted and brought back`() = runBlocking {
+        body.logTape(mapOf(TapeSite.WAIST to 86.0, TapeSite.ARM to 95.0), at(0, "07:00"))
+        body.logMobility(mapOf(MobilityMarker.SQUAT_HOLD to 45.0, MobilityMarker.TOE_TOUCH to 0.0), at(0, "08:00"))
+        val arm = body.observeReadings(MeasurementType.ARM).first().single()
+
+        // A typo of 95 cm for the arm is fixed; a value out of range is refused and changes nothing.
+        assertFalse(body.updateReading(arm.id, 5.0, arm.measuredAt))
+        assertTrue(body.updateReading(arm.id, 35.0, arm.measuredAt))
+        assertEquals(35.0, body.observeTape().first().single { it.site == TapeSite.ARM }.cm, 1e-9)
+        val hold = body.observeReadings(MeasurementType.SQUAT_HOLD).first().single()
+        assertFalse(body.updateReading(hold.id, 2_000.0, hold.measuredAt))
+        assertFalse(body.updateReading(hold.id, 30.5, hold.measuredAt))
+        assertTrue(body.updateReading(hold.id, 60.0, hold.measuredAt))
+        val toe = body.observeReadings(MeasurementType.TOE_TOUCH).first().single()
+        assertFalse(body.updateReading(toe.id, 0.5, toe.measuredAt))
+        assertTrue(body.updateReading(toe.id, 1.0, toe.measuredAt))
+        assertEquals(listOf(60.0), body.observeMobility().first().getValue(MobilityMarker.SQUAT_HOLD).map { it.value })
+
+        val deleted = body.deleteMeasurement(arm.id)!!
+        assertTrue(body.observeTape().first().none { it.site == TapeSite.ARM })
+        body.restoreMeasurement(deleted)
+        assertEquals(35.0, body.observeReadings(MeasurementType.ARM).first().single().value, 1e-9)
+        // The waist is untouched by any of it.
+        assertEquals(86.0, body.lastWaistCm()!!, 1e-9)
+    }
+}

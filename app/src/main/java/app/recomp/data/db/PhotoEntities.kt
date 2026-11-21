@@ -48,3 +48,21 @@ interface PhotoDao {
     @Delete
     suspend fun delete(photo: ProgressPhotoEntity)
 }
+
+/**
+ * Where progress photos may live (M17): `files/photos/<name>.jpg`, a plain name with no path in it. Every row's
+ * `file_path` is checked against this before a file is read or deleted, and an import refuses a backup with one
+ * that doesn't match, so a crafted row can't point at another app file.
+ */
+object PhotoPaths {
+    /** Under `files/`; Android's backup rules never include it. */
+    const val DIR = "photos"
+
+    /** A photo file's name: the camera capture's own, and nothing that could leave the folder. */
+    val NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,120}\\.jpg")
+
+    fun valid(filePath: String): Boolean = filePath.startsWith("$DIR/") && NAME.matches(filePath.substring(DIR.length + 1))
+
+    /** The file name of a valid [filePath], or null. */
+    fun name(filePath: String): String? = filePath.takeIf(::valid)?.substring(DIR.length + 1)
+}
