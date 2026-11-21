@@ -1519,6 +1519,13 @@ Tests cover:
 - **Risks:** inexact alarms can drift by minutes, and battery saver can delay them further; the cap still holds. Widget updates are limited to the triggers above.
 - **Parallel:** with M11.
 
+**M12 results (2026-11-21, reference phone on Android 15).** No Room change. Built as above, with these readings where §12.8 left room (written into PRD §12.8): reminders are clock times on calendar weekdays, capped per log day; a ring more than 90 minutes late is dropped; a skipped or blocked reminder doesn't use up the cap; lean bulk nudges at more than 10% of the day's calories left; steps use the protein rule against 8,000 until M13 adds the step goal. The rest of the design is in §6.6 (*Reminders as built*) and §4 (`reminders`, `reminder_ledger`).
+- **M9's slot rule.** It hadn't merged, so "the meal for the time of day" is `MealClock.slotAt` in `:domain/nudge`: Lunch from 05:00 to 17:00, the last meal from then until the small hours. It's the only place to switch to `MealTimes.slotAt` once M9 is on `main`.
+- **Steps.** The nudge reads `daily_activity.steps` and leaves the line out while it's null; a test fills a row the way M13 will and sees it appear.
+- **Tests:** 643 in the gate, 0 failures, lint 0 errors. New: `ReminderDayTest` (21: the cap and skip rules over a simulated day, the day boundary, time-zone and clock changes), `NudgesTest` (14: content per goal, ranking, portions, the slot stand-in), `ReminderFlowTest` (20: the skip rules over real rows, notification text, one-tap log and *Undo*, the check-in and scan reminders, the ledger kept out of exports and Android's backup) and `WidgetAndScheduleTest` (10: the widget's state after a food log, a workout, a target change and the day rolling over; the alarm after a restart, a clock change and a time-zone change).
+- **On the phone.** The release over the real data: Today and Settings → Reminders open, all off, and no alarm is set; nothing was turned on there. In a dev install with invented data, the first reminder turned on asked for notification permission, the over-two warning showed, and the evening notification came 3 minutes after its time (inexact, as expected) with three of the invented foods. Its button logged a portion into Lunch and *Undo* took it back, with the widget following both. The 4×1 widget's *Log food* opened Food and a tap on it opened Today, whose *Tonight* card logged and undid a suggestion. After the ring the alarm moved to the next day.
+- **Found on the phone and fixed:** a portion could round 3 kcal over the calories left; where the calories decide the size, it now rounds down.
+
 #### M13: Health Connect in
 
 *AR-01, AR-02, AR-04, IB-07; PRD §12.9; Room v12.*

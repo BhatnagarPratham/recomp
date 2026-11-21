@@ -130,6 +130,10 @@ class NudgesTest {
         val fits = Nudges.portion(paneer, proteinLeftG = 40, kcalLeft = 300)
         assertEquals(110.0, fits.grams, 0.0)
         assertTrue(fits.kcal <= 300)
+        // Found on the phone: 660 kcal left allows 249 g, which rounded up to 250 g (663 kcal). It rounds down now.
+        val tight = Nudges.portion(paneer.copy(usualGrams = 200.0), proteinLeftG = 73, kcalLeft = 660)
+        assertEquals(240.0, tight.grams, 0.0)
+        assertTrue(tight.kcal <= 660)
         // 50 kcal left would be 19 g: half the usual instead.
         assertEquals(50.0, Nudges.portion(paneer, proteinLeftG = 40, kcalLeft = 50).grams, 0.0)
         // Over on calories already: sized by protein alone.

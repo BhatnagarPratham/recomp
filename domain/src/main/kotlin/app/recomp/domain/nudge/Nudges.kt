@@ -5,6 +5,7 @@ import app.recomp.domain.food.PortionUnit
 import app.recomp.domain.food.Portions
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -131,16 +132,23 @@ object Nudges {
     /**
      * A portion that fits what's left: enough to cover the protein left, but no more than twice what you usually
      * have (or [Portions.MAX_UNIT_GRAMS]), and within the calories left when there are some, though never under
-     * half your usual portion. Rounded to the unit's step: ½ a unit, or 10 g.
+     * half your usual portion. Rounded to the unit's step (½ a unit, or 10 g), down where the calories decide it.
      */
     fun portion(food: NudgeFood, proteinLeftG: Int, kcalLeft: Int): Suggestion {
         val per = food.per100g
         val usual = food.usualGrams.takeIf { it > 0 } ?: 100.0
         var grams = min(proteinLeftG / per.proteinG * 100.0, min(usual * 2, Portions.MAX_UNIT_GRAMS))
-        if (kcalLeft > 0 && per.kcal > 0) grams = min(grams, max(kcalLeft / per.kcal * 100.0, usual / 2))
+        // Where the calories left decide the size, the step rounds down, so the portion never goes over them.
+        var roundDown = false
+        if (kcalLeft > 0 && per.kcal > 0) {
+            val byKcal = kcalLeft / per.kcal * 100.0
+            if (byKcal < grams && byKcal >= usual / 2) roundDown = true
+            grams = min(grams, max(byKcal, usual / 2))
+        }
         val unit = food.unit.takeIf { it.grams > 0 } ?: PortionUnit(Portions.GRAMS, 1.0, PortionUnit.Kind.GRAMS)
         val step = Portions.step(unit.label)
-        val quantity = max(step, (grams / unit.grams / step).roundToInt() * step)
+        val steps = grams / unit.grams / step
+        val quantity = max(step, (if (roundDown) floor(steps + 1e-9) else steps.roundToInt().toDouble()) * step)
         val rounded = quantity * unit.grams
         val macros = per.forGrams(rounded)
         return Suggestion(food.id, food.name, quantity, unit, rounded, macros.proteinG.roundToInt(), macros.kcal.roundToInt())
