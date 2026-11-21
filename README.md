@@ -25,6 +25,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M11: with AI on, a weekly programme review: you tick what's sent (body trends off by default), read the full text, and get up to 5 suggestions you apply one by one, with Undo. Train also offers a deload week every 6–8 weeks (4–6 for advanced lifters).
 > - M13: Health Connect in: daily steps against a goal, last night's sleep at the morning weigh-in, walks, runs and classes recorded by other apps counted toward your weekly plan, and InBody measurements as draft scans. Each is off until you turn it on, read-only, and stays on the phone.
 > - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
+> - M17: body extras: tape measurements beyond the waist, progress photos that stay in the app (never the gallery, never AI, in a backup only when you include them), focus areas on classes, and monthly mobility tests.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
