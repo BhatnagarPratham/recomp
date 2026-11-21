@@ -91,6 +91,9 @@ class ProgressionRepository @Inject constructor(
     /** The trend weight in grams (TRD §5.2), or null before the primary source's first weigh-in. */
     suspend fun trendWeightG(): Int? = body.trendKg()?.let { (it * 1000).roundToInt() }
 
+    /** The trend weight in grams as it stood at [at] (a session's end), for rebuilding assisted PRs (WL-10). */
+    suspend fun trendWeightGAt(at: Long): Int? = body.trendKgAt(at)?.let { (it * 1000).roundToInt() }
+
     /** TRD §5.1: the target in force at [now] against the TDEE estimate stored with it. False until there's a target. */
     suspend fun inDeficit(now: Long = System.currentTimeMillis()): Boolean =
         nutritionDao.targetOn(days.of(now))?.let { EnergyBalance.inDeficit(it.kcal, it.tdeeEstimate) } ?: false

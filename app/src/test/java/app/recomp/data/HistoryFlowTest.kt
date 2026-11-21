@@ -546,5 +546,32 @@ class HistoryFlowTest {
         assertEquals(ExerciseChartData.Kind.ASSISTANCE, assisted.kind)
         assertEquals(listOf(30.0, 25.0), assisted.line.map { it.value })
     }
+
+    @Test
+    fun `an edit never rewrites assisted PRs as the trend weight moves`() = runBlocking {
+        val pullUp = exercise("Assisted pull-up")
+        val r = routine(pullUp)
+        // Before any weigh-in: least assistance is the record, in assistance grams.
+        val noWeight1 = workout(r, sets(40_000, 8, 8, 8))
+        val noWeight2 = workout(r, sets(35_000, 8, 8, 8))
+        app.body.logWeighIn(80_000, WeightSource.HOME_SCALE, clock + 2 * 3_600_000)
+        val first = workout(r, sets(30_000, 12, 12, 12))
+        val second = workout(r, sets(20_000, 6, 6, 6))
+        val atFinish = records()
+        assertEquals(35_000L, app.db.backupCheckDao().personalRecord().single { it.sessionId == noWeight2 && it.type == PrType.MAX_LOAD }.value)
+        assertTrue(PrType.E1RM in types(second))
+
+        // The trend moves a long way afterwards.
+        repeat(10) { i -> app.body.logWeighIn(120_000, WeightSource.HOME_SCALE, clock + (i + 1) * day) }
+        clock += 11 * day
+
+        // Editing the oldest workout's notes rebuilds every later one, and changes none of their records.
+        saveAndCompare(noWeight1, draft(noWeight1).copy(notes = "Grip slipped"))
+        assertEquals(atFinish, records())
+        history.rebuildAllPrs()
+        assertEquals(atFinish, records())
+        assertTrue(PrType.E1RM in types(second))
+        assertNotNull(first)
+    }
 }
 

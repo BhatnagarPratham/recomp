@@ -152,4 +152,25 @@ class PrRebuilderTest {
         assertEquals(25_000, least.loadG) // the record keeps the assistance
         assertEquals(25_000L, scratch(assisted, LoadType.ASSISTED, bodyWeightG = null).single { it.record.type == PrType.MAX_LOAD }.record.value)
     }
+
+    @Test
+    fun `each assisted session is judged at its own body weight, so a later weight never rewrites it`() {
+        val assisted = listOf(exposure(1, w(30_000, 12)), exposure(2, w(20_000, 6)))
+        // Finished at an 80 kg trend, session 2 set the least-assistance and e1RM records.
+        val atFinish = PrRebuilder.rebuild(assisted, PrRebuilder.FROM_SCRATCH, LoadType.ASSISTED) { 80_000 }
+        assertEquals(setOf(PrType.MAX_LOAD, PrType.E1RM), atFinish.types(2))
+        // At 120 kg it wouldn't have had the e1RM record; judged at its own weight it keeps it.
+        assertEquals(setOf(PrType.MAX_LOAD), PrRebuilder.rebuild(assisted, PrRebuilder.FROM_SCRATCH, LoadType.ASSISTED, bodyWeightG = 120_000).types(2))
+        val ownWeight = mapOf(1L to 80_000, 2L to 80_000)
+        assertEquals(atFinish, PrRebuilder.rebuild(assisted, PrRebuilder.FROM_SCRATCH, LoadType.ASSISTED) { ownWeight[it.sessionId] })
+
+        // A session finished before the first weigh-in keeps the assistance as its record.
+        val beforeWeighIn = PrRebuilder.rebuild(assisted, PrRebuilder.FROM_SCRATCH, LoadType.ASSISTED) { null }
+        assertEquals(20_000L, beforeWeighIn.single { it.record.type == PrType.MAX_LOAD }.record.value)
+
+        // Other load types never read a body weight.
+        var asked = false
+        PrRebuilder.rebuild(history(), PrRebuilder.FROM_SCRATCH, LoadType.WEIGHTED) { asked = true; 80_000 }
+        assertFalse(asked)
+    }
 }

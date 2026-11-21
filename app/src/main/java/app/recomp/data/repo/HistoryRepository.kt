@@ -194,7 +194,8 @@ class HistoryRepository @Inject constructor(
     /**
      * Replaces the PRs of [exerciseIds] in every session that starts at or after [from] with what the
      * history now implies. Earlier sessions' PRs can't have changed, so they're left as they are.
-     * Assisted lifts are judged at today's trend weight, as everywhere else (WL-09).
+     * An assisted lift's sessions are each judged at the trend weight when they finished, as finishing
+     * them was, so moving body weight never changes their records (WL-09).
      */
     suspend fun rebuildPrs(exerciseIds: Collection<Long>, from: Long) = db.withTransaction {
         exerciseIds.distinct().forEach { exerciseId ->
@@ -204,8 +205,13 @@ class HistoryRepository @Inject constructor(
                 val first = rows.first()
                 RebuildExposure(first.sessionId, first.startedAt, first.endedAt ?: first.startedAt, rows.map { SessionSet(it.set.id, it.set.toLogged()) })
             }
-            val bodyWeight = if (exercise.loadType == LoadType.ASSISTED) progression.trendWeightG() else null
-            val records = PrRebuilder.rebuild(exposures, from, exercise.loadType, bodyWeight).map {
+            // Each assisted session is judged at the trend weight when it finished, as finishing it was (WL-09).
+            val weights = if (exercise.loadType == LoadType.ASSISTED) {
+                exposures.filter { it.startedAt >= from }.map { it.achievedAt }.distinct().associateWith { progression.trendWeightGAt(it) }
+            } else {
+                emptyMap()
+            }
+            val records = PrRebuilder.rebuild(exposures, from, exercise.loadType) { weights[it.achievedAt] }.map {
                 PersonalRecordEntity(
                     exerciseId = exerciseId, sessionId = it.sessionId, type = it.record.type, value = it.record.value,
                     loadG = it.record.loadG, setEntryId = it.record.setId, achievedAt = it.achievedAt,

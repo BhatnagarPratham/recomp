@@ -28,14 +28,23 @@ object PrRebuilder {
 
     /**
      * @param exposures every completed exposure of one exercise, in any order.
-     * @param bodyWeightG the trend weight, for [LoadType.ASSISTED] only (WL-09).
+     * @param bodyWeightG the same trend weight for every session, for [LoadType.ASSISTED] only (WL-09).
      */
-    fun rebuild(exposures: List<RebuildExposure>, from: Long, loadType: LoadType, bodyWeightG: Int?): List<RebuiltRecord> {
+    fun rebuild(exposures: List<RebuildExposure>, from: Long, loadType: LoadType, bodyWeightG: Int?): List<RebuiltRecord> =
+        rebuild(exposures, from, loadType) { bodyWeightG }
+
+    /**
+     * As above, judging each session at [bodyWeightAt] that session: for an assisted lift, the trend weight
+     * when it finished, which is what finishing it used. So a rebuild gives back the records finishing
+     * wrote, however the trend has moved since (WL-09).
+     */
+    fun rebuild(exposures: List<RebuildExposure>, from: Long, loadType: LoadType, bodyWeightAt: (RebuildExposure) -> Int?): List<RebuiltRecord> {
         val ordered = exposures.filter { it.sets.isNotEmpty() }.sortedWith(compareBy({ it.startedAt }, { it.sessionId }))
         return ordered.filter { it.startedAt >= from }.flatMap { current ->
             val previous = ordered
                 .filter { it.startedAt < current.startedAt || (it.startedAt == current.startedAt && it.sessionId < current.sessionId) }
                 .map { Exposure(it.startedAt, it.sets.map(SessionSet::set)) }
+            val bodyWeightG = if (loadType == LoadType.ASSISTED) bodyWeightAt(current) else null
             PersonalRecords.detect(current.sets, previous, loadType, bodyWeightG).map { RebuiltRecord(current.sessionId, current.achievedAt, it) }
         }
     }
