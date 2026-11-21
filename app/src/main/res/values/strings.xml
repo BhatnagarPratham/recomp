@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_label">Recomp today</string>
+    <string name="widget_description">Your goal\'s main number, protein, and the next workout.</string>
+</resources>
