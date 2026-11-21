@@ -69,4 +69,12 @@ class SessionEditTest {
         assertNull(SessionEdit.normalized(typed, LoadType.BODYWEIGHT).loadG)
         assertEquals(5_000, SessionEdit.normalized(typed, LoadType.BODYWEIGHT_PLUS).loadG)
     }
+
+    @Test
+    fun `nothing may start at or after the workout in progress`() {
+        val active = at(date, 18)
+        assertNull(SessionEdit.activeProblem(active - 1, active))
+        assertNotNull(SessionEdit.activeProblem(active, active))
+        assertNotNull(SessionEdit.activeProblem(active + 600_000, active))
+    }
 }

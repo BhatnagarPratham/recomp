@@ -61,4 +61,13 @@ class HistoryTextTest {
         assertEquals("The least assistance each session, in kg. Lower is better.", ExerciseChartText.caption(ExerciseChartData.Kind.ASSISTANCE))
         assertEquals("12 weeks", ExerciseChartText.range(ChartRange.WEEKS_12))
     }
+
+    @Test
+    fun `the chart says why it isn't drawn`() {
+        val d = LocalDate.of(2026, 11, 2)
+        val one = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d, 10.0)), emptyList())
+        assertEquals("A chart appears after two sessions.", ExerciseChartText.notEnough(one))
+        val two = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d.minusDays(200), 8.0), ChartValue(d, 10.0)), emptyList())
+        assertEquals("Fewer than two sessions in the last 12 weeks. Choose Everything to see them all.", ExerciseChartText.notEnough(two))
+    }
 }

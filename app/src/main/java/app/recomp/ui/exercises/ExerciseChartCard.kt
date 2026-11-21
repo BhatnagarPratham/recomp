@@ -27,18 +27,14 @@ import kotlin.math.roundToInt
 fun ExerciseChartCard(data: ExerciseChartData, range: ChartRange, today: LocalDate, onRange: (ChartRange) -> Unit, modifier: Modifier = Modifier) {
     val first = (data.line + data.dots).minOfOrNull { it.date }
     val from = range.from(today, first)
-    val inRange = (data.line + data.dots).count { !it.date.isBefore(from) }
     val colors = MaterialTheme.colorScheme
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(ExerciseChartText.title(data.kind), style = MaterialTheme.typography.titleMedium)
             ExerciseChartText.caption(data.kind)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
             ChoiceChips(ChartRange.entries, range, ExerciseChartText::range, onRange)
-            if (!data.drawable || inRange == 0) {
-                Text(
-                    if (!data.drawable) "A chart appears after two sessions." else "No sessions in the last 12 weeks.",
-                    color = colors.onSurfaceVariant,
-                )
+            if (!data.drawableFrom(from)) {
+                Text(ExerciseChartText.notEnough(data), color = colors.onSurfaceVariant)
             } else {
                 val series = buildList {
                     if (data.dots.isNotEmpty()) add(ChartSeries(data.dots.points(), colors.onSurfaceVariant, line = false, dots = ChartDots.HOLLOW))
@@ -72,6 +68,10 @@ object ExerciseChartText {
         ExerciseChartData.Kind.REPS -> null
         ExerciseChartData.Kind.ASSISTANCE -> "The least assistance each session, in kg. Lower is better."
     }
+
+    /** Why there's no chart: too few sessions at all, or too few in the last 12 weeks. */
+    fun notEnough(data: ExerciseChartData) =
+        if (!data.drawable) "A chart appears after two sessions." else "Fewer than two sessions in the last 12 weeks. Choose Everything to see them all."
 
     fun range(r: ChartRange) = when (r) {
         ChartRange.WEEKS_12 -> "12 weeks"

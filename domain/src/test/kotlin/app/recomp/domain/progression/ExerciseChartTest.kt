@@ -66,4 +66,37 @@ class ExerciseChartTest {
         assertEquals(d1, ChartRange.ALL.from(today, d1))
         assertEquals(today.minusDays(1), ChartRange.ALL.from(today, today))
     }
+
+    @Test
+    fun `unweighted pull-ups chart reps, never a row of 0 kg`() {
+        val unweighted = listOf(DatedExposure(d1, listOf(w(0, 10), w(0, 10))), DatedExposure(d2, listOf(w(0, 12), w(null, 11))))
+        val chart = ExerciseChart.of(unweighted, LoadType.BODYWEIGHT_PLUS)
+        assertEquals(ExerciseChartData.Kind.REPS, chart.kind)
+        assertEquals(listOf(ChartValue(d1, 10.0), ChartValue(d2, 12.0)), chart.line)
+        assertTrue(chart.dots.isEmpty())
+    }
+
+    @Test
+    fun `once a pull-up session has added load, only loaded sessions are plotted`() {
+        val d3 = d2.plusDays(3)
+        val mixed = listOf(
+            DatedExposure(d1, listOf(w(0, 12))),
+            DatedExposure(d2, listOf(w(5_000, 8))),
+            DatedExposure(d3, listOf(w(7_500, 8), w(0, 10))),
+        )
+        val chart = ExerciseChart.of(mixed, LoadType.BODYWEIGHT_PLUS)
+        assertEquals(ExerciseChartData.Kind.E1RM, chart.kind)
+        assertEquals(listOf(d2, d3), chart.line.map { it.date })
+        assertEquals(listOf(ChartValue(d2, 5.0), ChartValue(d3, 7.5)), chart.dots)
+        assertTrue(chart.line.none { it.value == 0.0 } && chart.dots.none { it.value == 0.0 })
+    }
+
+    @Test
+    fun `a window with fewer than two sessions draws nothing`() {
+        val old = d1.minusDays(100)
+        val chart = ExerciseChart.of(listOf(DatedExposure(old, listOf(w(40_000, 8))), DatedExposure(d2, listOf(w(42_500, 8)))), LoadType.WEIGHTED)
+        assertTrue(chart.drawable)
+        assertFalse(chart.drawableFrom(d1))
+        assertTrue(chart.drawableFrom(old))
+    }
 }

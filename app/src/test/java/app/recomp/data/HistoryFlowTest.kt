@@ -409,8 +409,17 @@ class HistoryFlowTest {
         assertNotNull(history.saveEdit(id, d.copy(exercises = d.exercises + EditedExercise(9_999, emptyList())), now = later))
         assertEquals(before, Triple(session(id), rows(id), records()))
 
+        // With a workout in progress, a past one can't be moved to start at or after it.
+        val activeStart = clock + day
+        val inProgress = workouts.startRoutine(push().id, now = activeStart)
+        assertNotNull(history.saveEdit(id, d.copy(startedAt = activeStart + 60_000, endedAt = activeStart + 120_000), now = later))
+        assertNotNull(history.saveEdit(id, d.copy(startedAt = activeStart, endedAt = activeStart + 60_000), now = later))
+        assertEquals(before, Triple(session(id), rows(id), records()))
+        assertNull(history.saveEdit(id, d.copy(startedAt = activeStart - 3_600_000, endedAt = activeStart - 60_000), now = later))
+        workouts.discard(inProgress)
+
         // An active workout is edited in the workout screen, a discarded one nowhere.
-        val active = workouts.startRoutine(push().id, now = clock + day)
+        val active = workouts.startRoutine(push().id, now = clock + 2 * day)
         assertNull(history.editable(active))
         assertNotNull(history.saveEdit(active, d, now = later))
         assertFalse(history.deleteSession(active))

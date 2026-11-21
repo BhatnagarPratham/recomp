@@ -100,6 +100,10 @@ class HistoryRepository @Inject constructor(
         val old = workoutDao.session(sessionId)?.takeIf { it.status == SessionStatus.COMPLETED && it.kind == SessionKind.STRENGTH }
             ?: return@withTransaction "This workout can't be edited."
         SessionEdit.timeProblem(edit.startedAt, edit.endedAt, now)?.let { return@withTransaction it }
+        // A workout in progress compares itself with every finished one when it ends, so nothing may move after its start.
+        workoutDao.active()?.let { active ->
+            SessionEdit.activeProblem(edit.startedAt, active.startedAt)?.let { return@withTransaction it }
+        }
         val rows = workoutDao.sessionExercises(sessionId)
         val kept = edit.exercises.associateBy { it.sessionExerciseId }
         if (kept.keys.any { id -> rows.none { it.entry.id == id } }) return@withTransaction "This workout changed while you were editing it."
@@ -230,6 +234,7 @@ class HistoryRepository @Inject constructor(
         val startedAt = Instant.ofEpochMilli(session.startedAt).atZone(zone).plusDays(moved).toInstant().toEpochMilli()
         val endedAt = startedAt + edit.durationMin * 60_000L
         SessionEdit.timeProblem(startedAt, endedAt, now)?.let { return@withTransaction "That date is in the future." }
+        workoutDao.active()?.let { active -> SessionEdit.activeProblem(startedAt, active.startedAt)?.let { return@withTransaction it } }
         workoutDao.updateSession(session.copy(startedAt = startedAt, endedAt = endedAt, logDate = days.of(startedAt), notes = edit.notes?.trim()?.ifBlank { null }))
         historyDao.updateYogaDetail(detail.copy(durationMin = edit.durationMin, intensity = edit.intensity))
         null

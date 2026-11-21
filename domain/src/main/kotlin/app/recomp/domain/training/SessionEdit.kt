@@ -38,6 +38,14 @@ object SessionEdit {
         else -> null
     }
 
+    /**
+     * A past session can't start at or after the start of the workout in progress: finishing that
+     * workout finds its PRs against every finished session, so one placed after it would count as
+     * earlier there and later everywhere else.
+     */
+    fun activeProblem(startedAt: Long, activeStartedAt: Long): String? =
+        if (startedAt >= activeStartedAt) "A workout is in progress. A past session has to start before it." else null
+
     /** Why this set can't be saved, or null. Bodyweight sets carry no load; the others need one. */
     fun setProblem(set: EditedSet, loadType: LoadType): String? = when {
         set.reps !in 1..MAX_REPS -> "Every set needs at least 1 rep."

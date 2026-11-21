@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.repo.HistoryEntry
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
@@ -51,6 +52,7 @@ class ExerciseHistoryViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val training: TrainingRepository,
     private val progression: ProgressionRepository,
+    days: DayBoundary,
 ) : ViewModel() {
     private val exerciseId = savedState.toRoute<ExerciseHistoryRoute>().exerciseId
     val exercise = training.observeExercise(exerciseId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -64,7 +66,8 @@ class ExerciseHistoryViewModel @Inject constructor(
     private val _range = MutableStateFlow(ChartRange.WEEKS_12)
     val range: StateFlow<ChartRange> = _range
 
-    val today: LocalDate = LocalDate.now()
+    /** The log date under "day starts at" (PR-03), like the sessions' own dates. */
+    val today: StateFlow<LocalDate> = days.observeToday().stateIn(viewModelScope, SharingStarted.Eagerly, LocalDate.now())
 
     /** Reloaded each time the screen comes back, so an edit made in History shows here (WL-10). */
     fun reload() = viewModelScope.launch {
@@ -89,6 +92,7 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val chart by viewModel.chart.collectAsStateWithLifecycle()
     val range by viewModel.range.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
     LifecycleResumeEffect(Unit) {
         viewModel.reload()
         onPauseOrDispose {}
@@ -113,7 +117,7 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             chart?.let { data ->
-                item(key = "chart") { ExerciseChartCard(data, range, viewModel.today, viewModel::setRange) }
+                item(key = "chart") { ExerciseChartCard(data, range, today, viewModel::setRange) }
             }
             items(list, key = { it.sessionId }) { entry ->
                 Card(Modifier.fillMaxWidth()) {
