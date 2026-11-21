@@ -1,5 +1,6 @@
 package app.recomp.data.repo
 
+import app.recomp.domain.ai.AiImage
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
@@ -83,9 +84,13 @@ class MealDescriber @Inject constructor(
         clarification: Clarification? = null,
         draft: DraftPlan? = null,
         parserOnFailure: Boolean = false,
+        /** A meal photo (NU-20) and where it's kept: the parser can't see it, so the AI estimates the whole meal. */
+        photo: AiImage? = null,
+        photoPath: String? = null,
     ): DescribeResult = withContext(NonCancellable) {
         val state = ai.state()
         if (state != AiState.READY) return@withContext DescribeResult.Described(local(foods.parseMeal(text), state))
+        if (photo != null) return@withContext withPhoto(text, origin, kind, clarification, draft.takeIf { !parserOnFailure }, photo, photoPath)
         val parsed = if (origin == Origin.ORDERED) null else foods.parseMeal(text)
         // Only sure matches stay local: a guess goes to the AI with the rest, so a wrong dish is never "counted".
         if (parsed != null && parsed.items.isNotEmpty() && parsed.unsure.isEmpty()) return@withContext DescribeResult.Described(local(parsed, state))
@@ -114,6 +119,21 @@ class MealDescriber @Inject constructor(
                 else -> DescribeResult.Failed(result.status, result.requestId, result.draftId)
             }
         }
+    }
+
+    private suspend fun withPhoto(
+        text: String, origin: Origin, kind: AiKind, clarification: Clarification?, draft: DraftPlan?, photo: AiImage, photoPath: String?,
+    ): DescribeResult = when (val result = ai.estimate(text, origin, clarification, draft, kind, emptyList(), photo, photoPath)) {
+        is EstimateResult.Estimated -> DescribeResult.Described(
+            DescribedMeal(
+                items = result.meal.items.map { DescribedItem(it, ItemFrom.AI) },
+                rejected = result.meal.rejected,
+                question = result.meal.clarifyingQuestion,
+                requestId = result.requestId,
+            ),
+        )
+        is EstimateResult.NotReady -> DescribeResult.Described(local(foods.parseMeal(text), result.state))
+        is EstimateResult.Failed -> DescribeResult.Failed(result.status, result.requestId, result.draftId)
     }
 
     /** The parser's answer alone: sure matches as items, and the rest as parts to resolve, each guess offered. */

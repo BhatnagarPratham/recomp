@@ -26,6 +26,13 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import android.graphics.BitmapFactory
 import app.recomp.data.body.ScanImages
+import app.recomp.data.prefs.DayBoundary
+import app.recomp.data.repo.FoodLogRepository
+import app.recomp.domain.food.MealTimes
+import androidx.compose.runtime.rememberCoroutineScope
+import java.time.LocalDate
+import java.time.LocalTime
+import kotlinx.coroutines.flow.first
 import app.recomp.ui.navigation.ShareRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -46,7 +53,12 @@ suspend fun loadScanImage(images: ScanImages, name: String, maxPx: Int = 1600): 
 }
 
 @HiltViewModel
-class ShareViewModel @Inject constructor(savedState: SavedStateHandle, private val images: ScanImages) : ViewModel() {
+class ShareViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val images: ScanImages,
+    private val days: DayBoundary,
+    private val log: FoodLogRepository,
+) : ViewModel() {
     val image: String = savedState.toRoute<ShareRoute>().image
 
     /** Shared before onboarding finished: nothing was kept. */
@@ -59,17 +71,32 @@ class ShareViewModel @Inject constructor(savedState: SavedStateHandle, private v
         if (image.isNotEmpty()) viewModelScope.launch { _bitmap.value = loadScanImage(images, image, maxPx = 800) }
     }
 
+    /** Where a label or meal photo goes (M18): today, in the meal for the time of day (else the first meal). */
+    suspend fun target(): Pair<LocalDate, String> {
+        val slots = log.mealSlots.first().filter { !it.removed }
+        val slot = MealTimes.slotAt(slots, LocalTime.now())?.key ?: slots.first().key
+        return days.today() to slot
+    }
+
     /** *Cancel*: the copy goes at once. */
     fun cancel() = images.delete(image)
 }
 
 /**
  * "What is this?" for an image shared to Recomp (IB-03, TRD §6.7, PRD §12.11). *InBody result* opens the scan form
- * with the image pinned above it. Nutrition labels and meal photos come with M18. No AI reads an InBody image.
+ * with the image pinned above it. No AI reads an InBody image. *Nutrition label* reads it on the phone (and with AI,
+ * after its notice) into New food; *Meal photo* opens Describe it with it (M18). Both go to today's meal for the time of day.
  */
 @Composable
-fun ShareScreen(onInBody: (String) -> Unit, onDone: () -> Unit, viewModel: ShareViewModel = hiltViewModel()) {
+fun ShareScreen(
+    onInBody: (String) -> Unit,
+    onDone: () -> Unit,
+    onLabel: (image: String, date: LocalDate, slot: String) -> Unit = { _, _, _ -> },
+    onMealPhoto: (image: String, date: LocalDate, slot: String) -> Unit = { _, _, _ -> },
+    viewModel: ShareViewModel = hiltViewModel(),
+) {
     val bitmap by viewModel.bitmap.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("What is this?", style = MaterialTheme.typography.headlineSmall)
         if (viewModel.image.isEmpty()) {
@@ -87,7 +114,19 @@ fun ShareScreen(onInBody: (String) -> Unit, onDone: () -> Unit, viewModel: Share
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text("Nutrition labels and meal photos come in a later version.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(
+            onClick = { scope.launch { val (date, slot) = viewModel.target(); onLabel(viewModel.image, date, slot) } },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text("Nutrition label") }
+        OutlinedButton(
+            onClick = { scope.launch { val (date, slot) = viewModel.target(); onMealPhoto(viewModel.image, date, slot) } },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text("Meal photo") }
+        Text(
+            "A label is read on this phone into New food; a meal photo opens Describe it. With AI on, either is sent to your AI provider only after you choose to.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedButton(onClick = { viewModel.cancel(); onDone() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel") }
     }
 }

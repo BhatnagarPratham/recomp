@@ -1,6 +1,23 @@
 package app.recomp.ui.food
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ListItem
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.ImeAction
+import app.recomp.data.repo.BarcodeLookup
+import app.recomp.data.repo.CameraFoodRepository
+import app.recomp.data.repo.FoodPrefill
+import app.recomp.data.repo.OffSearch
+import app.recomp.domain.food.OffProduct
+import app.recomp.domain.food.OpenFoodFacts
+import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.transformLatest
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -85,6 +102,15 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** Open Food Facts under your own results (NU-11, International region): asked after a pause or on submit. */
+sealed interface OffResults {
+    data object Hidden : OffResults
+    data object Searching : OffResults
+    data class Found(val words: String, val products: List<OffProduct>) : OffResults
+    data object Busy : OffResults
+    data object Unreachable : OffResults
+}
+
 /** The list under the search box: your recent foods, the basics, or search results. */
 data class FoodResults(val query: String, val heading: String, val hits: List<FoodHit>)
 
@@ -96,6 +122,7 @@ class AddFoodViewModel @Inject constructor(
     private val log: FoodLogRepository,
     ai: AiRepository,
     days: DayBoundary,
+    private val cameraFood: CameraFoodRepository,
 ) : ViewModel() {
     private val route = savedState.toRoute<AddFoodRoute>()
     val date: LocalDate = LocalDate.parse(route.date)
@@ -139,6 +166,54 @@ class AddFoodViewModel @Inject constructor(
         version.value++
     }
 
+    private val submitted = MutableStateFlow<String?>(null)
+
+    /**
+     * Open Food Facts' results for the words (NU-11): only for the International region, only for 3+ characters,
+     * and only once you've paused for [OpenFoodFacts.SEARCH_PAUSE_MS] with few of your own matches, or on submit.
+     * Each search is asked once a session; a 429 backs off.
+     */
+    val off: StateFlow<OffResults> = merge(
+        combine(query.debounce(OpenFoodFacts.SEARCH_PAUSE_MS), results, foods.filter) { q, r, f ->
+            val words = q.trim()
+            words.takeIf {
+                f.region == FoodRegion.INTERNATIONAL && it.length >= OpenFoodFacts.SEARCH_MIN_CHARS &&
+                    r?.query == q && r.hits.size < OpenFoodFacts.FEW_RESULTS
+            }
+        },
+        combine(submitted, foods.filter) { q, f -> q?.trim()?.takeIf { f.region == FoodRegion.INTERNATIONAL && it.length >= OpenFoodFacts.SEARCH_MIN_CHARS } }
+            .drop(1),
+    )
+        .combine(query) { words, q -> words?.takeIf { q.trim() == it } }
+        .distinctUntilChanged()
+        .transformLatest { words ->
+            if (words == null) {
+                emit(OffResults.Hidden)
+            } else {
+                emit(OffResults.Searching)
+                emit(
+                    when (val r = cameraFood.search(words)) {
+                        is OffSearch.Results -> OffResults.Found(words, r.products)
+                        is OffSearch.Busy -> OffResults.Busy
+                        OffSearch.Unreachable -> OffResults.Unreachable
+                    },
+                )
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OffResults.Hidden)
+
+    /** The search box's submit: asks Open Food Facts now, without the pause. */
+    fun submit() {
+        submitted.value = query.value
+    }
+
+    suspend fun barcode(code: String): BarcodeLookup = cameraFood.barcode(code)
+
+    fun prefill(p: OffProduct): FoodPrefill = cameraFood.prefill(p)
+
+    /** A label scan's result, once (NU-19). */
+    fun takeScan(): FoodPrefill? = cameraFood.take()
+
     suspend fun portion(foodId: Long) = foods.portion(foodId)
 
     suspend fun units(foodId: Long) = foods.units(foodId)
@@ -167,10 +242,7 @@ class AddFoodViewModel @Inject constructor(
     suspend fun update(id: Long, food: CustomFood) = foods.updateCustom(id, food).also { refresh() }
 
     /** A custom food as the form edits it: per 100 g, with its serving unit. */
-    suspend fun custom(id: Long): CustomFood? {
-        val f = foods.food(id)?.takeIf { it.source == FoodSource.CUSTOM } ?: return null
-        return CustomFood(f.name, f.brand, f.per100g, f.diet, foods.serving(id)?.let { it.label to it.grams })
-    }
+    suspend fun custom(id: Long): CustomFood? = foods.editable(id)
 
     fun renameMeal(id: Long, name: String) = viewModelScope.launch { log.renameMeal(id, name) }
 
@@ -180,8 +252,8 @@ class AddFoodViewModel @Inject constructor(
 /** What the portion sheet is logging. */
 private data class Logging(val food: FoodEntity, val state: PortionSheetState)
 
-/** A custom food being created ([id] null) or edited. */
-private data class FoodForm(val id: Long?, val initial: CustomFood?, val name: String, val diet: FoodDiet)
+/** A custom food being created ([id] null) or edited; a new one may open with what a scan filled in. */
+private data class FoodForm(val id: Long?, val initial: CustomFood?, val name: String, val diet: FoodDiet, val prefill: FoodPrefill? = null)
 
 /**
  * Adding food to a meal (J3): search, My meals in one tap, Quick add and New food. It stays open after
@@ -198,6 +270,14 @@ fun AddFoodScreen(
     onRecipe: (id: Long?, name: String) -> Unit,
     recipeOutcome: RecipeOutcome?,
     onRecipeOutcomeShown: () -> Unit,
+    /** *Scan barcode* (NU-21); null hides it, e.g. on a phone without a camera. */
+    onScanBarcode: (() -> Unit)? = null,
+    /** *Scan label* (NU-19), with New food's name so far. */
+    onScanLabel: ((String) -> Unit)? = null,
+    /** A barcode the scanner came back with, and a label scan having finished; cleared once handled. */
+    scannedBarcode: String? = null,
+    labelScanned: Boolean = false,
+    onCameraResultShown: () -> Unit = {},
     viewModel: AddFoodViewModel = hiltViewModel(),
 ) {
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -209,6 +289,7 @@ fun AddFoodScreen(
     val household by viewModel.household.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val gate by viewModel.gate.collectAsStateWithLifecycle()
+    val off by viewModel.off.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var logging by remember { mutableStateOf<Logging?>(null) }
@@ -236,6 +317,43 @@ fun AddFoodScreen(
     fun open(foodId: Long) = scope.launch {
         val choice = viewModel.portion(foodId) ?: return@launch
         logging = Logging(choice.food, PortionSheetState(choice.food.name, choice.food.caveat, choice.units, choice.quantity, choice.unit, choice.origin))
+    }
+
+    suspend fun openPrefill(p: FoodPrefill) {
+        form = FoodForm(null, null, p.name, p.diet ?: viewModel.defaultDiet(), p)
+    }
+
+    // A barcode not on Open Food Facts is kept for the label scan that may follow, so that food has it too.
+    var unmatchedBarcode by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // What the camera came back with (NU-19, NU-21).
+    LaunchedEffect(scannedBarcode, labelScanned) {
+        val code = scannedBarcode
+        if (code == null && !labelScanned) return@LaunchedEffect
+        onCameraResultShown()
+        if (labelScanned) {
+            val p = viewModel.takeScan() ?: return@LaunchedEffect
+            openPrefill(p.copy(barcode = p.barcode ?: unmatchedBarcode))
+            unmatchedBarcode = null
+            return@LaunchedEffect
+        }
+        code ?: return@LaunchedEffect
+        when (val found = viewModel.barcode(code)) {
+            is BarcodeLookup.Yours -> open(found.food.id)
+            is BarcodeLookup.Found -> openPrefill(found.prefill)
+            BarcodeLookup.NotFound -> scope.launch {
+                unmatchedBarcode = code
+                val scan = onScanLabel
+                if (scan == null) {
+                    snackbar.showSnackbar("That barcode isn't on Open Food Facts. Add it as a new food.")
+                } else if (snackbar.showSnackbar("That barcode isn't on Open Food Facts. Scan the label instead?", actionLabel = "Scan label", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+                    scan("")
+                }
+            }
+            BarcodeLookup.Invalid -> scope.launch { snackbar.showSnackbar("That barcode didn't read cleanly. Try again, holding it flat.") }
+            is BarcodeLookup.Busy -> scope.launch { snackbar.showSnackbar("Open Food Facts asked to slow down. Try again in ${FoodText.wait(found.waitMs)}.") }
+            BarcodeLookup.Unreachable -> scope.launch { snackbar.showSnackbar("Couldn't reach Open Food Facts. Check the connection, or scan the label.") }
+        }
     }
 
     // Back from the recipe editor (NU-22): a new recipe is usually about to be logged, like a new food.
@@ -277,6 +395,8 @@ fun AddFoodScreen(
                     onValueChange = { viewModel.query.value = it },
                     label = { Text("Search foods") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { viewModel.submit() }),
                     trailingIcon = if (query.isNotEmpty()) {
                         { TextButton(onClick = { viewModel.query.value = "" }, modifier = Modifier.semantics { contentDescription = "Clear search" }) { Text("✕") } }
                     } else {
@@ -303,6 +423,9 @@ fun AddFoodScreen(
                         onClick = { scope.launch { form = FoodForm(null, null, query.trim(), viewModel.defaultDiet()) } },
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     ) { Text("New food") }
+                }
+                onScanBarcode?.let { scan ->
+                    OutlinedButton(onClick = scan, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Scan barcode") }
                 }
             }
 
@@ -333,7 +456,7 @@ fun AddFoodScreen(
                         hit,
                         onOpen = { open(hit.food.id) },
                         onEdit = when (hit.food.source) {
-                            FoodSource.CUSTOM -> {
+                            in FoodRepository.EDITABLE -> {
                                 { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
                             }
                             FoodSource.RECIPE -> {
@@ -349,7 +472,7 @@ fun AddFoodScreen(
                         },
                     )
                 }
-                if (r.query.isNotBlank() && r.hits.isEmpty()) {
+                if (r.query.isNotBlank() && r.hits.isEmpty() && off !is OffResults.Found) {
                     item {
                         Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("No food matches “${r.query.trim()}”.", style = MaterialTheme.typography.bodyLarge)
@@ -358,6 +481,8 @@ fun AddFoodScreen(
                     }
                 }
             }
+
+            offSection(off) { product -> scope.launch { openPrefill(viewModel.prefill(product)) } }
         }
     }
 
@@ -402,6 +527,15 @@ fun AddFoodScreen(
             household = household,
             defaultDiet = f.diet,
             onDismiss = { form = null },
+            prefill = f.prefill,
+            onScanLabel = onScanLabel?.let { scan ->
+                { name: String ->
+                    // Carry a product's barcode over to the label it's replaced by.
+                    if (f.prefill?.barcode != null) unmatchedBarcode = f.prefill.barcode
+                    form = null
+                    scan(name)
+                }
+            },
             onRecipe = if (f.id == null) {
                 { name -> form = null; onRecipe(null, name) }
             } else {
@@ -431,6 +565,48 @@ fun AddFoodScreen(
         ConfirmDialog("Delete “${m.meal.name}”?", "It's removed from My meals. Food you've already logged stays.", confirm = "Delete", onDismiss = { deleting = null }) {
             deleting = null
             viewModel.deleteMeal(m.meal.id)
+        }
+    }
+}
+
+/** Open Food Facts' part of the list (NU-11), kept apart from your foods and credited (ODbL). */
+private fun androidx.compose.foundation.lazy.LazyListScope.offSection(off: OffResults, onOpen: (OffProduct) -> Unit) {
+    when (off) {
+        OffResults.Hidden -> Unit
+        OffResults.Searching -> item(key = "off-searching") {
+            Text("Searching Open Food Facts…", Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OffResults.Busy -> item(key = "off-busy") {
+            Text("Open Food Facts asked to slow down. Try again in a minute.", Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OffResults.Unreachable -> item(key = "off-unreachable") {
+            Text("Couldn't reach Open Food Facts.", Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        is OffResults.Found -> {
+            item(key = "off-heading") { Heading("From Open Food Facts") }
+            if (off.products.isEmpty()) {
+                item(key = "off-none") { Text("Nothing there for “${off.words}”.", Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            items(off.products, key = { "off-${it.code}" }) { p ->
+                val v = OpenFoodFacts.values(p)
+                ListItem(
+                    headlineContent = { Text(OpenFoodFacts.displayName(p)) },
+                    supportingContent = {
+                        Text(
+                            listOfNotNull(p.brand, v.kcal?.let { "${it.roundToInt()} kcal per 100 g" } ?: "no calories listed").joinToString(" · "),
+                        )
+                    },
+                    modifier = Modifier.clickable { onOpen(p) },
+                )
+            }
+            item(key = "off-credit") {
+                Text(
+                    "Product data © Open Food Facts contributors, under the Open Database License. Check the values before saving.",
+                    Modifier.padding(vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -471,6 +647,8 @@ private fun FoodRow(hit: FoodHit, onOpen: () -> Unit, onEdit: (() -> Unit)?, onH
         Column(Modifier.weight(1f).heightIn(min = 56.dp).clickable(onClickLabel = "Log ${food.name}", onClick = onOpen).padding(vertical = 8.dp)) {
             val mark = when (food.source) {
                 FoodSource.CUSTOM -> " · yours"
+                FoodSource.LABEL_OCR -> " · yours, from a label"
+                FoodSource.OFF -> " · Open Food Facts"
                 FoodSource.RECIPE -> " · your recipe"
                 FoodSource.AI -> " · AI-learned"
                 else -> ""

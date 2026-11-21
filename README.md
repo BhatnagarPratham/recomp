@@ -29,6 +29,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M14: recipes: *New food* → *Recipe* builds a dish from the foods in it, with a cooked weight or a number of servings. It becomes one of your foods, with values per 100 g and per serving and its strictest ingredient's diet tag.
 > - M15: share an InBody screenshot to Recomp and type the scan with it pinned above the form (it stays on the phone, never sent to AI); with a recent on-protocol scan, BMR uses your lean mass, Body offers to preview targets with it, and a target body-fat % becomes a finish line.
 > - M19: goals: *What to expect* when you change goal, a Goal reached card, a suggested maintenance break after 12 weeks in a deficit that resumes on its own, *Describe your goal* read by AI (only the text you type is sent), a pregnancy and breastfeeding switch that turns off deficits, and presets as data files a fork can add to.
+> - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
@@ -65,6 +66,10 @@ You need:
 2. Point Gradle at your SDK in `local.properties` (Android Studio writes this for you):
    ```properties
    sdk.dir=/path/to/Android/sdk
+   ```
+   Barcode lookups and International search use [Open Food Facts](https://world.openfoodfacts.org), which asks apps to name a contact in their User-Agent. Add yours on the next line; it goes into your build only, never the repo:
+   ```properties
+   recomp.off.contact=you@example.com
    ```
 3. Turn on the privacy hooks (below):
    ```bash

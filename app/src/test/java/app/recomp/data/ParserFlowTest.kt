@@ -1,6 +1,8 @@
 package app.recomp.data
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.test.core.app.ApplicationProvider
+import app.recomp.data.food.PhotoStore
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
@@ -143,7 +145,8 @@ class ParserFlowTest {
     }
 
     private fun describeVm() = DescribeViewModel(
-        SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L)), app.ai, app.foodLog, app.foods, app.describer,
+        SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L)), app.ai, app.foodLog, app.foods,
+        PhotoStore(ApplicationProvider.getApplicationContext()), app.describer, app.scanImages,
     )
 
     // AI-04: Describe it with AI off

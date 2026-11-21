@@ -40,6 +40,11 @@ import app.recomp.domain.ai.MealCheck
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealPrompt
 import app.recomp.domain.ai.MealRequest
+import app.recomp.data.ai.LabelSchema
+import app.recomp.domain.ai.AiImage
+import app.recomp.domain.ai.LabelCheck
+import app.recomp.domain.ai.LabelEstimate
+import app.recomp.domain.ai.LabelPrompt
 import app.recomp.domain.ai.OwnFood
 import app.recomp.domain.food.Origin
 import java.time.Clock
@@ -76,6 +81,13 @@ data class AiSpend(val month: LocalDate, val costUsd: Double, val requests: Int)
  * How a weekly programme review's request ended (M11). [json] is the reply, set only when [status] is OK; the
  * request was logged and costed whatever happened ([requestId], null only when the gate stopped it first).
  */
+/** How Scan label's AI reading ended (NU-19). */
+sealed interface LabelRead {
+    data class Read(val estimate: LabelEstimate, val requestId: Long) : LabelRead
+    data class NotReady(val state: AiState) : LabelRead
+    data class Failed(val status: AiStatus, val requestId: Long?) : LabelRead
+}
+
 data class CoachSent(val status: AiStatus, val json: JsonObject?, val text: String?, val requestId: Long?, val notReady: AiState? = null)
 
 /** How an estimate ended. Only [Estimated] carries items; a [Failed] request was still logged and costed. */
@@ -219,6 +231,9 @@ class AiRepository @Inject constructor(
         draft: DraftPlan? = null,
         kind: AiKind = AiKind.MEAL_TEXT,
         counted: List<String> = emptyList(),
+        /** A meal photo (NU-20), already downscaled, and where it's kept while it's a draft. A photo makes it MEAL_PHOTO. */
+        photo: AiImage? = null,
+        photoPath: String? = null,
     ): EstimateResult = withContext(NonCancellable) {
         // The name lookup first, outside the lock: a hanging DNS then holds up this estimate only.
         locate()
@@ -232,8 +247,8 @@ class AiRepository @Inject constructor(
             // A compatible server gets its key only if it's the server the key was entered for.
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
             val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
-            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification, counted))
-            request to reserve(kind, request.target, request.upperBound)
+            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification, counted, photo = photo != null), listOfNotNull(photo))
+            request to reserve(if (photo != null && kind == AiKind.MEAL_TEXT) AiKind.MEAL_PHOTO else kind, request.target, request.upperBound)
         }
         val reply = try {
             estimator.estimate(request)
@@ -260,7 +275,7 @@ class AiRepository @Inject constructor(
         if (status == AiStatus.OK && checked != null) {
             EstimateResult.Estimated(checked, pending.id)
         } else {
-            val draftId = draft?.takeIf { it.keep() }?.let { keepDraft(it.date, it.slot, it.replacing, text, origin, status) }
+            val draftId = draft?.takeIf { it.keep() }?.let { keepDraft(it.date, it.slot, it.replacing, text, origin, status, photoPath) }
             EstimateResult.Failed(status, pending.id, draftId)
         }
     }
@@ -302,6 +317,47 @@ class AiRepository @Inject constructor(
             ),
         )
         CoachSent(reply.status, reply.json?.takeIf { reply.status == AiStatus.OK }, reply.text, pending.id)
+    }
+
+    /**
+     * Scan label with AI on (NU-19, [AiKind.LABEL]): the label photo and the on-device text go to the provider in
+     * use for a cleaner reading, with the same gate, cap reservation and log row as a meal. Nothing about you goes
+     * with them. It runs to completion even if the caller stops waiting, so its spend is logged.
+     */
+    suspend fun readLabel(image: AiImage, ocrText: String): LabelRead = withContext(NonCancellable) {
+        val (call, pending) = sending.withLock {
+            val state = state()
+            if (state != AiState.READY) return@withContext LabelRead.NotReady(state)
+            val s = prefs.ai.first()
+            val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext LabelRead.NotReady(AiState.NO_KEY) else null
+            val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
+            val user = LabelPrompt.user(ocrText)
+            val bound = AiPricing.upperBound(target.model, LabelPrompt.system.length + user.length, target.provider.outputBound, 1, target.rates)
+            AiCall(target, LabelPrompt.system, user, LabelSchema.schema, bound, listOf(image)).let { it to reserve(AiKind.LABEL, target, bound) }
+        }
+        val reply = try {
+            sender.send(call)
+        } catch (e: Exception) {
+            AiResult(AiStatus.UNEXPECTED, null, null, call.target.model, emptyList(), 0, e.javaClass.simpleName)
+        }
+        val estimate = reply.json?.takeIf { reply.status == AiStatus.OK }?.let { json ->
+            runCatching { LabelCheck.check(LabelSchema.parse(json.toString())) }.getOrNull()
+        }
+        val status = if (reply.status == AiStatus.OK && estimate == null) AiStatus.INVALID else reply.status
+        aiDao.updateRequest(
+            pending.copy(
+                model = reply.servedBy,
+                inputTokens = reply.attempts.sumOf { it.inputTokens },
+                outputTokens = reply.attempts.sumOf { it.outputTokens },
+                cacheReadTokens = reply.attempts.sumOf { it.cacheReadTokens },
+                cacheWriteTokens = reply.attempts.sumOf { it.cacheWriteTokens },
+                costUsd = AiPricing.cost(reply.attempts, LocalDate.now(clock)),
+                status = status,
+                latencyMs = reply.latencyMs,
+                responseJson = reply.text,
+            ),
+        )
+        if (estimate != null) LabelRead.Read(estimate, pending.id) else LabelRead.Failed(status, pending.id)
     }
 
     /** Settles a coach request whose reply didn't fit the schema: it was billed, so only its status changes. */
@@ -413,9 +469,13 @@ class AiRepository @Inject constructor(
      * One draft per description: [replacing], when it still exists, is updated in place, in one transaction, rather
      * than deleted and added again. Returns the draft's id.
      */
-    suspend fun keepDraft(date: LocalDate, slot: String, replacing: Long?, text: String, origin: Origin, reason: AiStatus?): Long = db.withTransaction {
-        require(text.isNotBlank()) { "Nothing to keep" }
-        val row = MealDraftEntity(createdAt = clock.millis(), logDate = date, mealSlot = slot, text = text.trim(), origin = origin, reason = reason)
+    suspend fun keepDraft(
+        date: LocalDate, slot: String, replacing: Long?, text: String, origin: Origin, reason: AiStatus?, photoPath: String? = null,
+    ): Long = db.withTransaction {
+        require(text.isNotBlank() || photoPath != null) { "Nothing to keep" }
+        val row = MealDraftEntity(
+            createdAt = clock.millis(), logDate = date, mealSlot = slot, text = text.trim(), origin = origin, reason = reason, photoPath = photoPath,
+        )
         val existing = replacing?.let { aiDao.draft(it) }
         if (existing != null) {
             aiDao.updateDraft(row.copy(id = existing.id))

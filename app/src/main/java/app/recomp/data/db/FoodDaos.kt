@@ -26,7 +26,7 @@ interface FoodDao {
         WHERE food_fts MATCH :match AND food.archived = 0 AND food.diet IN (:diets)
           AND (food.region IS NULL OR food.region = :region)
         ORDER BY food.use_count > 0 DESC, food.use_count DESC, food.last_used_at DESC,
-          CASE food.source WHEN 'CUSTOM' THEN 0 WHEN 'RECIPE' THEN 0 WHEN 'AI' THEN 1 WHEN 'SEED' THEN 2 ELSE 3 END,
+          CASE food.source WHEN 'CUSTOM' THEN 0 WHEN 'RECIPE' THEN 0 WHEN 'LABEL_OCR' THEN 0 WHEN 'AI' THEN 1 WHEN 'OFF' THEN 1 WHEN 'SEED' THEN 2 ELSE 3 END,
           food.caveat IS NOT NULL,
           CASE WHEN food.name LIKE :prefix || '%' ESCAPE '\' THEN 0 ELSE 1 END,
           length(food.name), food.name
@@ -59,7 +59,7 @@ interface FoodDao {
      */
     @Query(
         """
-        SELECT * FROM food WHERE archived = 0 AND source IN ('CUSTOM', 'AI', 'RECIPE') AND diet IN (:diets) AND (region IS NULL OR region = :region)
+        SELECT * FROM food WHERE archived = 0 AND source IN ('CUSTOM', 'AI', 'RECIPE', 'LABEL_OCR') AND diet IN (:diets) AND (region IS NULL OR region = :region)
         ORDER BY use_count DESC, last_used_at DESC, created_at DESC LIMIT :limit
         """,
     )
@@ -85,6 +85,13 @@ interface FoodDao {
 
     @Query("SELECT * FROM food WHERE source = :source")
     suspend fun bySource(source: String): List<FoodEntity>
+
+    /** A scanned barcode (NU-21): a food you already have with it, shown before any you've hidden. */
+    @Query("SELECT * FROM food WHERE barcode = :code ORDER BY archived, id DESC LIMIT 1")
+    suspend fun byBarcode(code: String): FoodEntity?
+
+    @Query("SELECT * FROM food WHERE source_key = :key")
+    suspend fun bySourceKey(key: String): FoodEntity?
 
     @Insert
     suspend fun insert(food: FoodEntity): Long

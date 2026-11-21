@@ -4,6 +4,7 @@ import app.recomp.data.repo.AiGateView
 import app.recomp.domain.ai.AiModel
 import app.recomp.data.prefs.AiSettings
 import app.recomp.domain.ai.AiPricing
+import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.ai.AiUrl
 import app.recomp.domain.ai.Rates
@@ -140,14 +141,20 @@ object AiText {
     private fun day(date: LocalDate): String = date.format(DateTimeFormatter.ofPattern("d MMMM"))
 
     /**
-     * What a meal description sends and to whom (TRD §6.2): shown before the first estimate with each provider, and
-     * in Settings. [host] is an OpenAI-compatible server's.
+     * What each kind of AI request sends and to whom (TRD §6.2): shown before the first one of that kind with each
+     * provider, and in Settings. [host] is an OpenAI-compatible server's.
      */
-    fun privacy(provider: AiProviderId, host: String? = null): String {
+    fun privacy(provider: AiProviderId, host: String? = null, kind: AiKind = AiKind.MEAL_TEXT): String {
         val to = recipient(provider, host)
-        val sends = "Describe it sends your description and its origin to $to, with your diet and food region, your portion " +
-            "sizes and your most-used own foods (names and values), so the estimate fits how you eat. It never sends your " +
-            "name, body data, targets or food log."
+        val persona = "with your diet and food region, your portion sizes and your most-used own foods (names and values), " +
+            "so the estimate fits how you eat. It never sends your name, body data, targets or food log."
+        val sends = when (kind) {
+            AiKind.MEAL_PHOTO -> "Describe it sends the meal photo (made smaller, without its location or camera details), " +
+                "any words and the origin to $to, $persona The photo is kept on this phone only until the meal is saved."
+            AiKind.LABEL -> "Scan label sends the label photo (made smaller, without its location or camera details) and the " +
+                "text your phone read from it to $to, to check the reading. Nothing else goes with it, and the photo isn't kept."
+            else -> "Describe it sends your description and its origin to $to, $persona"
+        }
         return sends + after(provider)
     }
 
@@ -179,7 +186,7 @@ object AiText {
         }
     }
 
-    fun privacy(s: AiSettings): String = privacy(s.provider, s.url?.host)
+    fun privacy(s: AiSettings, kind: AiKind = AiKind.MEAL_TEXT): String = privacy(s.provider, s.url?.host, kind)
 
     /** The same for *Will it fit?* (NU-18), which is its own kind of request and sends the same things. */
     fun fitPrivacy(s: AiSettings): String = privacy(s).replaceFirst("Describe it sends", "Will it fit? sends")

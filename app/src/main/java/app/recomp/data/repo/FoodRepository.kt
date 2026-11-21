@@ -15,6 +15,7 @@ import app.recomp.domain.food.IndexedFood
 import app.recomp.domain.food.ParsedMeal
 import app.recomp.domain.food.FoodQuery
 import app.recomp.domain.food.FoodSource
+import app.recomp.domain.food.OpenFoodFacts
 import app.recomp.domain.food.Origin
 import app.recomp.domain.food.Per100g
 import app.recomp.domain.food.PortionUnit
@@ -52,6 +53,9 @@ data class CustomFood(
     val per100g: Per100g,
     val diet: FoodDiet,
     val serving: Pair<String, Double>?,
+    /** Typed in ([FoodSource.CUSTOM]), read from a label ([FoodSource.LABEL_OCR]) or from Open Food Facts ([FoodSource.OFF], M18). */
+    val source: FoodSource = FoodSource.CUSTOM,
+    val barcode: String? = null,
 )
 
 /** The persona's food filter (PS-03): which diet tags and which region search shows. */
@@ -169,11 +173,27 @@ class FoodRepository @Inject constructor(
     suspend fun defaultDiet(): FoodDiet = filter.first().diet.ownFoodTag
 
     suspend fun createCustom(food: CustomFood, now: Long = System.currentTimeMillis()): Long = db.withTransaction {
+        require(food.source in EDITABLE) { "Not a food you make: ${food.source}" }
+        // A product saved again (scanned twice, or after hiding it) updates its one row rather than adding another.
+        val key = food.barcode?.takeIf { food.source == FoodSource.OFF }?.let(OpenFoodFacts::sourceKey)
+        key?.let { foodDao.bySourceKey(it) }?.let { existing ->
+            foodDao.update(
+                existing.copy(
+                    name = food.name.trim(), brand = food.brand?.trim()?.ifEmpty { null }, diet = food.diet, archived = false,
+                    kcal100g = food.per100g.kcal, protein100g = food.per100g.proteinG, carbs100g = food.per100g.carbsG,
+                    fat100g = food.per100g.fatG, fiber100g = food.per100g.fiberG,
+                ),
+            )
+            setServing(existing.id, food.serving)
+            return@withTransaction existing.id
+        }
         val id = foodDao.insert(
             FoodEntity(
                 name = food.name.trim(),
                 brand = food.brand?.trim()?.ifEmpty { null },
-                source = FoodSource.CUSTOM,
+                source = food.source,
+                barcode = food.barcode,
+                sourceKey = key,
                 diet = food.diet,
                 kcal100g = food.per100g.kcal,
                 protein100g = food.per100g.proteinG,
@@ -190,7 +210,7 @@ class FoodRepository @Inject constructor(
     /** Edits a custom food. Logged entries keep their snapshot, so only future logs change. */
     suspend fun updateCustom(id: Long, food: CustomFood) = db.withTransaction {
         val old = foodDao.get(id) ?: return@withTransaction
-        require(old.source == FoodSource.CUSTOM) { "Only custom foods can be edited" }
+        require(old.source in EDITABLE) { "Only your own foods can be edited" }
         foodDao.update(
             old.copy(
                 name = food.name.trim(),
@@ -235,11 +255,23 @@ class FoodRepository @Inject constructor(
     /** How many INDB foods this phone has (Settings → Food → Food data). */
     fun observeIndbCount(): Flow<Int> = foodDao.observeCount(FoodSource.INDB.name)
 
-    private companion object {
-        /** Foods whose serving you set yourself, so it prefills however big it is: custom foods and recipes (M14). */
-        val YOUR_OWN = setOf(FoodSource.CUSTOM, FoodSource.RECIPE)
+    /** A food you already have with this barcode (NU-21), unless you've hidden it. */
+    suspend fun byBarcode(code: String): FoodEntity? = foodDao.byBarcode(code)?.takeUnless { it.archived }
+
+    /** A food the New food form can edit, as it edits it: per 100 g, with its serving unit. */
+    suspend fun editable(id: Long): CustomFood? {
+        val f = foodDao.get(id)?.takeIf { it.source in EDITABLE } ?: return null
+        return CustomFood(f.name, f.brand, f.per100g, f.diet, serving(id)?.let { it.label to it.grams }, f.source, f.barcode)
+    }
+
+    companion object {
+        /** Foods the New food form makes and edits: custom foods, and (M18) labels and Open Food Facts products. Recipes have their own form. */
+        val EDITABLE = setOf(FoodSource.CUSTOM, FoodSource.LABEL_OCR, FoodSource.OFF)
+
+        /** Foods whose serving you set yourself, so it prefills however big it is: custom foods, recipes (M14) and labels (M18). */
+        val YOUR_OWN = setOf(FoodSource.CUSTOM, FoodSource.RECIPE, FoodSource.LABEL_OCR)
 
         /** How many foods the parser weighs for one name. */
-        const val PARSER_CANDIDATES = 20
+        private const val PARSER_CANDIDATES = 20
     }
 }

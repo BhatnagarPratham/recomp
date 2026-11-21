@@ -1,5 +1,6 @@
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -20,12 +21,24 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        // Open Food Facts asks apps to identify themselves with a contact (TRD §10 M18). It's each builder's own,
+        // from local.properties (`recomp.off.contact=<your email>`), so it never enters the public repo.
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+        }
+        val offContact = localProps.getProperty("recomp.off.contact").orEmpty().replace("\\", "").replace("\"", "")
+        buildConfigField("String", "OFF_CONTACT", "\"$offContact\"")
+        if (offContact.isBlank()) {
+            logger.warn("recomp.off.contact isn't set in local.properties: Open Food Facts requests will say \"no contact set\".")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // Phones only: Tesseract4Android's x86 libraries (emulators) would add about 15 MB (M18 review N2).
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // M0: debug-signed so the minified build installs for the R8 spike. A personal keystore replaces this before real use.
             signingConfig = signingConfigs.getByName("debug")
@@ -39,6 +52,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
@@ -213,6 +227,14 @@ dependencies {
     // OpenAI, Gemini and OpenAI-compatible servers (AI-05): plain HTTP with kotlinx.serialization, no SDKs. The Anthropic SDK already brings OkHttp.
     implementation(libs.okhttp)
     implementation(libs.tink.android)
+    // M18, camera food: CameraX for the scanner and label photos, ZXing for barcodes, Tesseract for label text.
+    // No ML Kit (PRD §12.14, TRD §7): every one of these runs on the phone and sends nothing.
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.zxing.core)
+    implementation(libs.tesseract4android)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

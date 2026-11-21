@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -302,6 +303,7 @@ fun HiddenFoodsScreen(onBack: () -> Unit, viewModel: FoodSettingsViewModel = hil
 /** Where the food data comes from (TRD §6.4), including INDB's citation. */
 @Composable
 fun FoodDataDialog(indbCount: Int?, onDismiss: () -> Unit) {
+    var licences by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Food data") },
@@ -320,8 +322,41 @@ fun FoodDataDialog(indbCount: Int?, onDismiss: () -> Unit) {
                         "Diet tags come from each recipe's ingredients; hide any food that's tagged wrongly.",
                 )
                 Text("The protein-rich basics are rounded from USDA FoodData Central (public domain) or typical pack labels.")
+                Text(
+                    "Barcodes, and search in the International region, use Open Food Facts (world.openfoodfacts.org): data © " +
+                        "Open Food Facts contributors, under the Open Database License (opendatacommons.org/licenses/odbl). Only the " +
+                        "barcode or the words you searched are sent; a product you save becomes your own food.",
+                )
+                Text("Labels are read on the phone by Tesseract (Apache-2.0) with its tessdata_fast English model (Apache-2.0).")
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        dismissButton = { TextButton(onClick = { licences = true }) { Text("Licences") } },
     )
+    if (licences) LicencesDialog(onDismiss = { licences = false })
+}
+
+/** The bundled open-source components' licences and notices (M18 review S3), from `assets/licenses`. */
+@Composable
+fun LicencesDialog(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val text = androidx.compose.runtime.remember { ThirdPartyNotices.read(context) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Licences") },
+        text = {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
+object ThirdPartyNotices {
+    const val ASSET = "licenses/THIRD_PARTY_NOTICES.txt"
+
+    fun read(context: android.content.Context): String = context.assets.open(ASSET).bufferedReader().use { it.readText() }
 }

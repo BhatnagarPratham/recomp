@@ -514,7 +514,7 @@ private fun MealCard(
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
                     Text("Draft · not logged yet", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
-                    Text(d.text, style = MaterialTheme.typography.bodyLarge, maxLines = 3)
+                    Text(d.text.ifBlank { if (d.photoPath != null) "Meal photo" else "" }, style = MaterialTheme.typography.bodyLarge, maxLines = 3)
                     val note = listOfNotNull(d.reason?.let(AiText::draftReason), if (d.origin != Origin.HOME) FoodText.origin(d.origin) else null)
                     if (note.isNotEmpty()) Text(note.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
