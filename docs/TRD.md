@@ -1443,6 +1443,22 @@ Tests cover:
 - **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M16's Health Connect writes must follow these edits later.
 - **Parallel:** with M9.
 
+**M10 results (2026-11-21, reference phone on Android 15; no Room change, built on M8).** Built to PRD §12.6 and the block above; §5.1 (*Rebuilding PRs*, *Editing a session*) and §5.5 describe what was built. Where the spec was silent, M10 took the readings now written into PRD §12.6:
+- A workout in History opens its summary, which has *Edit workout*; the editor works on a draft saved in one transaction. A past workout's summary doesn't offer to save its plan to the routine.
+- Extra sessions are listed too, and can be redated, changed and deleted from a small sheet.
+- Only *Working* sets count toward weekly sets, and the summary's deficit line follows the target in force that day.
+- Deleting the workout a Hold or Deload was chosen in, or removing the lift from it, clears that reset.
+- The exercise chart plots assistance itself for assisted lifts, from the sets' loads, with "lower is better" in its caption.
+
+Tests cover:
+- `PrRebuilderTest`: a from-scratch rebuild equals what finishing each session found; a raised old set takes a later PR away and a lowered one gives it back; added sets move the volume PR; deleting the first session leaves the next one without PRs; an incremental rebuild plus the untouched earlier rows equals a full one after six kinds of edit, including moving a session before and after the others; bodyweight and assisted rules.
+- `HistoryFlowTest` (real SQLite): the same incremental-versus-scratch check through the repository after retyping, set-type changes, adding and deleting sets, removing an exercise, moving dates and deleting; rebuilt rows point at their set and the session's end; deleting the last strength workout moves the rotation back, and moving a workout behind another moves it too; frozen targets and plans byte-for-byte unchanged while today's recommendation follows the edit; a fixed typo clears a false override; stall resets follow, stay or clear; superset regrouping; times, log date, tick times and notes; edits that can't be saved write nothing, and active or discarded workouts can't be edited or deleted; History's list and counts; extra-session edits; weekly sets from working sets of finished workouts only, across the week boundary; the band; the chart after an edit and for an assisted lift.
+- `MuscleVolumeTest`, `SessionEditTest`, `ExerciseChartTest`, `HistoryTextTest` and a band case in `SettingsPrefsTest`.
+
+On the phone:
+- A dev install with invented data: editing a past workout and saving said PRs were recomputed and showed the new ones and the new next target; *Delete workout* asked first and moved Today's next workout back; a workout finished under a deficit target showed the deficit line; the chart drew over 12 weeks and everything; the band saved. It found exercise history opening scrolled past the chart, now fixed by loading both together. The stall card's line wasn't seen, because in a deficit the invented lift was a session short of the longer stall window, as designed.
+- The release over the real data, looked at only: no crash; Train shows History and the weekly sets card; History lists the real sessions; a past summary offers *Edit workout* and no save to the routine. Nothing was edited or deleted.
+
 #### M11: Weekly programme review with AI
 
 *HM-06; PRD §12.7; Room v11.*

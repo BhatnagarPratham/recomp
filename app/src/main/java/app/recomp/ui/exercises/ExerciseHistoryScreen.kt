@@ -68,9 +68,12 @@ class ExerciseHistoryViewModel @Inject constructor(
 
     /** Reloaded each time the screen comes back, so an edit made in History shows here (WL-10). */
     fun reload() = viewModelScope.launch {
-        _entries.value = progression.exerciseHistory(exerciseId)
         val loadType = training.exercise(exerciseId)?.loadType ?: LoadType.WEIGHTED
-        _chart.value = ExerciseChart.of(progression.chartExposures(exerciseId), loadType)
+        val chart = ExerciseChart.of(progression.chartExposures(exerciseId), loadType)
+        val entries = progression.exerciseHistory(exerciseId)
+        // Both at once: if the list appeared first, it would keep its place and leave the chart above the top.
+        _chart.value = chart
+        _entries.value = entries
     }
 
     fun setRange(range: ChartRange) {
