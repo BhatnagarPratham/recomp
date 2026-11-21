@@ -930,7 +930,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
 | **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
 | **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
-| **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
+| **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v11) | AR-01, AR-02, AR-04, IB-07 |
 | **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
 | **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
 | **M16: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
@@ -1090,7 +1090,7 @@ It covers every P1 requirement in the PRD, in the 16 milestones of the table abo
 - Each session records its installs (milestone, Room version, date) in `phone-ledger.md` in the shared notes folder, so parallel sessions don't install over each other.
 - Screens that need weeks of data are checked in a separate debug install with invented data (`applicationIdSuffix`, never committed), as in M4.
 
-**Room versions,** in the planned merge order: M5 takes 8, M6 9, M7 10, M11 11, M13 12, M14 13 and M17 14. The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
+**Room versions,** in the merge order: M5 took 8, M6 9, M7 10; then M13 takes 11, M14 12, M11 13 and M17 14 (the order fixed on 2026-11-21, when M11, M13 and M14 were built at once). The other milestones need none. If two merge in a different order, the later PR renumbers its migration and schema file before it merges.
 
 **Parallel waves.** Two sessions at a time (agreed on 2026-10-18):
 
@@ -1512,7 +1512,7 @@ Tests cover:
 
 #### M13: Health Connect in
 
-*AR-01, AR-02, AR-04, IB-07; PRD §12.9; Room v12.*
+*AR-01, AR-02, AR-04, IB-07; PRD §12.9; Room v11.*
 - **Scope:**
   - `HealthConnectSource` replaces the M0 spike: a permission per feature, a sync at launch plus a daily worker, and change tokens (§6.3), kept in the `device` DataStore (§4) so a restored phone starts with a full 30-day read. The daily worker needs Health Connect's background-read permission (`READ_HEALTH_DATA_IN_BACKGROUND`, where the feature is available); without it, sync runs at launch only, and Settings says so.
   - New manifest permissions: `READ_EXERCISE`, `READ_SLEEP` and the background read, besides M0's. The background read is in Android 15, and on Android 14 needs an updated Health Connect module. A first sync reads at most 30 days back, which needs no history permission.
@@ -1525,7 +1525,7 @@ Tests cover:
     - An import counts toward an extra of its kind: the one scheduled that day first, else the first of that kind in the persona. With no extra of its kind, it shows in History and the review but counts toward nothing.
     - *Log class* prefills only from sessions you logged (`hc_record_id IS NULL`).
   - InBody drafts on Body, which open the scan form.
-- **Data (v12):**
+- **Data (v11):**
   ```text
   scan_draft  id, measured_at, weight_g, body_fat_pct?, bmr_kcal?, hc_ids
                                         -- an InBody measurement waiting for muscle and visceral fat;
@@ -1540,7 +1540,7 @@ Tests cover:
   - steps, sleep and workouts appearing in M8's review and M12's nudge;
   - an expired change token: a full re-read of 30 days creates no duplicates;
   - the step counter resetting at reboot, if the fallback is built;
-  - the migration to v12.
+  - the migration to v11.
 - **Risks:**
   - Google Fit's and InBody's Health Connect access were off on the reference phone (M0). The setup screen says how to turn each on.
   - A change token expires after 30 days without a sync.
