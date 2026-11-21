@@ -307,9 +307,9 @@ class WorkoutRepository @Inject constructor(
 
     data class ExtraEntry(val style: String, val durationMin: Int, val intensity: Int?, val notes: String?)
 
-    /** Prefill for "Log class": the last session of this kind. */
+    /** Prefill for "Log class": the last session of this kind that you logged, never one imported from another app (AR-04). */
     suspend fun lastExtra(routineId: Long): ExtraEntry? {
-        val session = workoutDao.lastCompletedOfRoutine(routineId) ?: return null
+        val session = workoutDao.lastLoggedOfRoutine(routineId) ?: return null
         val detail = workoutDao.yogaDetail(session.id) ?: return null
         return ExtraEntry(detail.style, detail.durationMin, detail.intensity, session.notes)
     }

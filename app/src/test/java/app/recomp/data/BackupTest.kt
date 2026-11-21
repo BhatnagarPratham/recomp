@@ -20,6 +20,11 @@ import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
+import app.recomp.data.db.ScanDraftEntity
+import app.recomp.data.db.YogaDetailEntity
+import app.recomp.data.db.WorkoutSessionEntity
+import app.recomp.domain.model.SessionStatus
+import app.recomp.data.health.HealthFeature
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ScanInput
@@ -175,6 +180,25 @@ class BackupTest {
         )
         app.checkins.setFoodIncomplete(today.minusDays(1), true)
         app.prefs.setCheckinSeen(today.minusWeeks(1).with(DayOfWeek.MONDAY))
+
+        // Health Connect (M13): steps and both kinds of night, an InBody draft, another app's walk, and its settings.
+        val health = app.db.healthDao()
+        health.ensureDay(today.minusDays(2))
+        health.setSteps(today.minusDays(2), 7_432, now)
+        health.setSyncedSleep(today.minusDays(2), 6.5)
+        health.ensureDay(today.minusDays(1))
+        health.setTypedSleep(today.minusDays(1), 7.5)
+        health.insert(ScanDraftEntity(measuredAt = now - 5 * dayMs, weightG = 80_600, bodyFatPct = 25.4, bmrKcal = 1_690, hcIds = listOf("w-1", "f-1", "b-1")))
+        app.db.workoutDao().insertExtraSession(
+            WorkoutSessionEntity(
+                routineId = null, kind = SessionKind.CARDIO, status = SessionStatus.COMPLETED, startedAt = now - 4 * dayMs,
+                endedAt = now - 4 * dayMs + 35 * 60_000L, logDate = today.minusDays(4), notes = "from Google Fit", hcRecordId = "walk-1",
+            ),
+            YogaDetailEntity(sessionId = 0, style = "Walk", durationMin = 35),
+        )
+        app.prefs.setHealthFeature(HealthFeature.STEPS, true)
+        app.prefs.setHealthFeature(HealthFeature.SLEEP, true)
+        app.prefs.setStepsGoal(9_500)
     }
 
     /** Everything a backup should bring back: every table's rows and every exported setting. */

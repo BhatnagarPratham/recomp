@@ -10,6 +10,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.prefs.ExtraSchedule
 import app.recomp.data.prefs.StoredPersona
 import app.recomp.domain.training.LogDates
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.recomp.data.health.HealthFeature
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.domain.nutrition.Sex
 import app.recomp.domain.persona.Profile
@@ -21,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -113,5 +116,47 @@ class SettingsPrefsTest {
         prefs.updatePersona { it.copy(strengthDaysPerWeek = 4) }
         assertNull(store.data.first()[personaCopy])
         assertEquals(emptyList<String>(), prefs.unreadable.first())
+    }
+
+    // Health Connect (M13)
+
+    @Test
+    fun `health settings default to off, clamp the step goal and ignore a feature this version doesn't know`() = runBlocking {
+        val (fresh, _) = storeWith()
+        assertEquals(emptySet<HealthFeature>(), fresh.healthFeatures.first())
+        assertEquals(8_000, fresh.stepsGoal.first())
+        assertFalse(fresh.trackSleep.first())
+
+        val (prefs, _) = storeWith(stringSetPreferencesKey("health_features") to setOf("STEPS", "HEART_RATE"), intPreferencesKey("steps_goal") to 250_000)
+        assertEquals(setOf(HealthFeature.STEPS), prefs.healthFeatures.first())
+        assertEquals(20_000, prefs.stepsGoal.first())
+        prefs.setStepsGoal(100)
+        assertEquals(2_000, prefs.stepsGoal.first())
+    }
+
+    @Test
+    fun `turning on Health Connect sleep turns on track sleep, and turning it off leaves that alone`() = runBlocking {
+        val (prefs, _) = storeWith()
+        prefs.setHealthFeature(HealthFeature.STEPS, true)
+        assertFalse(prefs.trackSleep.first())
+        prefs.setHealthFeature(HealthFeature.SLEEP, true)
+        assertTrue(prefs.trackSleep.first())
+        prefs.setHealthFeature(HealthFeature.SLEEP, false)
+        assertTrue(prefs.trackSleep.first())
+        assertEquals(setOf(HealthFeature.STEPS), prefs.healthFeatures.first())
+    }
+
+    @Test
+    fun `a backup with health settings of the wrong type is refused, and good ones are exported`() = runBlocking {
+        val (prefs, store) = storeWith(
+            stringPreferencesKey("health_features") to "STEPS", stringPreferencesKey("steps_goal") to "8000", stringPreferencesKey("track_sleep") to "yes",
+        )
+        assertEquals(listOf("steps_goal", "track_sleep", "health_features"), prefs.problems(store.data.first()))
+
+        val (good, goodStore) = storeWith()
+        good.setHealthFeature(HealthFeature.SLEEP, true)
+        good.setStepsGoal(9_000)
+        assertEquals(emptyList<String>(), good.problems(goodStore.data.first()))
+        assertEquals(setOf("health_features", "steps_goal", "track_sleep"), good.exportable().asMap().keys.map { it.name }.toSet())
     }
 }

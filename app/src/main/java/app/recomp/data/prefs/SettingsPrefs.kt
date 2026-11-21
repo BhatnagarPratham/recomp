@@ -10,7 +10,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.recomp.data.health.HealthFeature
 import app.recomp.di.SettingsStore
+import app.recomp.domain.health.Steps
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiNotice
@@ -340,6 +342,15 @@ internal object SettingsKeys {
     /** The privacy notices shown (TRD §6.2): `AiNotice.key`s, one per provider and kind of request. */
     val AI_NOTICES_SEEN = stringSetPreferencesKey("ai_notices_seen")
 
+    /** M13 (PRD §12.9): the Health Connect features turned on, as `HealthFeature` names. Absent is none. */
+    val HEALTH_FEATURES = stringSetPreferencesKey("health_features")
+
+    /** AR-01: the daily step goal, 2,000 to 20,000; absent is 8,000. Steps are on while the STEPS feature is. */
+    val STEPS_GOAL = intPreferencesKey("steps_goal")
+
+    /** AR-02: Settings → Body data → Track sleep. Absent is off. */
+    val TRACK_SLEEP = booleanPreferencesKey("track_sleep")
+
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
 
@@ -501,6 +512,9 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
             if (wrongType(SettingsKeys.AI_COMPATIBLE_INPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_INPUT_USD.name)
             if (wrongType(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD.name)
+            if (wrongType(SettingsKeys.STEPS_GOAL, Int::class)) add(SettingsKeys.STEPS_GOAL.name)
+            if (wrongType(SettingsKeys.TRACK_SLEEP, Boolean::class)) add(SettingsKeys.TRACK_SLEEP.name)
+            if (values[SettingsKeys.HEALTH_FEATURES.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.HEALTH_FEATURES.name)
             if (values[SettingsKeys.AI_NOTICES_SEEN.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.AI_NOTICES_SEEN.name)
             // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
             if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
@@ -599,6 +613,28 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     }
 
     suspend fun setAiNoticeSeen(notice: AiNotice) = store.edit { it[SettingsKeys.AI_NOTICES_SEEN] = it[SettingsKeys.AI_NOTICES_SEEN].orEmpty() + notice.key }
+
+    // Health Connect (M13, PRD §12.9)
+
+    /** The features turned on. A name this version doesn't know (a newer backup) is ignored. */
+    val healthFeatures: Flow<Set<HealthFeature>> = store.data.map { prefs ->
+        prefs[SettingsKeys.HEALTH_FEATURES].orEmpty().mapNotNull { name -> HealthFeature.entries.firstOrNull { it.name == name } }.toSet()
+    }.distinctUntilChanged()
+
+    /** Turning on Health Connect sleep turns on *Track sleep* too (PRD §12.9); turning it off leaves that to you. */
+    suspend fun setHealthFeature(feature: HealthFeature, on: Boolean) = store.edit { prefs ->
+        val current = prefs[SettingsKeys.HEALTH_FEATURES].orEmpty()
+        prefs[SettingsKeys.HEALTH_FEATURES] = if (on) current + feature.name else current - feature.name
+        if (on && feature == HealthFeature.SLEEP) prefs[SettingsKeys.TRACK_SLEEP] = true
+    }
+
+    val stepsGoal: Flow<Int> = store.data.map { Steps.clampGoal(it[SettingsKeys.STEPS_GOAL] ?: Steps.DEFAULT_GOAL) }.distinctUntilChanged()
+
+    suspend fun setStepsGoal(goal: Int) = store.edit { it[SettingsKeys.STEPS_GOAL] = Steps.clampGoal(goal) }
+
+    val trackSleep: Flow<Boolean> = store.data.map { it[SettingsKeys.TRACK_SLEEP] ?: false }.distinctUntilChanged()
+
+    suspend fun setTrackSleep(on: Boolean) = store.edit { it[SettingsKeys.TRACK_SLEEP] = on }
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

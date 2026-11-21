@@ -7,6 +7,8 @@ import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.food.FoodSeeder
 import app.recomp.data.repo.CheckinRepository
+import app.recomp.data.repo.HealthRepository
+import app.recomp.healthconnect.HealthSyncScheduler
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
@@ -50,6 +52,8 @@ class MainViewModel @Inject constructor(
     foodSeeder: FoodSeeder,
     backups: BackupManager,
     checkins: CheckinRepository,
+    private val health: HealthRepository,
+    private val healthScheduler: HealthSyncScheduler,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -83,9 +87,26 @@ class MainViewModel @Inject constructor(
             _restoreNotice.value = backups.finishPendingRestore()
             // Weeks that ended while the app was closed, against the data as the restore left it (PRD §12.1).
             checkins.catchUp()
+            // After the restore, so an import's data is what Health Connect is read against (TRD §6.3).
+            syncHealthNow()
         }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
+    }
+
+    private var healthSyncedAt = 0L
+
+    /** Health Connect is read when the app opens (TRD §6.3): at launch, and when it comes back after a while. */
+    fun syncHealth() {
+        if (healthSyncedAt == 0L || System.currentTimeMillis() - healthSyncedAt < HEALTH_SYNC_EVERY_MS) return
+        viewModelScope.launch { syncHealthNow() }
+    }
+
+    private suspend fun syncHealthNow() {
+        healthSyncedAt = System.currentTimeMillis()
+        // Health Connect can be missing, out of date or mid-update; nothing else waits on it.
+        runCatching { health.sync() }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        healthScheduler.update()
     }
 
     /** Runs once per process: an ACTIVE session found at launch means the app was killed mid-workout. */
@@ -153,5 +174,6 @@ class MainViewModel @Inject constructor(
 
     companion object {
         const val STALE_AFTER_MS = 4 * 60 * 60 * 1000L
+        const val HEALTH_SYNC_EVERY_MS = 15 * 60 * 1000L
     }
 }

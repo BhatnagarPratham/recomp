@@ -145,8 +145,16 @@ weekly_checkin      week_start (PK, the Monday), computed_at, window_days, logge
                                           -- flag and proposed_kcal use the goal and body data as they were when the week was
                                           -- computed: weeks caught up together are judged by that day's goal, and the ones that
                                           -- close in the same catch-up keep no proposal
-daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?
-                                          -- food_incomplete from the Food tab's day menu (M5); steps from HC, sleep typed in
+daily_activity      log_date (PK), food_incomplete, steps?, steps_synced_at?, sleep_hours?,
+                    sleep_source?(TYPED|HEALTH_CONNECT)
+                                          -- food_incomplete from the Food tab's day menu (M5), by log date;
+                                          -- steps from Health Connect (M13) by CALENDAR date, so they match Google Fit:
+                                          --   the two dates differ only between midnight and "day starts at";
+                                          -- sleep_hours is the night that ended that morning, typed or synced, to the
+                                          --   half hour; a TYPED night is never replaced by a sync (M13, v11)
+scan_draft          id, measured_at, weight_g, body_fat_pct?, bmr_kcal?, hc_ids[]
+                                          -- an InBody measurement read from Health Connect (IB-07, M13, v11), waiting
+                                          -- for muscle and visceral fat; deleted once saved as a scan or dismissed
 ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_CHECK|COACH), model,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
                     status (§6.2), latency_ms, response_json?,
@@ -170,7 +178,12 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
   - `ai_notices_seen`, a string set with one entry per provider and kind (`OPENAI:MEAL_TEXT`), and per server for the compatible provider (`COMPATIBLE/openrouter.ai:MEAL_TEXT`). The older boolean `ai_notice_seen` is still read as Anthropic's meal notice and never written.
   - The API keys are not here: one per provider, encrypted, in their own `secrets` DataStore file (`anthropic_api_key`, `openai_api_key`, `gemini_api_key`, `compatible_api_key`).
 - `scan_slot` (IB-02): the usual scan weekday and time of day.
-- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh.
+- From M13 (PRD §12.9): `health_features` (a string set of `STEPS`, `SLEEP`, `WORKOUTS`, `INBODY`: what's turned on in Settings → Health Connect), `steps_goal` (2,000 to 20,000; absent = 8,000) and `track_sleep`. They're exported; a restored phone shows a feature as turned on but not allowed until Health Connect grants its permission again.
+- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file (`datastore/device.preferences_pb`, `DevicePrefs`, created by M13), which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh. M13's keys there:
+  - `hc_changes_<feature>`: Health Connect's change token for that feature's record types;
+  - `hc_database_stamp`: the database the tokens were issued against (`PRAGMA application_id`, which every import changes, §6.5). When it differs, the tokens are dropped and the last 30 days are read again;
+  - `hc_inbody_handled`: the record ids of InBody measurements already saved as a scan or dismissed;
+  - `hc_last_sync_at` and `hc_last_sync_error`, for Settings → Health Connect.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
@@ -179,8 +192,8 @@ A stored JSON value that no longer decodes (for example one saved by a newer bui
 **Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
-- New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
-- New columns: `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13). (`ai_request_log.provider` landed with M7, above.)
+- New tables: `programme_review` (M11), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
+- New columns: `exercise.deload_pending` (M11). (`ai_request_log.provider` landed with M7, and `scan_draft` and `daily_activity.sleep_source` with M13, above.)
 - New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
@@ -751,20 +764,45 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 
 ### 6.3 Health Connect (P1)
 
-- **Step sources:** whichever app writes steps to Health Connect. On a phone without a watch, that's typically Google Fit or Samsung Health.
-  - Google has deprecated the Google Fit APIs in favour of Health Connect, so the app never calls Fit directly.
-  - Google Fit writes the phone's step count into Health Connect when its Health Connect sync is on. **M0 finding:** Fit declares `WRITE_STEPS`, but its Health Connect access was off on the reference phone. It has to be turned on in Google Fit's settings.
-- **Read:** daily step totals (`StepsRecord` aggregates).
-- **InBody import (P1, IB-07):** read body records whose data origin is the InBody app (`com.inbody2014.inbody`). Records with the same timestamp are grouped into one `body_composition` draft for you to complete.
+Reading is built (M13); writing comes with M16. `HealthSource` is what the sync sees, `HealthConnectSource` is Health Connect itself (connect-client 1.1.0), and `HealthRepository` does the syncing. Recomp writes nothing to Health Connect until M16.
+
+- **A permission per feature.** Settings → Health Connect lists four features, each off until you turn it on, which asks for that feature's permissions only:
+
+  | Feature | Permissions | What it fills |
+  |---------|-------------|---------------|
+  | Steps | `READ_STEPS` | `daily_activity.steps` |
+  | Sleep | `READ_SLEEP` | `daily_activity.sleep_hours` |
+  | Other apps' workouts | `READ_EXERCISE` | `workout_session` rows with `hc_record_id` |
+  | InBody body data | `READ_WEIGHT`, `READ_BODY_FAT`, `READ_BASAL_METABOLIC_RATE` | `scan_draft` |
+
+  A feature is read only while it's both turned on (the `health_features` setting) and granted. M0's spike asked for lean mass and body water too; nothing writes them, so those permissions are gone from the manifest.
+- **Sync** runs when the app opens (at launch, and when it comes back to the front after 15 minutes or more), from *Sync now*, and once a day from a WorkManager job (`HealthSyncWorker`, built by Hilt's worker factory).
+  - The daily job needs Health Connect's background-read permission (`READ_HEALTH_DATA_IN_BACKGROUND`), which Settings → Health Connect asks for with its own button, where `HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND` is available. The job is scheduled only while a feature is on and that permission is granted, and checks again when it runs. Without it, Recomp syncs whenever you open it, and Settings says so.
+  - Each feature syncs on its own: one failing leaves the others synced, and its error shows under *Last synced*.
+- **Change tokens.** Sleep, workouts and InBody each have a change token (`getChangesToken` for that feature's record types), kept in the `device` store (§4). A sync asks what changed since the token:
+  - nothing: nothing is read;
+  - changes: workouts apply the changed and deleted sessions themselves; sleep and InBody read their last 30 days again, since a night or a measurement is put together from several records, and a deletion carries only a record id;
+  - no token, or one that expired (30 days without a sync): a fresh token is taken first, then the last 30 days are read in full. Every write is keyed (a session by its record id, or its start and end; a draft by its record ids or its time; a night by its date), so a full re-read creates no duplicates. A first read goes back 30 days, which needs no history permission.
+  - A token is stored only after its work succeeded. After an import the tokens are dropped (`hc_database_stamp`, §4). Records whose data origin is this app are skipped, in reads and in changes.
+- **Steps (AR-01)** are Health Connect's aggregate (`aggregateGroupByPeriod`, sliced by calendar day in the phone's time zone) for the last 30 days, read on every sync. The aggregate de-duplicates across apps by your priority list.
+  - **Phone steps without another app:** on Android 14 with SDK extension 20 or later, Health Connect counts the phone's own steps once any app holds `READ_STEPS`, and an unfiltered aggregate includes them. Their data origin is a per-device synthetic package name since the June 2026 Health Connect update, so it's never named or filtered on. (`getCurrentDeviceDataSource()` exists only in the platform API, not in connect-client.)
+  - **The sensor fallback isn't built.** The reference phone runs Android 15 with SDK extension 24 (checked for M13), so Health Connect's own count covers it. On a phone too old for that, steps need an app that writes them, such as Google Fit.
+  - Google Fit writes its step count into Health Connect when its Health Connect access is on. **M0 finding:** it was off on the reference phone; it's turned on in Google Fit's settings. Google has deprecated the Fit APIs, so the app never calls Fit directly.
+  - Steps are keyed by calendar day (PRD §12.9), not the log date.
+- **Sleep (AR-02).** "The night that ended that morning" is the `SleepSessionRecord`s that ended between 18:00 the day before and noon (or now, if that's earlier), with overlapping sessions from several apps merged, not summed, and awake, out-of-bed and awake-in-bed stages left out (`SleepNight`, in `:domain`). It's stored to the half hour with `sleep_source = HEALTH_CONNECT`. A typed night is `TYPED`, and no sync replaces it; a tracker's night goes when its sessions do.
+- **Other apps' workouts (AR-04).** `ExerciseSessionRecord`s from any app but Recomp become completed extra sessions with `hc_record_id` set, a `yoga_detail` row holding the type ("Walk") and the minutes, and `notes` saying "from Google Fit" (the writing app's label). They're never written back (M16).
+  - `ExerciseTypes` maps the exercise type to a session kind: walking, running, cycling, swimming, rowing and the like → cardio; yoga and pilates → yoga; stretching → mobility; sports → sport. Strength training, weightlifting and calisthenics are never imported, and neither are "other workout", "exercise class", guided breathing or a type the table doesn't know.
+  - A session that overlaps one you logged in Recomp is skipped; if you log one over an import later, the import is dropped at the next sync.
+  - It counts toward an extra of its kind through `routine_id`, set at import: the extra scheduled that day first, else the first of that kind in the persona, else none. An edit keeps that choice unless it moves the session to another day or kind.
+  - *Log class* prefills only from sessions you logged (`hc_record_id IS NULL`).
+- **InBody import (IB-07).** Body records whose data origin is the InBody app (`com.inbody2014.inbody`) are grouped into `scan_draft`s: records within a minute of each other are one measurement, and a group needs a weight.
   - **M0 finding:** the InBody app (v2.8.40) can write only `WeightRecord`, `BodyFatRecord` and `BasalMetabolicRateRecord` (plus steps and blood pressure). It doesn't write lean mass or body water, and Health Connect has no types for skeletal muscle mass or visceral fat.
+  - A draft opens the scan form with the time, weight, body fat % and BMR filled in, and fat mass worked out from the first two. Skeletal muscle mass and visceral fat are always typed in, with a shared image beside the form if you have one (§6.7, M15). The saved scan's `source` is `HEALTH_CONNECT`.
+  - A measurement within 10 minutes of a scan you typed makes no draft. A draft you dismissed or saved stays gone (`hc_inbody_handled`, §4), and a measurement deleted in Health Connect takes its draft with it.
   - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
-  - Skeletal muscle mass and visceral fat are always typed in, with a shared image beside the form if you have one (§6.7, M15).
-  - The InBody app's Health Connect access was off; turn it on in the InBody app.
-- **Sleep (AR-02):** typed in at the morning weigh-in, since the reference phone has no tracker. When a tracker writes `SleepSessionRecord`, it prefills the typed value (M13).
-- **Write (DA-04):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow (M16).
-- **Phone steps without another app:** on Android 14 with SDK extension 20 or later, Health Connect counts the phone's own steps once any app holds `READ_STEPS`, under a device data origin found with `getCurrentDeviceDataSource()`, never hard-coded. Its daily aggregate de-duplicates across apps by the user's priority list. Only on an older Health Connect does M13 read the `TYPE_STEP_COUNTER` sensor itself, sampled at launch and by a periodic worker, with reboot resets handled. M13 checks the reference phone's extension level.
-- **Sync** runs when the app opens, plus a daily WorkManager job. Reads are incremental using change tokens. Records whose data origin is this app are skipped.
-- **The app works fully without Health Connect.**
+  - The InBody app's Health Connect access was off on the reference phone; turn it on in the InBody app.
+- **Write (DA-04, M16):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow.
+- **The app works fully without Health Connect.** When it's missing or needs an update, Settings → Health Connect says so and nothing else changes.
 
 ### 6.4 Food data (database P0, scanning P1)
 

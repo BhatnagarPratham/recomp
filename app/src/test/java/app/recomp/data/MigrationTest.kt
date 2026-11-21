@@ -433,7 +433,48 @@ class MigrationTest {
             it.moveToFirst()
             assertEquals("ANTHROPIC", it.getString(0))
         }
-        assertEquals(10, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `10 to 11 adds scan drafts, and marks a night stored before it as typed`() {
+        val file = File(tmp.root, "v10.db")
+        createAt(10, file).use { db ->
+            // The phone's v10: a day marked incomplete, a day with steps and a night (from a dev build), and its other data.
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete) VALUES ('2026-11-10', 1)")
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete, steps, steps_synced_at, sleep_hours) VALUES ('2026-11-11', 0, 7432, 5, 7.5)")
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-11-10')")
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, provider) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'gpt-6-luna', 2000, 1000, 0, 0, 0.01, 'OK', 4000, 'OPENAI')",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val health = room.healthDao()
+            val flagged = health.day(LocalDate.of(2026, 11, 10))!!
+            assertEquals(true, flagged.foodIncomplete)
+            assertEquals(null, flagged.sleepSource)
+            val night = health.day(LocalDate.of(2026, 11, 11))!!
+            assertEquals(7432, night.steps)
+            assertEquals(7.5, night.sleepHours)
+            assertEquals(app.recomp.data.db.SleepSource.TYPED, night.sleepSource)
+            // A sync leaves that night alone, and fills one that has none.
+            assertEquals(0, health.setSyncedSleep(LocalDate.of(2026, 11, 11), 6.0))
+            assertEquals(1, health.setSyncedSleep(LocalDate.of(2026, 11, 10), 6.0))
+            assertEquals(app.recomp.data.db.SleepSource.HEALTH_CONNECT, health.day(LocalDate.of(2026, 11, 10))!!.sleepSource)
+            // The new table takes a draft with and without the optional numbers.
+            assertEquals(emptyList<Any>(), health.drafts())
+            val id = health.insert(app.recomp.data.db.ScanDraftEntity(measuredAt = 100, weightG = 80_000, bodyFatPct = 24.6, bmrKcal = 1_705, hcIds = listOf("w", "f", "b")))
+            health.insert(app.recomp.data.db.ScanDraftEntity(measuredAt = 200, weightG = 80_100))
+            assertEquals(listOf("w", "f", "b"), health.draft(id)!!.hcIds)
+            assertEquals(2, health.drafts().size)
+            // The rest of the phone's data is where it was.
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            assertEquals(AiProviderId.OPENAI, room.aiDao().request(1)!!.provider)
+        }
+        assertEquals(11, room.openHelper.readableDatabase.version)
         room.close()
     }
 

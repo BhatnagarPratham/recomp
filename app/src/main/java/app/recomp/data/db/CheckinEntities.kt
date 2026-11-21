@@ -52,7 +52,9 @@ data class WeeklyCheckinEntity(
 
 /**
  * Per-day facts that aren't food or weigh-ins (TRD §4): whether you marked the day's food incomplete (PRD §12.1),
- * and M13's steps and sleep, so that milestone needs no migration.
+ * and M13's steps and sleep. [logDate] is the log date for the food flag and a typed night's morning. [steps] are
+ * keyed by the calendar date instead, so they match Google Fit (PRD §12.9): the two differ only between midnight
+ * and the "day starts at" time.
  */
 @Entity(tableName = "daily_activity")
 data class DailyActivityEntity(
@@ -61,6 +63,8 @@ data class DailyActivityEntity(
     val steps: Int? = null,
     @ColumnInfo(name = "steps_synced_at") val stepsSyncedAt: Long? = null,
     @ColumnInfo(name = "sleep_hours") val sleepHours: Double? = null,
+    /** Who wrote [sleepHours] (M13): a typed night is never replaced by a sync. */
+    @ColumnInfo(name = "sleep_source") val sleepSource: SleepSource? = null,
 )
 
 @Dao
