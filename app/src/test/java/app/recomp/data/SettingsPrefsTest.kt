@@ -9,8 +9,11 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.prefs.ExtraSchedule
 import app.recomp.data.prefs.StoredPersona
+import app.recomp.data.prefs.VolumeBand
 import app.recomp.domain.training.LogDates
 import app.recomp.data.prefs.SettingsKeys
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.recomp.data.health.HealthFeature
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.domain.food.MealSlot
 import app.recomp.domain.food.MealTimes
@@ -80,6 +83,25 @@ class SettingsPrefsTest {
         assertNull(prefs.scanSlot.first())
         assertEquals(LogDates.DEFAULT_DAY_START, prefs.dayStart.first())
         assertEquals(listOf("scan_slot"), prefs.unreadable.first())
+    }
+
+    @Test
+    fun `the weekly sets band defaults to 10 to 20, and a backup with a nonsense band is refused`() = runBlocking {
+        val min = intPreferencesKey("volume_band_min")
+        val max = intPreferencesKey("volume_band_max")
+        val (prefs, _) = storeWith()
+        assertEquals(VolumeBand(10, 20), prefs.volumeBand.first())
+        prefs.setVolumeBand(6, 12)
+        assertEquals(VolumeBand(6, 12), prefs.volumeBand.first())
+        assertEquals(emptyList<String>(), prefs.problems(mutablePreferencesOf(min to 6, max to 12)))
+        assertEquals(emptyList<String>(), prefs.problems(mutablePreferencesOf(max to 25)))
+        assertEquals(listOf("volume_band_min", "volume_band_max"), prefs.problems(mutablePreferencesOf(min to 12, max to 6)))
+        assertEquals(listOf("volume_band_min", "volume_band_max"), prefs.problems(mutablePreferencesOf(min to 30)))
+        assertEquals(listOf("volume_band_min"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("volume_band_min") to "ten")))
+
+        // A stored band that makes no sense reads as the default.
+        val (odd, _) = storeWith(min to 40, max to 5)
+        assertEquals(VolumeBand(), odd.volumeBand.first())
     }
 
     private fun prefsOf(personaJson: String) = mutablePreferencesOf(persona to personaJson)
@@ -159,5 +181,47 @@ class SettingsPrefsTest {
         assertNull(storeWith(stringPreferencesKey("snack_allowance") to odd).first.snackAllowance.first())
         assertEquals(listOf("snack_allowance"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("snack_allowance") to odd)))
         assertEquals(listOf("snack_allowance"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("snack_allowance") to "not json")))
+    }
+
+    // Health Connect (M13)
+
+    @Test
+    fun `health settings default to off, clamp the step goal and ignore a feature this version doesn't know`() = runBlocking {
+        val (fresh, _) = storeWith()
+        assertEquals(emptySet<HealthFeature>(), fresh.healthFeatures.first())
+        assertEquals(8_000, fresh.stepsGoal.first())
+        assertFalse(fresh.trackSleep.first())
+
+        val (prefs, _) = storeWith(stringSetPreferencesKey("health_features") to setOf("STEPS", "HEART_RATE"), intPreferencesKey("steps_goal") to 250_000)
+        assertEquals(setOf(HealthFeature.STEPS), prefs.healthFeatures.first())
+        assertEquals(20_000, prefs.stepsGoal.first())
+        prefs.setStepsGoal(100)
+        assertEquals(2_000, prefs.stepsGoal.first())
+    }
+
+    @Test
+    fun `turning on Health Connect sleep turns on track sleep, and turning it off leaves that alone`() = runBlocking {
+        val (prefs, _) = storeWith()
+        prefs.setHealthFeature(HealthFeature.STEPS, true)
+        assertFalse(prefs.trackSleep.first())
+        prefs.setHealthFeature(HealthFeature.SLEEP, true)
+        assertTrue(prefs.trackSleep.first())
+        prefs.setHealthFeature(HealthFeature.SLEEP, false)
+        assertTrue(prefs.trackSleep.first())
+        assertEquals(setOf(HealthFeature.STEPS), prefs.healthFeatures.first())
+    }
+
+    @Test
+    fun `a backup with health settings of the wrong type is refused, and good ones are exported`() = runBlocking {
+        val (prefs, store) = storeWith(
+            stringPreferencesKey("health_features") to "STEPS", stringPreferencesKey("steps_goal") to "8000", stringPreferencesKey("track_sleep") to "yes",
+        )
+        assertEquals(listOf("steps_goal", "track_sleep", "health_features"), prefs.problems(store.data.first()))
+
+        val (good, goodStore) = storeWith()
+        good.setHealthFeature(HealthFeature.SLEEP, true)
+        good.setStepsGoal(9_000)
+        assertEquals(emptyList<String>(), good.problems(goodStore.data.first()))
+        assertEquals(setOf("health_features", "steps_goal", "track_sleep"), good.exportable().asMap().keys.map { it.name }.toSet())
     }
 }

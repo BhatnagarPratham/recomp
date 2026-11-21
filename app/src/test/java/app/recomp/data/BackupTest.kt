@@ -21,6 +21,12 @@ import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
+import app.recomp.data.db.ScanDraftEntity
+import app.recomp.data.db.SleepSource
+import app.recomp.data.db.YogaDetailEntity
+import app.recomp.data.db.WorkoutSessionEntity
+import app.recomp.domain.model.SessionStatus
+import app.recomp.data.health.HealthFeature
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ScanInput
@@ -187,6 +193,25 @@ class BackupTest {
         app.db.programmeReviewDao().markDeload(listOf(exercise.exercise.id))
         app.prefs.setDeloadWeek(today.minusWeeks(8))
         app.prefs.setDeloadSnoozedUntil(today.plusDays(3))
+
+        // Health Connect (M13): steps and both kinds of night, an InBody draft, another app's walk, and its settings.
+        val health = app.db.healthDao()
+        health.ensureDay(today.minusDays(2))
+        health.setSteps(today.minusDays(2), 7_432, now)
+        health.setSyncedSleep(today.minusDays(2), 6.5)
+        health.ensureDay(today.minusDays(1))
+        health.setTypedSleep(today.minusDays(1), 7.5)
+        health.insert(ScanDraftEntity(measuredAt = now - 5 * dayMs, weightG = 80_600, bodyFatPct = 25.4, bmrKcal = 1_690, hcIds = listOf("w-1", "f-1", "b-1")))
+        app.db.workoutDao().insertExtraSession(
+            WorkoutSessionEntity(
+                routineId = null, kind = SessionKind.CARDIO, status = SessionStatus.COMPLETED, startedAt = now - 4 * dayMs,
+                endedAt = now - 4 * dayMs + 35 * 60_000L, logDate = today.minusDays(4), notes = "from Google Fit", hcRecordId = "walk-1",
+            ),
+            YogaDetailEntity(sessionId = 0, style = "Walk", durationMin = 35),
+        )
+        app.prefs.setHealthFeature(HealthFeature.STEPS, true)
+        app.prefs.setHealthFeature(HealthFeature.SLEEP, true)
+        app.prefs.setStepsGoal(9_500)
     }
 
     /** Everything a backup should bring back: every table's rows and every exported setting. */
@@ -410,6 +435,34 @@ class BackupTest {
         assertEquals(listOf(40_000 to 3), app.db.workoutDao().sessionExercises(1).single().sets.map { it.loadG to it.rir })
         assertTrue(app.db.programmeReviewDao().observeAll().first().isEmpty())
         assertTrue(app.db.programmeReviewDao().pendingDeloads().isEmpty())
+    }
+
+    @Test
+    fun `a v10 and an M11 v11 backup both import into v12, with typed nights kept typed and no drafts`() = runBlocking {
+        // The phone's safety export before M11: a night typed in a dev build.
+        val v10 = backupAt(10) { db -> db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete, steps, sleep_hours) VALUES ('2026-11-11', 0, 6000, 7.5)") }
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(v10)))
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+        assertEquals(SleepSource.TYPED, app.db.healthDao().day(LocalDate.of(2026, 11, 11))!!.sleepSource)
+        assertTrue(app.db.healthDao().drafts().isEmpty())
+
+        // The phone's export before M13: M11's v11, with a review and a deload mark.
+        val v11 = backupAt(11) { db ->
+            db.execSQL("UPDATE exercise SET deload_pending = 1 WHERE id = 1")
+            db.execSQL(
+                "INSERT INTO programme_review (id, week_start, created_at, sections, sent_text, applied_json) VALUES (1, '2026-11-09', 5, 'goal', 'report', '[0]')",
+            )
+            db.execSQL("INSERT INTO daily_activity (log_date, food_incomplete, sleep_hours) VALUES ('2026-11-12', 1, 6.0)")
+        }
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(v11)))
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+        assertTrue(app.db.exerciseDao().get(1)!!.deloadPending)
+        assertEquals("[0]", app.db.programmeReviewDao().get(1)!!.appliedJson)
+        val night = app.db.healthDao().day(LocalDate.of(2026, 11, 12))!!
+        assertTrue(night.foodIncomplete)
+        assertEquals(SleepSource.TYPED, night.sleepSource)
+        assertNull("the v10 backup's rows are gone", app.db.healthDao().day(LocalDate.of(2026, 11, 11)))
+        assertTrue(app.db.healthDao().drafts().isEmpty())
     }
 
     @Test

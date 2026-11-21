@@ -30,7 +30,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.prefs.StoredPersona
 import app.recomp.data.prefs.TrainingSettings
+import app.recomp.data.health.HealthFeature
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.HealthRepository
+import app.recomp.domain.health.Steps
+import app.recomp.ui.health.HealthText
+import app.recomp.ui.health.StepsGoalDialog
 import app.recomp.data.repo.MaintenanceEstimate
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.TargetPreview
@@ -109,7 +114,17 @@ class SettingsViewModel @Inject constructor(
     private val personas: PersonaRepository,
     training: TrainingRepository,
     private val body: BodyRepository,
+    private val health: HealthRepository,
 ) : ViewModel() {
+    /** M13 (PRD §12.9): what's turned on in Health Connect, the step goal and *Track sleep*. */
+    val healthFeatures: StateFlow<Set<HealthFeature>> = health.features.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val stepsGoal: StateFlow<Int> = health.stepsGoal.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Steps.DEFAULT_GOAL)
+    val trackSleep: StateFlow<Boolean> = health.trackSleep.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setStepsGoal(goal: Int) = guarded { health.setStepsGoal(goal) }
+    fun turnStepsOff() = guarded { health.setFeature(HealthFeature.STEPS, false) }
+    fun setTrackSleep(on: Boolean) = guarded { health.setTrackSleep(on) }
+
     private val today = MutableStateFlow(LocalDate.now())
 
     init {
@@ -214,7 +229,7 @@ private sealed interface Editing {
 fun SettingsScreen(
     onOpenGoal: () -> Unit,
     onOpenTraining: () -> Unit,
-    onOpenDev: () -> Unit,
+    onOpenHealth: () -> Unit,
     onOpenMeals: () -> Unit,
     onOpenPortions: () -> Unit,
     onOpenHidden: () -> Unit,
@@ -225,6 +240,10 @@ fun SettingsScreen(
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<Editing?>(null) }
     var foodData by remember { mutableStateOf(false) }
+    val healthFeatures by viewModel.healthFeatures.collectAsStateWithLifecycle()
+    val stepsGoal by viewModel.stepsGoal.collectAsStateWithLifecycle()
+    val trackSleep by viewModel.trackSleep.collectAsStateWithLifecycle()
+    var stepsDialog by remember { mutableStateOf(false) }
     if (!ui.loaded) return
     val profile = ui.profile
     val plan = ui.plan
@@ -294,6 +313,7 @@ fun SettingsScreen(
                 Text("Split, experience, weekly plan, equipment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
         }
+        VolumeBandSetting()
 
         SectionTitle("Food")
         SettingRow("Diet", ui.stored.diet?.let(Labels::diet) ?: "Not set") { editing = Editing.Diet }
@@ -316,6 +336,22 @@ fun SettingsScreen(
         SettingRow("Weight trend from", Labels.weightSource(ui.stored.weightSource)) { editing = Editing.Source }
         SettingRow("Usual scan slot", ui.scanSlot?.let(BodyText::slot) ?: "Set by your first scan") { editing = Editing.Slot }
         SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
+        // AR-01: steps come from Health Connect, so turning them on happens there, with its permission.
+        val stepsOn = HealthFeature.STEPS in healthFeatures
+        SettingRow("Steps", if (stepsOn) "Goal ${GoalText.n(stepsGoal)}" else "Off") { if (stepsOn) stepsDialog = true else onOpenHealth() }
+        SwitchRow(
+            "Track sleep",
+            "Asks how long you slept at the morning weigh-in. A tracker's night from Health Connect is filled in; what you type wins.",
+            trackSleep,
+            onChange = viewModel::setTrackSleep,
+        )
+
+        SectionTitle("Health Connect")
+        SettingRow(
+            "Steps, sleep, workouts, InBody",
+            if (healthFeatures.isEmpty()) "Off" else healthFeatures.sorted().joinToString { HealthText.title(it) },
+            onClick = onOpenHealth,
+        )
 
         SectionTitle("Reminders")
         app.recomp.ui.reminders.RemindersSettingsRow() // M12: its screen lives in ui/reminders
@@ -326,10 +362,15 @@ fun SettingsScreen(
         SectionTitle("Data")
         DataSettings()
 
-        SectionTitle("Developer")
-        SettingRow("M0 spikes", "Health Connect check", onClick = onOpenDev)
-
         Text(GoalText.NOT_MEDICAL_ADVICE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+    }
+
+    if (stepsDialog) {
+        StepsGoalDialog(
+            stepsGoal,
+            onDismiss = { stepsDialog = false },
+            onTurnOff = { stepsDialog = false; viewModel.turnStepsOff() },
+        ) { stepsDialog = false; viewModel.setStepsGoal(it) }
     }
 
     if (foodData) {
