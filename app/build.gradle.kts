@@ -209,6 +209,14 @@ dependencies {
     // OpenAI, Gemini and OpenAI-compatible servers (AI-05): plain HTTP with kotlinx.serialization, no SDKs. The Anthropic SDK already brings OkHttp.
     implementation(libs.okhttp)
     implementation(libs.tink.android)
+    // M18, camera food: CameraX for the scanner and label photos, ZXing for barcodes, Tesseract for label text.
+    // No ML Kit (PRD §12.14, TRD §7): every one of these runs on the phone and sends nothing.
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.zxing.core)
+    implementation(libs.tesseract4android)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
