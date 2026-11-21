@@ -160,7 +160,7 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 
 **Settings** live in DataStore, one key each:
 - `persona`: the persona (§5.0) as JSON, including the goal plan, the training part (split, experience, strength days, extra-session schedules by routine id) and `onboarded_on`. Never body data, so PS-06 can export it as is.
-- `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
+- `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level, and from M19 whether you're pregnant or breastfeeding).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
 - `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
 - `ai_mode` (`OFF|ON`), `ai_monthly_cap_usd` (absent = no cap), and from M7 (AI-05, §6.2):
@@ -209,13 +209,18 @@ data class GoalPlan(
     val pace: Pace?,                   // GENTLE | STANDARD | AGGRESSIVE; null for Maintain or custom values under Advanced
     val goalWeightKg: Double?,         // the one goal weight: protein's reference weight whatever the finish line
     val finishLine: FinishLine?,       // GoalWeight | BodyFat(pct) | ByDate(date); null = none
-    val startedOn: LocalDate,
+    val startedOn: LocalDate,          // a change of goal resets it; a pace, goal-weight or finish-line edit keeps it (M19)
     val aggressiveAcknowledged: Boolean,
+    val reachedOn: LocalDate?,         // GL-06 (M19): the day the finish line was first seen reached
+    val breakUntil: LocalDate?,        // at maintenance until this day: a maintenance break, or the 2 weeks after reaching
+    val lastBreakEndedOn: LocalDate?,  // the 12 weeks in a deficit count again from here
+    val breakSnoozedUntil: LocalDate?, // *Not now*: no suggestion before this day
 )
 
 data class Profile(                    // body data (PR-01); kept apart from the persona so PS-06 never exports it
     val sex: Sex, val birthDate: LocalDate, val heightCm: Double, val weightKg: Double,
     val activity: ActivityLevel,       // SEDENTARY ×1.2 | MODERATE ×1.375 (default) | ACTIVE ×1.55
+    val pregnant: Boolean,             // GL-09 (M19): pregnant or breastfeeding; body data, never sent to AI or in a persona
 )
 
 data class ExperiencePolicy(
@@ -236,7 +241,7 @@ data class ExperiencePolicy(
 | Intermediate | 6–10 / 10–15 / 12–20 | 4 | No | Every 6–8 weeks |
 | Advanced | 5–8 / 8–12 / 10–15 | 5 | No | Every 4–6 weeks |
 
-- **Presets** bundle a `PersonaDraft` (PRD §4.4). They're Kotlin objects (`Presets`) in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
+- **Presets** bundle a `PersonaDraft` (PRD §4.4). Since M19 (PS-05) each is a JSON file under `app/src/main/assets/presets/`, read by `PresetSource` (`data/seed/PresetData.kt`), so a fork adds one by adding a file. A file holds `key`, `name`, `summary`, an optional `order` (the list is sorted by it, then by name) and any of `goal`, `experience`, `diet`, `region`, `split`, `strengthDaysPerWeek`, `extras` (`name`, `kind`, ISO `days`), `weightSource` and `proteinRamp`; a value left out is *Asked*. Enum values are the Kotlin names. Decoding is strict, so a misspelt field fails `PresetsTest` rather than being ignored. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
 - **Who reads the persona:**
   - Calorie and protein targets read `goal` (§5.3).
   - The progression engine reads `experience` (§5.1).
@@ -473,6 +478,7 @@ MAINTAIN      → MAINTAIN
 - **Body fat** comes from a scan in the last 60 days (M4), or from a number typed in the third question. A typed number is used for this suggestion only and never stored. Otherwise BMI decides.
 - **Training age** is the experience level: under a year is `BEGINNER`. The answer also pre-fills the persona's experience.
 - **With AI on (GL-03):** Claude maps the free text to `{intent, follow_up_question?}` with a hand-written JSON schema (§6.2). The rules above then decide. AI never picks the goal directly, so the outcome is testable and identical offline.
+  - Built in M19 as `AiKind.GOAL` over whichever provider is in use: `GoalPrompt` (`:domain`) and `GoalSchema` (`goal_intent`: `intent` is one of `lose_fat | build_muscle | both | maintain | unclear`, `follow_up_question` is `""` when there's none). Only the typed text, and the answer to the one question, is sent. An intent outside the five is `INVALID`; a second question is dropped. Any failure falls back to the three questions.
 - **Thresholds** live in one table in `:domain`, so they're easy to tune.
 
 ### 5.8 Finish line, projection and guardrails (PRD §4.7, §4.9)
@@ -502,7 +508,16 @@ maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached
 - An Aggressive pace needs one acknowledgement of a warning, stored on the goal plan.
 - The intake floor (§5.3) always applies, overrides included.
 
-Each rejected or clamped choice carries a `GuardrailNote` for the UI. A profile change in Settings that makes a deficit goal unavailable (e.g. a lower weight) switches the plan to Maintain, and the before-and-after preview says why.
+- **Pregnant or breastfeeding** (GL-09, M19, `Profile.pregnant`): deficit goals are rejected and the plan becomes Maintain (`PREGNANT_MAINTAIN`, named before a low BMI since it's the one you can switch). `Guardrails.deficitAllowed(profile)` is the one test every deficit asks: the goal cards, the check-in's proposal and *Adjust* (§5.4: never below maintenance while it's false), and M11's suggestions. A calorie target of your own below maintenance isn't used and isn't kept (`PREGNANT_KCAL_AT_MAINTENANCE`). The check-in stores no flag and makes no proposal (pregnancy gain isn't stored energy, so §5.4's estimate would read it as a lower maintenance and Maintain's drift would fire), a proposal made before the switch can't be answered, and `targetsFor` ignores an estimate below the formula's TDEE. `GoalRecommender` turns a deficit suggestion into Maintain (`NO_DEFICIT`). Switching it off doesn't bring a deficit back: you choose a goal again.
+
+Each rejected or clamped choice carries a `GuardrailNote` for the UI. A profile change in Settings that makes a deficit goal unavailable (e.g. a lower weight) switches the plan to Maintain, and the before-and-after preview says why. A goal the guardrails move is a change of goal like any other: it starts that day.
+
+**Goal reached, the maintenance break and the goal switch** (GL-06, PS-04, M19; `domain/persona/GoalProgress.kt`, `data/repo/GoalRepository.kt`):
+- **Reached** (`FinishLines.reached`) on the trend weight, never one weigh-in: at or under the goal weight for fat loss and recomp, at or over it for a lean bulk; a body-fat line at or under the target on a scan; a date on the day itself and after. Maintain only finishes by date. It's checked (`GoalRepository.refresh`) at launch, on each new log day, and at the start of every check-in catch-up, never during a break, and marked once (`reachedOn`): a bounce back over the line doesn't unmark it.
+- **The Goal reached card** offers *Start 2 weeks at maintenance* (not for Maintain), *Choose a new goal* (the goal flow) and *Keep going*, which clears the finish line. The 2 weeks are a break that ends with a choice, not an automatic resume: when they're over the targets stay at maintenance and the card asks again.
+- **The break** is due at 12 weeks in a deficit from `startedOn` or `lastBreakEndedOn`, and not once reached. It's suggested in the latest check-in only; *Not now* sets `breakSnoozedUntil` 4 weeks out. Accepting writes a `BREAK` version from that day at maintenance with the goal's own protein (`GoalPlan.targetPlan`); a calorie target of your own waits and comes back with the goal. The first launch on or after `breakUntil` writes a `RESUME` version from that day, however late (the days in between keep maintenance), and before the check-ins are caught up, so the weeks after the break are judged on the goal, and sets `lastBreakEndedOn` to the end date. *End early* does the same today. Settings and the check-in recompute at maintenance during a break, so nothing there reads it as a change.
+- **Quiet weeks:** during a break, and until the flag's window is back on the goal (2 weeks for fat loss and a lean bulk, 4 for a recomp and Maintain), the check-in still updates the estimate but stores no flag and makes no proposal (`MaintenanceBreak.flagsQuiet`). A proposal made before a break was accepted can't be answered afterwards.
+- **The goal switch** (`GoalChange.settle`): only a change of goal resets `startedOn` (and the break history and the reached mark), so the 12 weeks, M8's "current plan" and every "since you started" restart then. A pace, goal-weight or finish-line edit keeps `startedOn`, clears the reached mark so the new line is judged afresh, and ends a running break. Before M19 any goal save set `startedOn` to that day. *What to expect* (`GoalChange.expect`) is one line per change of energy balance in the goal flow's targets step and in Settings' preview.
 
 ### 5.9 Today's numbers (GL-07, GL-10, PRD §4.8)
 
@@ -1325,6 +1340,8 @@ Tests cover (no real API call and no real key anywhere; every adapter runs again
 - **Risks:** the review runs many queries. Each covers one week and uses the `log_date` indexes, so it should open well inside a second; the phone check measures it.
 - **Parallel:** with M7.
 
+**M19 results** are below, after M19's block.
+
 **M8 results (2026-11-13, reference phone on Android 15, release build over the real data).** No Room change. Where §12.4 left room, M8 took the obvious reading, now written into PRD §12.4 and §5.8 here:
 - The current week shows only the sections, with food up to yesterday.
 - Incomplete days are left out of the whole Food section.
@@ -1672,6 +1689,21 @@ Tests cover:
   - every bundled preset decoding and completing.
 - **Risks:** the automatic resume writes a target version while you're not looking. It's the one exception to "targets never change on their own", and accepting the break agrees to it.
 - **Parallel:** none; it runs before M20.
+
+**M19 results (2026-11-21; no Room change, on main with M8).** Built to PRD §12.15 and the block above; §4, §5.0 and §5.8 describe what was built. Where the spec was silent:
+- **`startedOn`** is reset only by a change of goal (including one the guardrails make). Before M19 every goal save, even a pace edit, set it to that day; that also restarted M8's "current plan". Tested in `GoalProgressTest` and `GoalFlowTest`.
+- **During a break** the goal stays the goal (Settings → Goal shows it, with "Maintenance break · back to your recomp on Mon 3 Nov"), while the targets follow `GoalPlan.targetPlan`: Maintain at the goal's protein. Your own calorie target is set aside, not lost.
+- **The 2 weeks after a reached goal** use the same mechanism but don't resume on their own: PRD §4.7 says "then choose a new goal", so the deficit never comes back by itself. *Keep going* after them writes a `RESUME` version.
+- **Quiet weeks** run past the break until the flag's window is back on the goal, so the first check-ins after a break don't read its flat weeks as a stall.
+- **M8's review** shows a week that ended inside a break with its trend and "at maintenance on a break", without a pace or finish line, and names the goal underneath a break (not Maintain) for an earlier week.
+- **Review fixes (PR #17):** pregnancy no longer lets the check-in talk the target down (see §5.8's guardrails); a break resumes before catch-up; the review's break weeks; a bad preset file on the phone is skipped and logged instead of stopping onboarding (the bundled files stay strictly tested). Protein is unchanged while pregnant, beyond the note to ask a doctor or midwife, as PRD §4.9 has it.
+- **The break suggestion** shows in the latest check-in (not in older weeks); Today shows the running break with *End early*, and the Goal reached card on both.
+- **Describe your goal** shows only when AI is ready; otherwise the card stays *Not sure? Answer 3 quick questions*. From Settings the experience level is known, so an intent goes straight to the suggestion and *Back* shows the questions pre-filled; in onboarding the lifting question is still asked. Any failure, an `unclear` reply after the one question, or AI going unready lands on the three questions with a line saying why. Requests are logged as `GOAL` and count toward the cap. The adapters' own tests cover every provider; the GOAL tests run against a mock OpenAI server.
+- **Pregnancy** in About you (onboarding and Settings), shown to everyone. Turning it on previews the move to Maintain with the note; turning it off leaves Maintain until you choose.
+- **Presets** keep their keys, so a stored `presetKey` still matches. `:domain` no longer has a `Presets` object; tests use a test-only `Presets` that reads the files.
+- **Tests:** `GoalProgressTest` and `GoalPromptTest` (domain), `GoalFlowTest`, `GoalAiFlowTest`, `PresetsTest` and `GoalCardTextTest` (app).
+- **Suggestions follow the pregnancy guardrail:** while it's on, a deficit the rules (or an AI-read intent) would suggest becomes Maintain, with the reason (`AdviceReason.NO_DEFICIT`), so the suggestion is never a greyed-out card.
+- **On the phone (2026-11-21):** the release was **not** installed over the real data. M11 had moved the phone to Room v11 that morning and main was still v10, so it would have been a downgrade; install it once rebased onto a main with v11. A dev install with invented data (a fat-loss goal 13 weeks old) went through the break (suggested in the check-in, 1 week accepted, Today at Maintain's range with "back to … on Sat 28 Nov", the proposal quiet, *End early*), Goal reached after a relaunch (*Start 2 weeks at maintenance*, then *Choose a new goal* → Lean bulk with *What to expect*), the pregnancy switch, and *Describe your goal* against a stand-in OpenAI-compatible server on the Mac: the notice, one follow-up question, and only the typed text and the answer in the requests. It found five things, all fixed with tests: "your lose fat" (now "your fat loss"), the reached card dropping its maintenance offer after a break that ended the same day, the break verdict's wording, a faint *End early*, and a recomp suggested while pregnant.
 
 #### M20: lb and in
 

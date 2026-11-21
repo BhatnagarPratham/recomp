@@ -35,6 +35,7 @@ import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.checkin.LocalOpenProgrammeReview
 import app.recomp.ui.checkin.ProgrammeReviewScreen
+import app.recomp.ui.goal.LocalOpenGoal
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -183,7 +184,7 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<TodayRoute> {
-                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenGoal provides nav::openGoal) {
                     TodayScreen(
                         onOpenWorkout = nav::openWorkout,
                         onOpenSummary = { nav.navigate(SummaryRoute(it)) },
@@ -193,7 +194,7 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<CheckinRoute> {
-                CompositionLocalProvider(LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
+                CompositionLocalProvider(LocalOpenGoal provides nav::openGoal, LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
                     CheckinScreen(onBack = { nav.popBackStack() })
                 }
             }
@@ -234,7 +235,7 @@ fun RecompNavHost(main: MainViewModel) {
             composable<SettingsRoute> {
                 CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenReminders provides { nav.navigate(RemindersRoute) }) {
                     SettingsScreen(
-                        onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
+                        onOpenGoal = nav::openGoal,
                         onOpenTraining = { nav.navigate(SetupRoute) },
                         onOpenDev = { nav.navigate(DevRoute) },
                         onOpenMeals = { nav.navigate(MealSlotsRoute) },
@@ -363,6 +364,9 @@ private fun NavHostController.openTopLevel(route: Any) = navigate(route) {
 }
 
 /** A week's check-in (PRD §12.1), from Today's card or Settings. */
+/** Settings → Goal: the goal flow, also reached from the Goal reached card (GL-06). */
+private fun NavHostController.openGoal() = navigate(OnboardingRoute(goalOnly = true)) { launchSingleTop = true }
+
 private fun NavHostController.openCheckin(weekStart: LocalDate) = navigate(CheckinRoute(weekStart.toString())) { launchSingleTop = true }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */

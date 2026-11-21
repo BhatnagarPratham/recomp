@@ -18,6 +18,8 @@ import app.recomp.domain.nutrition.TargetOverrides
 import app.recomp.domain.persona.Diet
 import app.recomp.domain.persona.ExtraSession
 import app.recomp.domain.persona.FoodRegion
+import app.recomp.domain.nutrition.Goal
+import app.recomp.domain.persona.GoalChange
 import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.GuardrailNote
@@ -67,9 +69,12 @@ data class TargetPreview(
     /** The check-in estimate the new targets use in place of the formula's TDEE, if any. */
     val maintenance: MaintenanceEstimate? = null,
 ) {
+    /** The goal the targets follow: Maintain during a break (GL-06), else the plan's own. */
+    val targetGoal: Goal get() = plan.targetPlan.goal
+
     val changes: Boolean
         get() = before == null || before.kcal != after.kcal || before.proteinG != after.proteinG ||
-            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != plan.goal
+            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != targetGoal
 }
 
 /**
@@ -105,9 +110,22 @@ class PersonaRepository @Inject constructor(
      * Once a check-in has a maintenance estimate, it sets TDEE for every target you change (TRD §5.4, PRD §12.11):
      * whatever was decided that week, since *Keep* declines a proposal, not the estimate. BMR, and so the floor, stay
      * the formula's. Null [maintenance] is the formula, BMR × activity.
+     *
+     * During a break (GL-06) the targets are maintenance's, whatever calories you set yourself: your number stays
+     * stored and returns when the goal resumes. While pregnant or breastfeeding (GL-09), a calorie target of your own
+     * below maintenance isn't used. Either way the result's `overrides` are the ones that were used.
+     *
+     * While pregnant or breastfeeding the check-in's estimate never lowers the targets: weight gained then isn't stored
+     * energy, so an estimate below the formula's TDEE is ignored (GL-09, PRD §12.15).
      */
-    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate, maintenance: MaintenanceEstimate? = null): NutritionTargets =
-        NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today).copy(maintenanceKcal = maintenance?.kcal?.toDouble()), overrides)
+    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate, maintenance: MaintenanceEstimate? = null): NutritionTargets {
+        val formula = TargetInputs.from(profile, plan.targetPlan, today)
+        val estimate = maintenance?.kcal?.toDouble()?.takeUnless { profile.pregnant && it < NutritionCalculator.startingTargets(formula).tdeeKcal }
+        val inputs = formula.copy(maintenanceKcal = estimate)
+        val own = if (plan.onBreak) overrides.copy(kcal = null) else overrides
+        val targets = NutritionCalculator.startingTargets(inputs, own)
+        return if (Guardrails.kcalOverride(profile, own.kcal, targets.tdeeKcal) == own.kcal) targets else NutritionCalculator.startingTargets(inputs, own.copy(kcal = null))
+    }
 
     /** The latest check-in's estimate, once a week had enough data; null before (TRD §5.4). */
     val maintenance: Flow<MaintenanceEstimate?> = checkinDao.observeLatestEstimate().map { MaintenanceEstimate.of(it) }
@@ -172,18 +190,23 @@ class PersonaRepository @Inject constructor(
     // Settings (PS-02)
 
     /** What saving [plan], [profile] and [overrides] (null = unchanged) would do to today's targets. */
-    suspend fun preview(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null): TargetPreview {
-        val today = days.today()
+    suspend fun preview(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null, now: Long = System.currentTimeMillis()): TargetPreview {
+        val today = days.of(now)
         val stored = prefs.currentPersona()
         val newProfile = withTrend(profile ?: requireNotNull(prefs.profile.first()) { "No profile before onboarding" })
-        val guarded = Guardrails.apply(newProfile, plan ?: requireNotNull(stored.goal).toPlan(), today)
+        val current = stored.goal?.toPlan()
+        val guarded = Guardrails.apply(newProfile, plan ?: requireNotNull(current), today)
+        // A goal-flow save settles against the stored goal (PS-04); anything else keeps the goal unless a guardrail moved it.
+        val settled = if (plan != null || current == null) GoalChange.settle(current, guarded.plan, today) else GoalChange.afterGuardrails(current, guarded.plan, today)
         val newOverrides = overrides ?: prefs.overrides.first()
         val maintenance = maintenance()
+        val after = targetsFor(newProfile, settled, newOverrides, today, maintenance)
+        val raised = newProfile.pregnant && !settled.onBreak && newOverrides.kcal != null && after.overrides.kcal == null
         return TargetPreview(
             before = nutritionDao.targetOn(today),
-            after = targetsFor(newProfile, guarded.plan, newOverrides, today, maintenance),
-            plan = guarded.plan,
-            notes = guarded.notes,
+            after = after,
+            plan = settled,
+            notes = guarded.notes + listOfNotNull(GuardrailNote.PREGNANT_KCAL_AT_MAINTENANCE.takeIf { raised }),
             profile = newProfile,
             maintenance = maintenance,
         )
@@ -200,13 +223,15 @@ class PersonaRepository @Inject constructor(
         now: Long = System.currentTimeMillis(),
         reason: TargetReason = TargetReason.MANUAL,
     ) {
-        val p = preview(plan, profile, overrides)
+        val p = preview(plan, profile, overrides, now)
         val today = days.of(now)
         if (p.changes) writeTarget(p.after, p.plan, today, reason, now)
         prefs.edit {
             persona = this.persona.copy(goal = StoredGoal.of(p.plan))
             if (profile != null || p.changes) setProfile(p.profile)
             if (overrides != null) setOverrides(overrides)
+            // GL-09: a calorie target the guardrail refused isn't kept, so it can't come back by itself later.
+            if (GuardrailNote.PREGNANT_KCAL_AT_MAINTENANCE in p.notes) setOverrides((overrides ?: p.after.overrides).copy(kcal = null))
         }
     }
 
@@ -227,9 +252,9 @@ class PersonaRepository @Inject constructor(
         }
     }
 
-    private suspend fun writeTarget(t: NutritionTargets, plan: GoalPlan, today: LocalDate, reason: TargetReason, now: Long) {
-        nutritionDao.upsert(t.toVersion(plan.goal, today, reason, now))
-    }
+    /** A version from [today]. Its goal is the one the targets follow: Maintain during a break. */
+    internal suspend fun writeTarget(t: NutritionTargets, plan: GoalPlan, today: LocalDate, reason: TargetReason, now: Long): Long =
+        nutritionDao.upsert(t.toVersion(plan.targetPlan.goal, today, reason, now))
 }
 
 /** The stored persona as an onboarding draft, with [extras] resolved from the routines. */

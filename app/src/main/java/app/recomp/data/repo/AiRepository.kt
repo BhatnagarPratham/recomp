@@ -6,6 +6,7 @@ import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.AiResult
 import app.recomp.data.ai.AiSchema
 import app.recomp.data.ai.AiSender
+import app.recomp.data.ai.GoalSchema
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
@@ -32,6 +33,9 @@ import app.recomp.domain.ai.AiUrl
 import app.recomp.domain.ai.CheckedMeal
 import app.recomp.domain.ai.Clarification
 import app.recomp.domain.ai.EstimatorReply
+import app.recomp.domain.ai.GoalInterpretation
+import app.recomp.domain.ai.GoalPrompt
+import app.recomp.domain.ai.TokenUsage
 import app.recomp.domain.ai.MealCheck
 import app.recomp.domain.ai.MealEstimator
 import app.recomp.domain.ai.MealPrompt
@@ -57,6 +61,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.SerializationException
 
 /**
  * The gate as screens show it: the state, plus the cap and the day a reached cap lifts (PRD §7.7 *Not ready*),
@@ -79,6 +84,13 @@ sealed interface EstimateResult {
     data class NotReady(val state: AiState) : EstimateResult
     /** [draftId] is the draft the description was kept as, when the caller asked for one (AI-02). */
     data class Failed(val status: AiStatus, val requestId: Long?, val draftId: Long? = null) : EstimateResult
+}
+
+/** How a goal description's reading ended (GL-03). Anything but [Read] with an intent falls back to the three questions. */
+sealed interface GoalReading {
+    data class Read(val reading: GoalInterpretation) : GoalReading
+    data class NotReady(val state: AiState) : GoalReading
+    data class Failed(val status: AiStatus) : GoalReading
 }
 
 /**
@@ -266,6 +278,55 @@ class AiRepository @Inject constructor(
     /** Settles a coach request whose reply didn't fit the schema: it was billed, so only its status changes. */
     suspend fun markInvalid(requestId: Long) {
         aiDao.request(requestId)?.let { aiDao.updateRequest(it.copy(status = AiStatus.INVALID)) }
+    }
+
+    /**
+     * Reads a goal description (GL-03, TRD §5.7): the text you typed in, an intent and at most one follow-up question
+     * out. The request carries [text] and, the second time, [followUp]'s question and answer: nothing else, no body
+     * data. Like an estimate it runs to completion and is logged and costed whatever happens; every failure comes back
+     * as a [GoalReading] for the caller to fall back to the three questions.
+     */
+    suspend fun interpretGoal(text: String, followUp: Clarification? = null): GoalReading = withContext(NonCancellable) {
+        val (call, pending) = sending.withLock {
+            val state = state()
+            if (state != AiState.READY) return@withContext GoalReading.NotReady(state)
+            val s = prefs.ai.first()
+            val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext GoalReading.NotReady(AiState.NO_KEY) else null
+            val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
+            val user = GoalPrompt.user(text, followUp)
+            val bound = AiPricing.upperBound(target.model, GoalPrompt.SYSTEM.length + user.length, target.provider.outputBound, rates = target.rates)
+            AiCall(target, GoalPrompt.SYSTEM, user, GoalSchema.schema, bound) to reserve(AiKind.GOAL, target, bound)
+        }
+        val result = try {
+            sender.send(call)
+        } catch (e: Exception) {
+            // A provider returns its failures; anything thrown is a bug, which still falls back to the questions.
+            AiResult(AiStatus.UNEXPECTED, null, null, call.target.model, emptyList(), latencyMs = 0, detail = e.javaClass.simpleName)
+        }
+        val reading = result.json?.takeIf { result.status == AiStatus.OK }?.let { json ->
+            try {
+                GoalSchema.parse(json.toString(), answered = followUp != null)
+            } catch (e: SerializationException) {
+                null
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+        }
+        val status = if (result.status == AiStatus.OK && reading == null) AiStatus.INVALID else result.status
+        aiDao.updateRequest(
+            pending.copy(
+                model = result.servedBy,
+                inputTokens = result.attempts.sumOf { it.inputTokens },
+                outputTokens = result.attempts.sumOf { it.outputTokens },
+                cacheReadTokens = result.attempts.sumOf { it.cacheReadTokens },
+                cacheWriteTokens = result.attempts.sumOf { it.cacheWriteTokens },
+                costUsd = AiPricing.cost(result.attempts, LocalDate.now(clock)),
+                status = status,
+                latencyMs = result.latencyMs,
+                responseJson = result.text,
+            ),
+        )
+        if (reading != null) GoalReading.Read(reading) else GoalReading.Failed(status)
     }
 
     /** Serializes the gate check with the reservation it leads to. */

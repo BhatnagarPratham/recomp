@@ -8,6 +8,10 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.ai.AiProviders
+import app.recomp.data.ai.AnthropicProvider
+import app.recomp.data.ai.GeminiProvider
+import app.recomp.data.ai.OpenAiProvider
 import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
 import app.recomp.data.ai.Connectivity
@@ -24,6 +28,7 @@ import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
+import app.recomp.data.repo.GoalRepository
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
@@ -31,6 +36,8 @@ import app.recomp.data.repo.ProgrammeReviewRepository
 import app.recomp.data.repo.ReviewRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
+import app.recomp.data.seed.PresetData
+import app.recomp.data.seed.PresetSource
 import app.recomp.data.seed.SeedData
 import app.recomp.data.seed.SeedSource
 import app.recomp.domain.ai.AiStatus
@@ -85,6 +92,13 @@ object FileSeedSource : SeedSource {
     private val templates by lazy { SeedData.parseTemplates(File("src/main/assets/seed/split_templates.json").readText()) }
     override fun exercises() = exercises
     override fun templates() = templates
+}
+
+/** The real preset files from the source tree (PS-05). */
+object FilePresetSource : PresetSource {
+    val dir = File("src/main/assets/presets")
+    private val presets by lazy { PresetData.sorted(dir.listFiles { f -> f.name.endsWith(".json") }!!.map { PresetData.parse(it.readText()) }) }
+    override fun presets() = presets
 }
 
 /** The real basics from the source tree, plus an INDB stand-in a test can set (the real file is never committed). */
@@ -144,8 +158,12 @@ class FakeSender : app.recomp.data.ai.AiSender {
         app.recomp.data.ai.AiResult(AiStatus.OK, kotlinx.serialization.json.buildJsonObject {}, "{}", call.target.model, emptyList(), 10)
     }
 
+    /** Set to send to real adapters instead, e.g. one pointed at a local mock server (GL-03's tests). */
+    var through: app.recomp.data.ai.AiSender? = null
+
     override suspend fun send(call: app.recomp.data.ai.AiCall): app.recomp.data.ai.AiResult {
         calls += call
+        through?.let { return it.send(call) }
         return next(call)
     }
 }
@@ -218,6 +236,9 @@ class TestApp(private val dir: File) {
     /** Device state (TRD §4), in its own file beside the settings. */
     val device = app.recomp.data.prefs.DevicePrefs(PreferenceDataStoreFactory.create { File(dir, "device.preferences_pb") })
     val notifier = FakeNotifier()
+    /** The real adapters, for the requests that go through the provider layer itself; a test points one at a local server. */
+    val openAi = OpenAiProvider()
+    val providers = AiProviders(AnthropicProvider(), openAi, GeminiProvider())
 
     lateinit var db: AppDatabase
         private set
@@ -253,6 +274,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var reminders: app.recomp.reminders.ReminderRunner
         private set
+    lateinit var goals: GoalRepository
+        private set
 
     init {
         open()
@@ -273,8 +296,9 @@ class TestApp(private val dir: File) {
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, sender, foods, clock)
+        goals = GoalRepository(prefs, days, personas, body)
         backup = BackupManager(context, db, prefs)
-        checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
+        checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas, goals)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
         programmeReviews = ProgrammeReviewRepository(db, db.programmeReviewDao(), db.exerciseDao(), db.routineDao(), db.nutritionDao(), prefs, days, personas, training, progression, reviews, ai)
         snapshots = app.recomp.data.repo.TodaySnapshotRepository(days, prefs, nutrition, training, workouts, progression, checkins, foods, foodLog, db.nudgeDao())

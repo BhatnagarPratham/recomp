@@ -1,0 +1,9 @@
+{
+  "key": "lean_bulk",
+  "order": 3,
+  "name": "Lean bulk",
+  "summary": "Build muscle in a small surplus. Upper/Lower, four days a week.",
+  "goal": "LEAN_BULK",
+  "experience": "INTERMEDIATE",
+  "split": "UPPER_LOWER"
+}

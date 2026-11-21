@@ -45,6 +45,8 @@ object CheckinText {
     fun verdict(v: CheckinView): String {
         val e = v.evaluation.takeIf { v.row.flag == null || v.row.flag.goal == v.plan.goal } ?: v.evaluation.copy(ratePct = null, fourWeekPct = null, waistChangeCm = null)
         val pace = WeightPace.of(v.plan.policy)
+        if (v.pregnant && v.row.flag == null) return PREGNANT_VERDICT
+        if (v.quiet) return if (v.plan.onBreak) BREAK_VERDICT else AFTER_BREAK_VERDICT
         return when (v.status) {
             CheckinStatus.ON_TRACK -> "On track"
             CheckinStatus.NOT_ENOUGH_DATA -> "Not enough data yet"
@@ -60,6 +62,15 @@ object CheckinText {
             }
         }
     }
+
+    /** GL-06: a week in a maintenance break, and the weeks just after one, aren't judged. */
+    const val BREAK_VERDICT = "You're on a maintenance break, so there's nothing to judge or change. Your maintenance estimate still updates."
+    const val AFTER_BREAK_VERDICT = "Just back from maintenance. Your pace is judged again once the break's weeks are out of the picture."
+
+    /** GL-09: the scale isn't judged, and the target never drops below maintenance. */
+    const val PREGNANT_VERDICT =
+        "While you're pregnant or breastfeeding the scale isn't judged, and your target never goes below the formula's maintenance. " +
+            "Ask your doctor or midwife about calories and protein."
 
     private fun range(p: WeightPace) = "${pct(p.minPctPerWeek)} to ${pct(p.maxPctPerWeek)}"
 

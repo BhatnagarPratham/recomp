@@ -5,7 +5,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.NutritionTargetEntity
 import app.recomp.data.prefs.FinishKind
+import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.ExtraDraft
+import app.recomp.data.repo.GoalReading
+import app.recomp.data.seed.PresetSource
+import app.recomp.domain.ai.AiKind
+import app.recomp.domain.ai.AiState
+import app.recomp.domain.ai.AiStatus
+import app.recomp.domain.ai.Clarification
+import app.recomp.domain.ai.GoalPrompt
+import app.recomp.domain.persona.Expectation
+import app.recomp.domain.persona.GoalChange
+import app.recomp.domain.persona.Preset
+import app.recomp.ui.food.AiText
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.MaintenanceEstimate
@@ -32,7 +44,6 @@ import app.recomp.domain.persona.Guarded
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.Intent
 import app.recomp.domain.persona.PersonaDraft
-import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.Projection
 import app.recomp.domain.persona.SplitTemplate
@@ -61,17 +72,19 @@ data class AboutForm(
     val height: String = "",
     val weight: String = "",
     val activity: ActivityLevel = ActivityLevel.MODERATE,
+    /** GL-09: pregnant or breastfeeding. */
+    val pregnant: Boolean = false,
 ) {
     val heightCm: Double? get() = height.toDecimal()?.takeIf { it in 100.0..250.0 }
     val weightKg: Double? get() = weight.toDecimal()?.takeIf { it in 30.0..300.0 }
 
     fun profile(today: LocalDate): Profile? {
         val birth = birthDate?.takeIf { it.isBefore(today) && it.isAfter(today.minusYears(120)) } ?: return null
-        return Profile(sex ?: return null, birth, heightCm ?: return null, weightKg ?: return null, activity)
+        return Profile(sex ?: return null, birth, heightCm ?: return null, weightKg ?: return null, activity, pregnant)
     }
 
     companion object {
-        fun of(p: Profile) = AboutForm(p.sex, p.birthDate, GoalText.d(p.heightCm), GoalText.d(p.weightKg), p.activity)
+        fun of(p: Profile) = AboutForm(p.sex, p.birthDate, GoalText.d(p.heightCm), GoalText.d(p.weightKg), p.activity, p.pregnant)
     }
 }
 
@@ -95,6 +108,12 @@ data class GoalForm(
     /** You picked a finish line (including none), so the goal's default no longer applies. */
     val finishChosen: Boolean = false,
     val acknowledged: Boolean = false,
+    /** *Describe your goal* (GL-03): the text you typed, the one follow-up question the AI asked, and your answer. */
+    val describe: String = "",
+    val aiQuestion: String? = null,
+    val aiAnswer: String = "",
+    /** Above the three questions: what the AI read, or why they're being asked instead. */
+    val aiNote: String? = null,
 ) {
     val bodyFatPct: Double? get() = if (knowsBodyFat) bodyFat.toDecimal()?.takeIf { it in 3.0..70.0 } else null
     val goalWeightKg: Double? get() = goalWeight.toDecimal()?.takeIf { it in 30.0..300.0 }
@@ -127,6 +146,19 @@ data class OnboardingUi(
     val before: NutritionTargetEntity? = null,
     /** Settings → Goal: the check-in's maintenance estimate, which the new targets use as TDEE (TRD §5.4). */
     val maintenance: MaintenanceEstimate? = null,
+    /** The presets, read from `assets/presets` (PS-05). */
+    val presets: List<Preset> = emptyList(),
+    /** Settings → Goal: the goal being replaced, for *What to expect* and the fresh start (PS-04). */
+    val storedPlan: GoalPlan? = null,
+    /** AI can read a goal description right now (GL-03). Otherwise the card offers the three questions, with no text box. */
+    val aiReady: Boolean = false,
+    /** What a description sends and to whom, for the first-use notice (TRD §6.2). */
+    val goalNotice: String = "",
+    val goalNoticeTitle: String = "",
+    /** A description is being read. */
+    val aiBusy: Boolean = false,
+    /** The first description sent to this provider shows what it sends (TRD §6.2). */
+    val askGoalNotice: Boolean = false,
     val busy: Boolean = false,
     /** Saving failed: the form stays as it is so you can try again. */
     val error: String? = null,
@@ -169,6 +201,19 @@ data class OnboardingUi(
 
     val isLast: Boolean get() = steps.last() == step
 
+    /** Settings → Goal: the goal changes, so it starts afresh from today (PS-04). */
+    val switching: Boolean get() = mode == FlowMode.GOAL && storedPlan != null && plan != null && storedPlan.goal != plan?.goal
+
+    /**
+     * *What to expect* (PS-04), from the goal the targets follow now to the new one. During a maintenance break
+     * that's Maintain, so saving the same goal again reads as coming back from maintenance.
+     */
+    val expectation: Expectation?
+        get() = if (mode != FlowMode.GOAL) null else GoalChange.expect(before?.goal ?: return null, plan?.goal ?: return null)
+
+    /** Saving from the goal flow ends a running maintenance break. */
+    val endsBreak: Boolean get() = mode == FlowMode.GOAL && storedPlan?.onBreak == true
+
     val canContinue: Boolean
         get() = when (step) {
             Step.PRESET -> presetKey != null
@@ -195,6 +240,8 @@ class OnboardingViewModel @Inject constructor(
     private val personas: PersonaRepository,
     private val training: TrainingRepository,
     private val nutrition: NutritionRepository,
+    private val presets: PresetSource,
+    private val ai: AiRepository,
 ) : ViewModel() {
     private val mode = if (savedState.get<Boolean>("goalOnly") == true) FlowMode.GOAL else FlowMode.ONBOARDING
     private val _ui = MutableStateFlow(OnboardingUi(mode = mode))
@@ -222,8 +269,13 @@ class OnboardingViewModel @Inject constructor(
                     step = if (mode == FlowMode.GOAL) Step.GOAL else Step.PRESET,
                     before = if (mode == FlowMode.GOAL) nutrition.targetOn(today) else null,
                     maintenance = if (mode == FlowMode.GOAL) personas.maintenance() else null,
+                    presets = presets.presets(),
+                    storedPlan = plan.takeIf { mode == FlowMode.GOAL },
                 )
             }
+        }
+        viewModelScope.launch {
+            ai.gate.collect { gate -> _ui.update { it.copy(aiReady = gate.state == AiState.READY) } }
         }
     }
 
@@ -291,7 +343,7 @@ class OnboardingViewModel @Inject constructor(
     // Preset (PRD §4.4)
 
     fun pickPreset(key: String) {
-        val preset = Presets.byKey(key) ?: return
+        val preset = presets.byKey(key) ?: return
         _ui.update { ui ->
             // An upgraded install keeps the training setup it already has; the preset fills the rest.
             val kept = ui.currentSplit != null
@@ -321,7 +373,83 @@ class OnboardingViewModel @Inject constructor(
         else ui.copy(goal = ui.goal.copy(goal = goal, notSure = false, custom = null, acknowledged = false, goalWeightTouched = false, finishChosen = false))
     }
 
-    fun notSure() = _ui.update { it.copy(goal = it.goal.copy(notSure = true), step = Step.QUESTIONS) }
+    fun notSure() = _ui.update { it.copy(goal = it.goal.copy(notSure = true, aiNote = null), step = Step.QUESTIONS) }
+
+    // Describe your goal (GL-03)
+
+    fun setDescription(text: String) = _ui.update { it.copy(goal = it.goal.copy(describe = text.take(GoalPrompt.MAX_TEXT), aiQuestion = null, aiAnswer = "")) }
+
+    fun setFollowUpAnswer(text: String) = _ui.update { it.copy(goal = it.goal.copy(aiAnswer = text.take(GoalPrompt.MAX_TEXT))) }
+
+    /** Sends the description, after the first-use notice for this provider. Only the typed text leaves the phone. */
+    fun describeGoal() {
+        val ui = _ui.value
+        if (ui.aiBusy || ui.goal.describe.isBlank() || (ui.goal.aiQuestion != null && ui.goal.aiAnswer.isBlank())) return
+        viewModelScope.launch {
+            val settings = ai.settings.first()
+            if (settings.noticeSeen(AiKind.GOAL)) readDescription()
+            else _ui.update { it.copy(askGoalNotice = true, goalNotice = AiText.goalPrivacy(settings), goalNoticeTitle = "Before your first goal description with ${settings.provider.label}") }
+        }
+    }
+
+    fun confirmGoalNotice() {
+        _ui.update { it.copy(askGoalNotice = false) }
+        viewModelScope.launch {
+            ai.markNoticeSeen(AiKind.GOAL)
+            readDescription()
+        }
+    }
+
+    fun dismissGoalNotice() = _ui.update { it.copy(askGoalNotice = false) }
+
+    private suspend fun readDescription() {
+        val form = _ui.value.goal
+        val followUp = form.aiQuestion?.let { Clarification(it, form.aiAnswer) }
+        _ui.update { it.copy(aiBusy = true) }
+        val result = try {
+            ai.interpretGoal(form.describe, followUp)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            GoalReading.Failed(AiStatus.UNEXPECTED)
+        }
+        _ui.update { it.copy(aiBusy = false) }
+        val provider = ai.settings.first().provider
+        when (result) {
+            is GoalReading.Read -> {
+                val intent = result.reading.intent
+                val question = result.reading.followUp
+                when {
+                    intent != null -> useIntent(intent)
+                    // One follow-up at most, and only while the intent isn't settled.
+                    question != null -> _ui.update { it.copy(goal = it.goal.copy(aiQuestion = question, aiAnswer = "")) }
+                    else -> toQuestions(GoalText.AI_UNCLEAR)
+                }
+            }
+            is GoalReading.NotReady -> toQuestions(GoalText.AI_NOT_READY)
+            is GoalReading.Failed -> toQuestions(GoalText.aiFailed(AiText.reason(result.status, provider)))
+        }
+    }
+
+    /**
+     * The AI's intent feeds the same rules as the three questions (TRD §5.7); it never picks the goal. From Settings
+     * your experience level is already known, so the suggestion follows at once and *Back* shows the questions. In
+     * onboarding the lifting question is still to answer.
+     */
+    private fun useIntent(intent: Intent) {
+        _ui.update { ui ->
+            val known = ui.draft.experience.takeIf { ui.mode == FlowMode.GOAL }
+            ui.copy(goal = ui.goal.copy(notSure = true, intent = intent, liftingAge = ui.goal.liftingAge ?: known, aiNote = GoalText.aiRead(intent)), step = Step.QUESTIONS)
+        }
+        if (_ui.value.canContinue) suggest()
+    }
+
+    /** Any failure falls back to the three questions (GL-03), saying why. */
+    private fun toQuestions(note: String) = _ui.update { ui ->
+        // From Settings your experience is already known, as on the AI path; in onboarding the question asks it.
+        val known = ui.draft.experience.takeIf { ui.mode == FlowMode.GOAL }
+        ui.copy(goal = ui.goal.copy(notSure = true, aiNote = note, liftingAge = ui.goal.liftingAge ?: known), step = Step.QUESTIONS)
+    }
 
     fun answer(transform: (GoalForm) -> GoalForm) = _ui.update { it.copy(goal = transform(it.goal)) }
 
@@ -330,7 +458,7 @@ class OnboardingViewModel @Inject constructor(
         val ui = _ui.value
         val profile = ui.profile ?: return
         val form = ui.goal
-        val advice = GoalRecommender.recommend(form.intent ?: return, form.liftingAge ?: return, profile.sex, profile.bmi, form.bodyFatPct)
+        val advice = GoalRecommender.recommend(form.intent ?: return, form.liftingAge ?: return, profile.sex, profile.bmi, form.bodyFatPct, Guardrails.deficitAllowed(profile))
         _ui.update {
             it.copy(
                 goal = it.goal.copy(advice = advice),

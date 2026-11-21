@@ -5,6 +5,8 @@ import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.persona.AdviceReason
+import app.recomp.domain.persona.Expectation
+import app.recomp.domain.persona.Intent
 import app.recomp.domain.persona.GoalAdvice
 import app.recomp.domain.persona.GuardrailNote
 import app.recomp.ui.components.Labels
@@ -50,11 +52,14 @@ object GoalText {
             AdviceReason.MUSCLE_HIGH_FAT -> "With $fat, lose some fat while you build muscle first, then bulk."
             AdviceReason.MUSCLE -> "A small surplus builds muscle fastest with little fat gain."
             AdviceReason.STAY -> "You want to stay as you are, so keep your weight steady and get stronger."
+            AdviceReason.NO_DEFICIT -> "While you're pregnant or breastfeeding, losing weight is off, so keep your weight steady and get stronger. $ASK_A_DOCTOR"
         }
     }
 
     fun guardrail(note: GuardrailNote) = when (note) {
         GuardrailNote.LOW_BMI_MAINTAIN -> "At a BMI below 18.5, losing weight isn't safe, so your goal is Maintain."
+        GuardrailNote.PREGNANT_MAINTAIN -> "While you're pregnant or breastfeeding, fat loss and recomp are off, so your goal is Maintain. $ASK_A_DOCTOR"
+        GuardrailNote.PREGNANT_KCAL_AT_MAINTENANCE -> "Your own calorie target was below maintenance, so it isn't used while you're pregnant or breastfeeding."
         GuardrailNote.UNDER_18_GENTLE_ONLY -> "Under 18, deficits are limited to Gentle. Involve a parent or doctor before you start."
         GuardrailNote.AGGRESSIVE_NEEDS_ACK -> AGGRESSIVE_WARNING
     }
@@ -64,6 +69,58 @@ object GoalText {
             "It's still held to the caps and the safety floor."
 
     const val LOW_BMI_CARD = "Unavailable at a BMI below 18.5."
+
+    // Pregnancy and breastfeeding (GL-09)
+
+    const val ASK_A_DOCTOR = "Ask your doctor or midwife about calories and protein."
+    const val PREGNANT_CARD = "Unavailable while pregnant or breastfeeding."
+    const val PREGNANT_TITLE = "Pregnant or breastfeeding"
+    const val PREGNANT_BODY = "Turns off fat loss and recomp. It stays on this phone and is never sent to AI."
+    const val PREGNANT_ON = "Fat loss and recomp are off, and nothing will suggest eating below maintenance. $ASK_A_DOCTOR"
+
+    /** Why a deficit goal's card is greyed out. */
+    fun unavailable(block: GuardrailNote?): String? = when (block) {
+        GuardrailNote.PREGNANT_MAINTAIN -> PREGNANT_CARD
+        GuardrailNote.LOW_BMI_MAINTAIN -> LOW_BMI_CARD
+        else -> null
+    }
+
+    // Goal switch (PS-04)
+
+    /** *What to expect*: one line on what the scale does after this change of goal. */
+    fun expect(e: Expectation): String = when (e) {
+        Expectation.DEFICIT_TO_SURPLUS -> "The scale will jump 1–2 kg in the first two weeks as water and glycogen come back; judge from week 3."
+        Expectation.DEFICIT_TO_MAINTENANCE -> "The scale may rise about 1 kg in the first two weeks as water and glycogen come back. That isn't fat; judge from week 3."
+        Expectation.MAINTENANCE_TO_SURPLUS -> "Expect a quick 0.5–1 kg in the first two weeks from more food and water, then a slow climb; judge from week 3."
+        Expectation.SURPLUS_TO_DEFICIT -> "The scale will drop 1–2 kg in the first two weeks, mostly water and glycogen; judge fat loss from week 3."
+        Expectation.MAINTENANCE_TO_DEFICIT -> "The first week or two often drop faster than your pace, mostly water; judge from week 3."
+        Expectation.SURPLUS_TO_MAINTENANCE -> "The scale may drop about 1 kg in the first two weeks as water settles, then hold steady."
+        Expectation.GENTLER_DEFICIT -> "A gentler deficit: the scale moves more slowly now, so watch your waist and your lifts as well."
+        Expectation.LARGER_DEFICIT -> "A larger deficit: the scale should fall faster now. Holding your lifts steady is the win."
+    }
+
+    const val FRESH_START = "Comparisons start again from today: \"since you started\", the weekly review and the 12-week count. Your history stays."
+    const val BREAK_TARGETS = "You're on a maintenance break, so calories are at maintenance. A calorie target of your own returns when your goal resumes."
+    const val ENDS_BREAK = "Saving ends your maintenance break: these targets apply from today."
+
+    // Describe your goal (GL-03)
+
+    const val DESCRIBE_TITLE = "None of these fit? Describe your goal"
+    const val DESCRIBE_BODY = "In your own words. You'll get a suggestion with the reason for it."
+    const val THREE_QUESTIONS = "Answer 3 quick questions instead"
+    const val AI_UNCLEAR = "The AI couldn't tell what you want from that, so here are three quick questions instead."
+    const val AI_NOT_READY = "AI isn't ready right now, so here are three quick questions instead."
+
+    fun aiFailed(reason: String) = "$reason, so here are three quick questions instead."
+
+    fun intent(i: Intent) = when (i) {
+        Intent.LOSE_FAT -> "Lose fat"
+        Intent.BUILD_MUSCLE -> "Build muscle"
+        Intent.BOTH -> "Both"
+        Intent.MAINTAIN -> "Stay as I am"
+    }
+
+    fun aiRead(i: Intent) = "From what you wrote: ${intent(i).lowercase()}. Change it below if that's not right."
 
     const val NOT_MEDICAL_ADVICE =
         "Not medical advice. If you have a medical condition, are pregnant or breastfeeding, check these targets with a professional."

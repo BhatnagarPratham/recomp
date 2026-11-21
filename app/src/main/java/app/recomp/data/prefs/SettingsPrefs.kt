@@ -99,6 +99,11 @@ data class StoredGoal(
     val finishLine: StoredFinishLine? = null,
     @Serializable(with = LocalDateIso::class) val startedOn: LocalDate,
     val aggressiveAcknowledged: Boolean = false,
+    // GL-06 (M19). Absent in a persona stored before it, which reads as no reached mark and no break.
+    @Serializable(with = LocalDateIso::class) val reachedOn: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val breakUntil: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val lastBreakEndedOn: LocalDate? = null,
+    @Serializable(with = LocalDateIso::class) val breakSnoozedUntil: LocalDate? = null,
 ) {
     init {
         // GoalPolicy's own rules: rates are magnitudes, and a policy can't both lose and gain.
@@ -118,6 +123,10 @@ data class StoredGoal(
         },
         startedOn = startedOn,
         aggressiveAcknowledged = aggressiveAcknowledged,
+        reachedOn = reachedOn,
+        breakUntil = breakUntil,
+        lastBreakEndedOn = lastBreakEndedOn,
+        breakSnoozedUntil = breakSnoozedUntil,
     )
 
     companion object {
@@ -136,6 +145,10 @@ data class StoredGoal(
             },
             startedOn = plan.startedOn,
             aggressiveAcknowledged = plan.aggressiveAcknowledged,
+            reachedOn = plan.reachedOn,
+            breakUntil = plan.breakUntil,
+            lastBreakEndedOn = plan.lastBreakEndedOn,
+            breakSnoozedUntil = plan.breakSnoozedUntil,
         )
     }
 }
@@ -171,11 +184,13 @@ data class StoredProfile(
     val heightCm: Double,
     val weightKg: Double,
     val activity: ActivityLevel = ActivityLevel.MODERATE,
+    /** GL-09 (M19): pregnant or breastfeeding. Body data, so it lives here and never in the persona. */
+    val pregnant: Boolean = false,
 ) {
-    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity)
+    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity, pregnant)
 
     companion object {
-        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity)
+        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity, p.pregnant)
     }
 }
 
