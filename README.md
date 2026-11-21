@@ -23,6 +23,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M8: a weekly review on the check-in screen, week by week: food against target with protein days hit and the share of ordered and packaged food, training against your plan with PRs and stalls, the trend, waist and scans, the finish line at your current rate, a month calendar with no streaks, and a body-composition chart on Body.
 > - M11: with AI on, a weekly programme review: you tick what's sent (body trends off by default), read the full text, and get up to 5 suggestions you apply one by one, with Undo. Train also offers a deload week every 6–8 weeks (4–6 for advanced lifters).
 > - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
+> - M15: share an InBody screenshot to Recomp and type the scan with it pinned above the form (it stays on the phone, never sent to AI); with a recent on-protocol scan, BMR uses your lean mass, Body offers to preview targets with it, and a target body-fat % becomes a finish line.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >

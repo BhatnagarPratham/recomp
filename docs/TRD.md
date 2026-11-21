@@ -903,7 +903,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
 | **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
 | **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
-| **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
+| **M15: InBody share, scan targets** ✅ | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
 | **M16: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
 | **M17: Body extras** | Tape measurements, progress photos, focus areas, mobility markers (Room v14) | BM-03, BM-04, YG-03, YG-04 |
 | **M18: Camera food** | Barcode with Open Food Facts, label scan, AI meal photos, Open Food Facts search for the International region | NU-21, NU-19, NU-20, NU-11 (search) |
@@ -1594,6 +1594,30 @@ Tests cover:
   - a shared image with and without a matching draft, and the image deleted with its scan.
 - **Risks:** the image is sensitive: it stays in app-private storage, out of Android's own backup, and is never sent anywhere. Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
 - **Parallel:** with M16.
+
+**M15 results (2026-11-21; no Room change).** Built to PRD §12.11 and the block above. Where the spec was silent:
+- **Which scan counts** (`ScanTargets`, `:domain`, `body/`): the latest on-protocol scan dated within 60 days of today, never one dated later. Lean mass is the scan's weight minus its fat mass.
+- **Lean mass goes into every target computation**: Settings' targets and preview, onboarding and the goal flow, the check-in's basis (so its floor and *Adjust* range use the scan's BMR) and the programme review's range. Targets still change only when you save; the check-in's "the formula said …" line is the scan's BMR × activity.
+- ***Preview targets with your scan*** is a card on Body, above the scans. It shows while the counting scan's BMR is 20 kcal or more from the BMR of the target in force today. *Preview* opens Settings' own before-and-after, and *Save* saves a target version from today, as Settings does. *Not now* hides it until a newer scan (`scan_targets_dismissed` in the settings store, the scan's measured-at time).
+- **The body-fat finish line** in the goal flow is enabled with a counting scan. Typing the target % fills the goal weight with lean mass ÷ (1 − target %), to 0.1 kg, and protein then uses that goal weight. Targets of 5–50% are accepted.
+- **The suggested goal weight** with a counting scan aims at 15% body fat for men and 23% for women, rounded to the kg (PRD §4.2 leaves the target open). When you're already that lean, or have no recent scan, the BMI rule stands. <!-- pii-ok: the suggestion rule's defaults, not anyone's data -->
+- **Sharing:**
+  - The app takes `ACTION_SEND` for `image/*`. The image is copied into `files/scan_images` (JPEG, PNG or WebP, up to 20 MB) the moment it arrives, while the share's permission holds.
+  - "What is this?" offers *InBody result* and *Cancel*; nutrition labels and meal photos wait for M18.
+  - The scan form pins the image above the fields, and a tap makes it taller. Saving keeps its file name as `image_path`, and an edit keeps it.
+  - Deleting the scan deletes the file. An image no scan keeps, such as a share you backed out of, is removed a day later at launch.
+  - Android's backup rules list only the database and the settings, so the images are left out by omission, which `BackupRulesTest` checks. The app's own export doesn't carry them either.
+
+Tests cover:
+- `:domain`: `ScanTargetsTest`: the 60-day and protocol rules, lean mass and Katch-McArdle, the 20 kcal threshold, the body-fat goal weight and the scan-based suggestion.
+- `ScanTargetsFlowTest`:
+  - golden vector B end to end: onboarding at Mifflin-St Jeor, a scan, the offer, the preview's numbers, and *Save*;
+  - an off-protocol, a 61-day and a 60-day scan;
+  - *Not now* until a newer scan;
+  - a check-in estimate setting calories with the scan's BMR as the floor;
+  - an image kept with its scan, kept through an edit and deleted with it;
+  - staging limits and the clean-up.
+- `BackupRulesTest`: shared images are left out of cloud backup and device transfer.
 
 #### M16: Data out
 
