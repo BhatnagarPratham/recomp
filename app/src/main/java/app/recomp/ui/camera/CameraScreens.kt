@@ -131,8 +131,8 @@ fun BarcodeScanScreen(onBack: () -> Unit, onCode: (String) -> Unit) {
         ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build().also { a ->
             val main = android.os.Handler(android.os.Looper.getMainLooper())
             a.setAnalyzer(executor) { frame ->
-                val code = frame.use { decode(reader, it) }
-                if (code != null && Barcodes.valid(code) && done.compareAndSet(false, true)) main.post { latest(code) }
+                val code = frame.use { decode(reader, it) }?.let { (text, format) -> Barcodes.lookupCode(text, upcE = format == BarcodeFormat.UPC_E) }
+                if (code != null && done.compareAndSet(false, true)) main.post { latest(code) }
             }
         }
     }
@@ -156,13 +156,13 @@ fun BarcodeScanScreen(onBack: () -> Unit, onCode: (String) -> Unit) {
     }
 }
 
-/** ZXing on the frame's luminance plane; null when no barcode is in this frame. */
-private fun decode(reader: MultiFormatReader, frame: ImageProxy): String? {
+/** ZXing on the frame's luminance plane, with the format it read; null when no barcode is in this frame. */
+private fun decode(reader: MultiFormatReader, frame: ImageProxy): Pair<String, BarcodeFormat>? {
     val plane = frame.planes.firstOrNull() ?: return null
     val buffer = plane.buffer.duplicate().apply { rewind() }
     val data = ByteArray(buffer.remaining()).also { buffer.get(it) }
     val source = PlanarYUVLuminanceSource(data, plane.rowStride, frame.height, 0, 0, frame.width, frame.height, false)
-    fun read(bitmap: BinaryBitmap) = try { reader.decodeWithState(bitmap).text } catch (e: NotFoundException) { null } finally { reader.reset() }
+    fun read(bitmap: BinaryBitmap) = try { reader.decodeWithState(bitmap).let { it.text to it.barcodeFormat } } catch (e: NotFoundException) { null } finally { reader.reset() }
     // Barcodes are read along rows, so a pack held sideways is tried rotated too.
     return read(BinaryBitmap(HybridBinarizer(source))) ?: if (source.isRotateSupported) read(BinaryBitmap(HybridBinarizer(source.rotateCounterClockwise()))) else null
 }

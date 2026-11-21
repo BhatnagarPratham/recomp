@@ -161,4 +161,28 @@ class LabelParserTest {
         val noWeight = "Nutrient Per 100 g Per Serve\nEnergy (kcal) 400 120\nDietary Fibre (g) 50 1.5\nProtein (g) 20 6"
         assertEquals(listOf(5.0, 20.0), LabelParser.parse(noWeight).let { listOf(it.fiberG, it.proteinG) })
     }
+
+    @Test
+    fun `an energy value the macros contradict is re-read with thousands, or left blank`() {
+        val macros = "Protein (g) 10\nCarbohydrate (g) 64\nTotal Fat (g) 9.5"
+        // A thousands comma isn't a decimal point (review S2).
+        assertEquals(401.5, LabelParser.parse("Nutrient Per 100 g Per 30 g\nEnergy (kJ) 1,680 504\n$macros").kcal!!, 0.05)
+        // Nor is a thousands space two numbers.
+        assertEquals(401.5, LabelParser.parse("Per 100 g\nEnergy 1 680 kJ\n$macros").kcal!!, 0.05)
+        // A value that still can't be right is left for you to fill.
+        assertNull(LabelParser.parse("Per 100 g\nEnergy (kcal) 45\n$macros").kcal)
+        // Without all three macros there's nothing to check against.
+        assertEquals(45.0, LabelParser.parse("Per 100 g\nEnergy (kcal) 45\nProtein (g) 10").kcal)
+    }
+
+    @Test
+    fun `a pack's net weight isn't taken for the serving`() {
+        val text = """
+            Net wt 200 g per pack
+            Nutrient Per 100 g Per Serve (30 g)
+            Energy (kcal) 456 137
+            Total Fat (g) 17.9 5.4
+        """.trimIndent()
+        assertEquals(30.0, LabelParser.parse(text).servingG)
+    }
 }

@@ -79,6 +79,29 @@ object OpenFoodFacts {
  * check digit is right are looked up, so a misread never costs one of Open Food Facts' requests.
  */
 object Barcodes {
+    /**
+     * The code to check and look up for what the scanner read. A UPC-E's check digit belongs to its expanded UPC-A,
+     * so it's expanded first (and that's the form Open Food Facts and your foods hold); anything else is as read.
+     * Null when the check digit is wrong.
+     */
+    fun lookupCode(read: String, upcE: Boolean = false): String? {
+        val code = if (upcE) upcEtoUpcA(read) ?: return null else read
+        return code.takeIf { valid(it) }
+    }
+
+    /** UPC-E (8 digits: number system, 6 digits, check) to its UPC-A, by GS1's zero-suppression rules. */
+    fun upcEtoUpcA(upcE: String): String? {
+        if (upcE.length != 8 || !upcE.all { it.isDigit() } || upcE[0] !in "01") return null
+        val c = upcE.substring(1, 7)
+        val middle = when (val last = c[5]) {
+            '0', '1', '2' -> c.substring(0, 2) + last + "0000" + c.substring(2, 5)
+            '3' -> c.substring(0, 3) + "00000" + c.substring(3, 5)
+            '4' -> c.substring(0, 4) + "00000" + c[4]
+            else -> c.substring(0, 5) + "0000" + last
+        }
+        return upcE[0] + middle + upcE[7]
+    }
+
     fun valid(code: String): Boolean {
         if (!code.all { it.isDigit() }) return false
         return when (code.length) {

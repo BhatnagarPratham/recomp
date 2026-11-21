@@ -54,7 +54,32 @@ object LabelParser {
     private const val MAX_GRAMS_100G = 100.0
 
     fun parse(text: String): LabelValues {
-        val lines = text.lines().map(::clean).filter { it.isNotBlank() }
+        val values = parseLines(text.lines().map(::clean).filter { it.isNotBlank() })
+        val kcal = values.kcal ?: return values
+        val expected = atwater(values) ?: return values
+        if (agrees(kcal, expected)) return values
+        // Energy disagrees with the macros: "1,680" or "1 680" may be thousands, not a decimal or two numbers.
+        val joined = parseLines(text.lines().map { clean(joinThousands(it)) }.filter { it.isNotBlank() }).kcal
+        return values.copy(kcal = joined?.takeIf { agrees(it, expected) })
+    }
+
+    /** Energy from the macros (4 kcal per g of protein and carbs, 9 per g of fat), when all three were read. */
+    private fun atwater(v: LabelValues): Double? {
+        val p = v.proteinG ?: return null
+        val c = v.carbsG ?: return null
+        val f = v.fatG ?: return null
+        return (4 * p + 4 * c + 9 * f).takeIf { it > 0 }
+    }
+
+    /** Labels round, fibre and polyols count less, so only a big gap means a misread. */
+    private fun agrees(kcal: Double, expected: Double) = kotlin.math.abs(kcal - expected) <= 0.25 * expected + 20
+
+    private val thousands = Regex("""(?<![\d.,])(\d{1,2})[ ,.](\d{3})(?![\d.,])""")
+
+    private fun joinThousands(line: String): String =
+        if (labels.getValue(LabelField.KCAL).containsMatchIn(line)) thousands.replace(line, "$1$2") else line
+
+    private fun parseLines(lines: List<String>): LabelValues {
         val layout = layout(lines)
         val serving = servingGrams(lines)
         // No per-100 g column, but a serving size: the numbers are per serving (US labels, some packs).
@@ -129,14 +154,14 @@ object LabelParser {
 
     /** "Serving size 2/3 cup (55g)", "Per Serve (30 g)", "per 30 g portion": the serving's weight in grams. */
     private fun servingGrams(lines: List<String>): Double? {
-        for (line in lines) {
-            val serve = servingSize.containsMatchIn(line) || perServing.containsMatchIn(line)
-            if (!serve) continue
-            val grams = gramsInLine.findAll(line).map { it.groupValues[1].toDouble() }.filter { it != 100.0 && it > 0 && it <= 2_000 }.toList()
-            grams.lastOrNull()?.let { return it }
-        }
-        return null
+        fun grams(line: String) = gramsInLine.findAll(line).map { it.groupValues[1].toDouble() }.filter { it != 100.0 && it > 0 && it <= 2_000 }.lastOrNull()
+        // A "Serving size" line or the column header first; a pack's net weight ("200 g per pack") is never a serving.
+        lines.firstOrNull { servingSize.containsMatchIn(it) || (per100.containsMatchIn(it) && perServing.containsMatchIn(it)) }
+            ?.let(::grams)?.let { return it }
+        return lines.filter { perServing.containsMatchIn(it) && !netWeight.containsMatchIn(it) }.firstNotNullOfOrNull(::grams)
     }
+
+    private val netWeight = Regex("""(?i)\b(net|per\s+pack|pack\s+size)\b""")
 
     // Nutrient lines
 

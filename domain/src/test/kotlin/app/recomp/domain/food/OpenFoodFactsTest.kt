@@ -57,6 +57,25 @@ class OpenFoodFactsTest {
     }
 
     @Test
+    fun `a UPC-E is checked and looked up as its UPC-A`() {
+        // The check digit is the expanded UPC-A's, not the 8 digits' own (review S1).
+        assertEquals("042100005264", Barcodes.upcEtoUpcA("04252614"))
+        assertEquals("042100005264", Barcodes.lookupCode("04252614", upcE = true))
+        assertEquals("065100004327", Barcodes.lookupCode("06543217", upcE = true))
+        // Each zero-suppression rule, by the last of the six digits.
+        assertEquals("042100005264", Barcodes.upcEtoUpcA("04252614")) // 0–2
+        assertEquals("012300000455", Barcodes.upcEtoUpcA("01234535")) // 3
+        assertEquals("012340000058", Barcodes.upcEtoUpcA("01234548")) // 4
+        assertEquals("012345000065", Barcodes.upcEtoUpcA("01234565")) // 5–9
+        // Its own mod-10 passes, but the UPC-A's doesn't: a misread.
+        assertNull(Barcodes.lookupCode("00000017", upcE = true))
+        assertNull(Barcodes.upcEtoUpcA("24252614"))
+        // Other formats are checked as read.
+        assertEquals("96385074", Barcodes.lookupCode("96385074"))
+        assertNull(Barcodes.lookupCode("4006381333932"))
+    }
+
+    @Test
     fun `the throttle keeps to the per-minute limits and backs off on a 429`() {
         val t = OffThrottle()
         repeat(10) { t.sentAt(OffThrottle.Kind.SEARCH, 1_000L + it) }
