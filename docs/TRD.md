@@ -1731,6 +1731,13 @@ Tests cover:
 - **Risks:** a Drive folder can be slow or offline, so the worker retries with backoff and Settings shows the last success. Nutrition written to Health Connect is readable by every app you give access; it's off by default.
 - **Parallel:** with M15.
 
+**M16 results (2026-11-21; no Room change; on main 137632e with M10, M12 and M13).** Built to PRD §12.12; §6.3 (*Write*) and §6.5 (*Automatic backup*, *CSV export*) describe what was built. Where the spec left room:
+- **Drive** shows in the reference phone's folder picker, but its *Use this folder* is disabled at Drive's top level, so Drive gets the one rolling file and *the last 8* is for folders on the phone.
+- **A meal's time** uses M9's default meal starts until M9's slot times are on `main` (`HealthWrites.DEFAULT_STARTS`, the one place to switch).
+- **Turning sharing off** stops writing and forgets what was written; the records stay in Health Connect.
+- **Tests:** 417 domain and 426 app tests in the gate, 0 failures, lint 0 errors. New: `CsvTest`, `CsvExportTest`, `HealthWritesTest`, `BackupRotationTest`, `HealthWriteFlowTest` (10, including M10's history edit and delete followed), `AutoBackupTest` (6).
+- **On the phone:** the Drive check above. A dev install with invented data showed the new rows, and cancelling the folder picker left the backup off. **Not verified on a device:** a backup into a real folder (picking the folder needs a person, since the picker isn't read), and Health Connect's write-permission prompt (interrupted). No invented record was written to Health Connect.
+
 #### M17: Body extras
 
 *BM-03, BM-04, YG-03, YG-04; PRD §12.13; Room v14.*
