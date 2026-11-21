@@ -31,6 +31,7 @@ import app.recomp.domain.model.SessionStatus
 import app.recomp.data.health.HealthFeature
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.OnboardingResult
+import app.recomp.data.repo.PhotoDelete
 import app.recomp.data.repo.RecipeDraft
 import app.recomp.data.repo.RecipeSaved
 import app.recomp.data.repo.ScanInput
@@ -940,7 +941,7 @@ class BackupTest {
         // Any import makes the safety copy, which keeps the phone's photos.
         app.backup.restore(app.backup.prepare(ByteArrayInputStream(export())))
         val front = app.db.photoDao().all().single { it.filePath == "photos/front-1.jpg" }
-        assertTrue(app.photos.delete(front.id))
+        assertEquals(PhotoDelete.DELETED, app.photos.delete(front.id))
 
         val copy = entries(app.backup.safetyCopyFile.readBytes())
         assertFalse(copy.containsKey("photos/front-1.jpg"))

@@ -7,9 +7,9 @@ An Android app for people who lift and want their nutrition to match their goal:
 
 Everything that varies between people lives in a configurable **persona**: goal, experience, diet, food region, training split and extra sessions. Presets get you started, and every value is editable.
 
-One user per install, offline-first, no backend, no accounts. AI meal logging is optional and uses your own Claude API key.
+One user per install, offline-first, no backend, no accounts. AI is optional and uses your own API key: Anthropic, OpenAI, Gemini or any OpenAI-compatible server.
 
-> **Status:** early development. Done so far:
+> **Status:** v1.1 is complete (M1–M20). What each milestone added:
 > - M0: project setup and feasibility checks on a real phone.
 > - M1: training core: exercise library, split templates, rotation, the active workout with a lock-screen rest timer, summary and extra-session logging.
 > - M2: progression: targets for every exercise, live feedback, PRs, stall detection and exercise history.
@@ -34,29 +34,31 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
 > - M17: body extras: tape measurements beyond the waist, progress photos that stay in the app (never the gallery, never AI, in a backup only when you include them), focus areas on classes, and monthly mobility tests.
 >
-> With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
+> The milestones, and what wasn't verified on a phone, are in the TRD (§10, "v1.1 summary").
 >
 > **Not medical advice.** Check calorie targets with a professional if you have a medical condition.
 
 - Product requirements: [docs/PRD.md](docs/PRD.md)
 - Technical requirements: [docs/TRD.md](docs/TRD.md)
 
-## What it will do
+## What it does
 
 - **Workouts:**
-  - Log sets in two taps, prefilled from last time.
-  - See one target per exercise: add reps, add weight, repeat or deload.
+  - Log sets in two taps, prefilled from last time, with supersets and warm-up suggestions.
+  - One target per exercise: add reps, add weight, repeat or deload, with stall detection tuned to your experience.
   - Rest timer on the lock screen.
-  - Stall detection tuned to your experience.
+  - History you can edit, PRs, and weekly sets per muscle.
+  - Optional AI programme review once a week.
 - **Nutrition:**
-  - Targets from your goal, with protein first and a protein ramp for low-protein diets.
-  - Regional food databases filtered to your diet.
-  - Saved meals, quick add, and optional AI meal estimates from a description or a photo.
+  - Targets from your goal, with protein first and a protein ramp for low-protein diets; a weekly check-in adapts calories to your real maintenance.
+  - Regional food databases filtered to your diet, recipes, barcodes, nutrition labels and Open Food Facts.
+  - Saved meals, quick add, a local meal parser, and optional AI estimates from a description or a photo.
 - **Body:**
-  - Weight trend from a scale or body-composition scans.
-  - Waist and photos.
-  - InBody import through Health Connect or a shared screenshot.
-- **Weekly review** judged against what success means for your goal.
+  - Weight trend from a scale or body-composition scans, waist and other tape sites, mobility tests and progress photos.
+  - InBody import through Health Connect or a shared screenshot; steps, sleep and other apps' workouts from Health Connect.
+- **Goals:** a weekly review judged against what success means for your goal, goal switches, *Goal reached* and maintenance breaks.
+- **Everyday:** reminders that only fire when still needed, a home-screen widget, kg and cm or lb and in.
+- **Your data:** export, import and automatic backups to a folder you choose, CSV export, and optional writes to Health Connect.
 
 ## Build it yourself
 

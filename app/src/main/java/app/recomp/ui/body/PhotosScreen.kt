@@ -56,6 +56,7 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.PhotoPose
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.repo.PhotoItem
+import app.recomp.data.repo.PhotoDelete
 import app.recomp.data.repo.PhotoRepository
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
@@ -107,20 +108,36 @@ class PhotosViewModel @Inject constructor(
         state.remove<String>(CAPTURE_POSE)
         state.remove<String>(CAPTURE_FILE)
         if (file == null) return@launch
-        if (ok && pose != null) photos.saveCapture(file, pose) else file.delete()
+        val checked = state.get<String>(CAPTURE_CHECKED)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        state.remove<String>(CAPTURE_CHECKED)
+        if (ok && pose != null) photos.saveCapture(file, pose, checkedFor = checked) else file.delete()
     }
 
     /** No app answers the camera intent (the camera is optional in the manifest): nothing is left behind. */
     fun cameraMissing(): Job = finishCapture(false).also { message.value = PhotoText.NO_CAMERA }
 
-    /** Whether a new [pose] photo would replace one from today, so the screen asks first. */
-    suspend fun replaces(pose: PhotoPose): Boolean = photos.has(pose, days.today())
+    /**
+     * Whether a new [pose] photo would replace one from today, so the screen asks first. The day checked is kept with
+     * the capture, so a save that lands on the next day replaces nothing (M17 review R2).
+     */
+    suspend fun replaces(pose: PhotoPose, now: Long = System.currentTimeMillis()): Boolean {
+        val today = days.today(now)
+        state[CAPTURE_CHECKED] = today.toString()
+        return photos.has(pose, today)
+    }
 
-    fun delete(id: Long): Job = viewModelScope.launch { if (!photos.delete(id)) message.value = PhotoText.NOT_DELETED }
+    fun delete(id: Long): Job = viewModelScope.launch {
+        when (photos.delete(id)) {
+            PhotoDelete.DELETED -> Unit
+            PhotoDelete.FILE_KEPT -> message.value = PhotoText.NOT_DELETED
+            PhotoDelete.SAFETY_COPY_KEPT -> message.value = PhotoText.SAFETY_COPY_KEPT
+        }
+    }
 
     companion object {
         const val CAPTURE_POSE = "capture_pose"
         const val CAPTURE_FILE = "capture_file"
+        const val CAPTURE_CHECKED = "capture_checked"
     }
 }
 
@@ -136,6 +153,7 @@ object PhotoText {
     const val FIRST = "Take front, side and back photos to compare later. Same spot, same light, same time of day."
     const val NO_CAMERA = "There's no camera app on this phone to take the photo with."
     const val NOT_DELETED = "Couldn't delete the photo. Try again."
+    const val SAFETY_COPY_KEPT = "The photo is deleted from the phone, but Recomp couldn't take it out of the copy it kept before your last import. Restoring that copy would bring it back."
 
     fun replace(p: PhotoPose) = "Replace today's ${pose(p).lowercase()} photo?"
     const val REPLACE_TEXT = "The one you took earlier today is deleted once the new one is saved."

@@ -1038,6 +1038,37 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 
 ## 10. Milestones
 
+### v1.1 summary (2026-11-22)
+
+All of v1.1 (M5–M20) is built and merged, each milestone reviewed by a separate session and checked on the reference phone over the real data. The final Room version is **v14**.
+
+| Milestone | PR | Room |
+|-----------|----|------|
+| M5 Weekly check-in and adaptive target | #10, #11 | 8 |
+| M6 In the gym | #9 | 9 |
+| M7 AI providers | #12 | 10 |
+| M8 Weekly review | #13 | — |
+| M9 Faster food logging | #15 | — |
+| M10 Training history | #18 (and #23, imports read-only) | — |
+| M11 Weekly programme review with AI | #16 | 11 |
+| M12 Nudges, reminders and the widget | #20 | — |
+| M13 Health Connect in | #19 | 12 |
+| M14 Recipes | #14 | 13 |
+| M15 InBody share and scan-informed targets | #21 | — |
+| M16 Data out | #24 (and #27, backup fixes) | — |
+| M17 Body extras | #25 | 14 |
+| M18 Camera food | #22 | — |
+| M19 Goals | #17 | — |
+| M20 lb and in | #26 | — |
+
+The v1.1 cleanup PR fixed the review leftovers that didn't block a merge (automatic-backup scratch files and `.part` files, document comparison and rename in the backup folder, the manual export's name, the photo safety copy, the retake's log date).
+
+**Not verified on the phone,** collected from each milestone's results below; tests cover each one:
+- **AI:** a successful estimate or reply from a real provider (no real key was used; mock servers in the tests), and the local-network permission prompt (the phone runs Android 15, where it doesn't exist).
+- **Weeks of data:** a real weekly check-in and its lapse and catch-up, the review's *steady*, *far off* and body-fat finish lines, and the scheduled deload card.
+- **Health Connect:** another app's workout, an InBody measurement and a tracker's night (none were in Health Connect), and the daily background job actually running.
+- **Edge cases left to tests:** supersets of three and other uneven supersets; the InBody draft prefill from a real measurement; a target typed in lb hitting it exactly; a kg-era repeat in lb; the scan form's kg/lb switch; a German phone's decimal comma.
+
 | Milestone | Contents | PRD coverage |
 |-----------|----------|--------------|
 | **M0: Setup and spikes** | Project skeleton, theme, navigation, Room, Hilt, CI, privacy pre-commit hook. **Spikes:** (a) the Anthropic Java SDK running on Android, including R8 keep rules; (b) foreground service type and lock-screen rest timer on a real phone; (c) whether Google Fit's steps show up in Health Connect; (d) licensing and format of the IFCT and INDB food data; (e) which records the InBody app writes to Health Connect. Goal-driven `NutritionCalculator`. | — |

@@ -92,4 +92,31 @@ class PhotosViewModelTest {
         assertTrue(outside.exists())
         assertTrue(app.db.photoDao().all().isEmpty())
     }
+
+    @Test
+    fun `the day the screen checked travels with the capture, so a save on a later day replaces nothing`() = runBlocking {
+        val todays = app.photos.newCaptureFile(PhotoPose.FRONT, 1).apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        app.photos.saveCapture(todays, PhotoPose.FRONT)
+        val state = SavedStateHandle()
+        val vm = viewModel(state)
+        // The check ran on an earlier day (here, long ago), when there was no front photo.
+        assertFalse(vm.replaces(PhotoPose.FRONT, now = 0L))
+        val retake = vm.startCapture(PhotoPose.FRONT).apply { writeBytes(ByteArray(64) { (it + 1).toByte() }) }
+        vm.finishCapture(ok = true)
+        settle()
+        assertEquals(2, app.db.photoDao().all().size)
+        assertTrue(todays.exists() && retake.exists())
+        assertNull(state.get<String>(PhotosViewModel.CAPTURE_CHECKED))
+    }
+
+    @Test
+    fun `a photo still in the safety copy after its delete is reported`() = runBlocking {
+        val file = app.photos.newCaptureFile(PhotoPose.SIDE, 1).apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        val id = app.photos.saveCapture(file, PhotoPose.SIDE)!!
+        app.backup.safetyCopyFile.apply { parentFile?.mkdirs() }.writeBytes(byteArrayOf(1, 2, 3))
+        val vm = viewModel(SavedStateHandle())
+        vm.delete(id)
+        settle()
+        assertEquals(PhotoText.SAFETY_COPY_KEPT, vm.message.value)
+    }
 }

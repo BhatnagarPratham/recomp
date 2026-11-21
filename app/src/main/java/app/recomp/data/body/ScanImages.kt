@@ -12,8 +12,9 @@ import kotlinx.coroutines.withContext
 
 /**
  * Shared InBody screenshots (IB-03, TRD §6.7), kept as files in app-private storage under `files/scan_images`. They
- * never leave the phone: no AI reads them, nothing uploads them, and Android's backup leaves them out, since its rules
- * (`data_extraction_rules.xml`) list only the database and the settings. A scan's `image_path` is the file's name.
+ * are never sent to AI or to any server, and Android's backup leaves them out, since its rules
+ * (`data_extraction_rules.xml`) list only the database and the settings. They go into your own backup files (an
+ * export, or the automatic backup) only when *Include photos* is on. A scan's `image_path` is the file's name.
  */
 @Singleton
 class ScanImages(private val dir: File, private val isImage: (File) -> Boolean = ::decodes) {
