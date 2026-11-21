@@ -14,6 +14,8 @@ import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.ExerciseChart
+import app.recomp.domain.progression.ExerciseChartData
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.training.EditedExercise
 import app.recomp.domain.training.EditedSession
@@ -508,4 +510,32 @@ class HistoryFlowTest {
         history.setVolumeBand(8, 16)
         assertEquals(8 to 16, history.observeWeekVolume().first().band.let { it.min to it.max })
     }
+
+    // Charts (PO-09)
+
+    @Test
+    fun `an exercise's chart follows an edit and plots assisted lifts by their assistance`() = runBlocking {
+        val first = bench(40_000, 12, 12, 12)
+        val second = bench(45_000, 8, 8, 8)
+        val benchPress = rows(second).first().exercise
+        suspend fun chart() = ExerciseChart.of(app.progression.chartExposures(benchPress.id), benchPress.loadType)
+        assertEquals(listOf(56.0, 57.0), chart().line.map { it.value })
+        assertEquals(listOf(40.0, 45.0), chart().dots.map { it.value })
+        assertEquals(listOf(session(first).logDate, session(second).logDate), chart().line.map { it.date })
+
+        saveAndCompare(second, draft(second).exercise(0) { s -> s.map { it.copy(loadG = 50_000) } })
+        assertEquals(listOf(40.0, 50.0), chart().dots.map { it.value })
+        assertTrue(history.deleteSession(first))
+        assertEquals(1, chart().dots.size)
+
+        app.body.logWeighIn(80_000, WeightSource.HOME_SCALE, clock)
+        val pullUp = exercise("Assisted pull-up")
+        val r = routine(pullUp)
+        workout(r, sets(30_000, 8, 8, 8))
+        workout(r, sets(25_000, 8, 8, 8))
+        val assisted = ExerciseChart.of(app.progression.chartExposures(pullUp.id), pullUp.loadType)
+        assertEquals(ExerciseChartData.Kind.ASSISTANCE, assisted.kind)
+        assertEquals(listOf(30.0, 25.0), assisted.line.map { it.value })
+    }
 }
+

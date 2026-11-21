@@ -5,7 +5,11 @@ import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.prefs.VolumeBand
 import app.recomp.domain.model.SessionKind
 import app.recomp.domain.model.SessionStatus
+import app.recomp.domain.progression.ChartRange
+import app.recomp.domain.progression.ChartValue
+import app.recomp.domain.progression.ExerciseChartData
 import app.recomp.domain.training.MuscleSets
+import app.recomp.ui.exercises.ExerciseChartText
 import app.recomp.ui.history.historyDetail
 import app.recomp.ui.history.historyTitle
 import app.recomp.ui.train.volumeScale
@@ -43,5 +47,18 @@ class HistoryTextTest {
         assertEquals(40, volumeScale(listOf(MuscleSets("chest", 15)), band))
         assertEquals(52, volumeScale(listOf(MuscleSets("chest", 52), MuscleSets("lats", 9)), band))
         assertEquals(40, volumeScale(emptyList(), band))
+    }
+
+    @Test
+    fun `the exercise chart says what it shows, in words for a screen reader too`() {
+        val d1 = LocalDate.of(2026, 11, 2)
+        val d2 = LocalDate.of(2026, 11, 16)
+        val e1rm = ExerciseChartData(ExerciseChartData.Kind.E1RM, listOf(ChartValue(d1, 56.0), ChartValue(d2, 57.5)), listOf(ChartValue(d1, 40.0), ChartValue(d2, 45.0)))
+        assertEquals("Estimated 1RM and top set: 2 sessions, from 56 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d1))
+        assertEquals("Estimated 1RM and top set: 1 sessions, from 57.5 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d2))
+        val reps = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d1, 12.0), ChartValue(d2, 14.0)), emptyList())
+        assertEquals("Best set's reps: 2 sessions, from 12 reps to 14 reps", ExerciseChartText.describe(reps, d1))
+        assertEquals("The least assistance each session, in kg. Lower is better.", ExerciseChartText.caption(ExerciseChartData.Kind.ASSISTANCE))
+        assertEquals("12 weeks", ExerciseChartText.range(ChartRange.WEEKS_12))
     }
 }

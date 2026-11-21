@@ -16,6 +16,7 @@ import app.recomp.domain.model.SetType
 import app.recomp.domain.nutrition.EnergyBalance
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.DatedExposure
 import app.recomp.domain.progression.ExerciseConfig
 import app.recomp.domain.progression.Exposure
 import app.recomp.domain.progression.PersonalRecords
@@ -208,6 +209,12 @@ class ProgressionRepository @Inject constructor(
             )
         }
     }
+
+    /** PO-09: every completed session of an exercise, for its chart. */
+    suspend fun chartExposures(exerciseId: Long): List<DatedExposure> =
+        workoutDao.exposureSets(exerciseId, limit = FULL_HISTORY_LIMIT).groupExposures().map { (first, rows) ->
+            DatedExposure(first.logDate, rows.map { it.set.toLogged() })
+        }
 
     @Serializable
     private data class RecommendationJson(

@@ -439,6 +439,8 @@ Each working set counts as 1 set for the exercise's primary muscle and 0.5 for e
 
 `MuscleVolume` (M10) counts in half sets, so the totals are exact. It takes completed sets of type `WORKING` from COMPLETED sessions whose `log_date` falls in the ISO week (Monday start, as `WeeklyPlan`), grouped per exercise by one query. A muscle listed as both primary and secondary counts once. The Train card also lists, at zero, the primary muscles of the exercises in the rotation's routines; `other` (custom exercises) is left out. The band lives in DataStore as `volume_band_min` and `volume_band_max`; a missing or invalid pair reads as 10–20, and a backup with an invalid pair is refused like any other bad setting.
 
+**Exercise charts (PO-09, M10).** `ExerciseChart` (`:domain`) turns an exercise's completed sessions into points by log date, warm-ups left out. Weighted and weighted-bodyweight lifts plot the best estimated 1RM per session (sets of 12 reps or fewer, as everywhere else) as a line and the heaviest set as hollow dots, both in kg. Bodyweight lifts plot the best set's reps; assisted lifts plot the least assistance from the sets' own `load_g` (lower is better, said in the caption), never a record's `value`. The card uses M8's `ui/components/Chart` with the time axis from 12 weeks ago, or the first session, to today, and asks for two sessions before it draws.
+
 ### 5.6 InBody trends (IB-02, IB-04)
 
 ```

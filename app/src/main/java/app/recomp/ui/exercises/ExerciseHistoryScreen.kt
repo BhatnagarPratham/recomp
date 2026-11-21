@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
@@ -28,10 +29,14 @@ import app.recomp.data.repo.HistoryEntry
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.domain.model.LoadType
+import app.recomp.domain.progression.ChartRange
+import app.recomp.domain.progression.ExerciseChart
+import app.recomp.domain.progression.ExerciseChartData
 import app.recomp.domain.training.Loads
 import app.recomp.ui.components.Labels
 import app.recomp.ui.navigation.ExerciseHistoryRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import javax.inject.Inject
@@ -44,8 +49,8 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class ExerciseHistoryViewModel @Inject constructor(
     savedState: SavedStateHandle,
-    training: TrainingRepository,
-    progression: ProgressionRepository,
+    private val training: TrainingRepository,
+    private val progression: ProgressionRepository,
 ) : ViewModel() {
     private val exerciseId = savedState.toRoute<ExerciseHistoryRoute>().exerciseId
     val exercise = training.observeExercise(exerciseId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -53,8 +58,23 @@ class ExerciseHistoryViewModel @Inject constructor(
     private val _entries = MutableStateFlow<List<HistoryEntry>?>(null)
     val entries: StateFlow<List<HistoryEntry>?> = _entries
 
-    init {
-        viewModelScope.launch { _entries.value = progression.exerciseHistory(exerciseId) }
+    private val _chart = MutableStateFlow<ExerciseChartData?>(null)
+    val chart: StateFlow<ExerciseChartData?> = _chart
+
+    private val _range = MutableStateFlow(ChartRange.WEEKS_12)
+    val range: StateFlow<ChartRange> = _range
+
+    val today: LocalDate = LocalDate.now()
+
+    /** Reloaded each time the screen comes back, so an edit made in History shows here (WL-10). */
+    fun reload() = viewModelScope.launch {
+        _entries.value = progression.exerciseHistory(exerciseId)
+        val loadType = training.exercise(exerciseId)?.loadType ?: LoadType.WEIGHTED
+        _chart.value = ExerciseChart.of(progression.chartExposures(exerciseId), loadType)
+    }
+
+    fun setRange(range: ChartRange) {
+        _range.value = range
     }
 }
 
@@ -64,6 +84,12 @@ class ExerciseHistoryViewModel @Inject constructor(
 fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewModel = hiltViewModel()) {
     val exercise by viewModel.exercise.collectAsStateWithLifecycle()
     val entries by viewModel.entries.collectAsStateWithLifecycle()
+    val chart by viewModel.chart.collectAsStateWithLifecycle()
+    val range by viewModel.range.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(Unit) {
+        viewModel.reload()
+        onPauseOrDispose {}
+    }
     val dates = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
     Scaffold(
@@ -83,6 +109,9 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
             Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            chart?.let { data ->
+                item(key = "chart") { ExerciseChartCard(data, range, viewModel.today, viewModel::setRange) }
+            }
             items(list, key = { it.sessionId }) { entry ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
