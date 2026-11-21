@@ -13,7 +13,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import app.recomp.domain.units.UnitStyle
 import org.junit.Test
+
+private val M = UnitStyle.METRIC
+private val LB = UnitStyle.IMPERIAL
 
 /** Assisted lifts (WL-09, PRD §12.2): the load is the assistance, and progress takes it off. Weights are invented. */
 class AssistedLiftTest {
@@ -39,9 +43,9 @@ class AssistedLiftTest {
     fun `every set at the top takes one step of assistance off`() {
         val rec = ProgressionEngine.recommend(pullUp, history(exposure(25_000, 12, 12, 12)), weighedIn)
         assertEquals(Recommendation(Action.INCREASE, 20_000, listOf(8, 8, 8), assisted = true), rec)
-        assertEquals("assist 20 × 8", Targets.describe(rec))
+        assertEquals("assist 20 × 8", Targets.describe(rec, M))
         assertEquals("less assistance", Targets.actionLabel(rec))
-        assertEquals("Assisted pull-up goes to assist 20 kg", Targets.nextTime("Assisted pull-up", rec, 25_000))
+        assertEquals("Assisted pull-up goes to assist 20 kg", Targets.nextTime("Assisted pull-up", rec, 25_000, M))
     }
 
     @Test
@@ -115,11 +119,11 @@ class AssistedLiftTest {
         assertEquals(Action.INCREASE, rec.action)
         assertTrue(rec.harderVariation)
         assertEquals("add load or a harder variation", Targets.actionLabel(rec))
-        assertEquals("BW × 12", Targets.describe(rec))
-        assertEquals("BW × 12/12", Loads.describe(listOf(LoggedSet(WORKING, 0, 12), LoggedSet(WORKING, 0, 12)), LoadType.ASSISTED))
+        assertEquals("BW × 12", Targets.describe(rec, M))
+        assertEquals("BW × 12/12", Loads.describe(listOf(LoggedSet(WORKING, 0, 12), LoggedSet(WORKING, 0, 12)), M, LoadType.ASSISTED))
         // The step down to none reads as bodyweight, too.
         val last = ProgressionEngine.recommend(pullUp, history(exposure(5_000, 12, 12, 12)), weighedIn)
-        assertEquals("Assisted pull-up goes to bodyweight", Targets.nextTime("Assisted pull-up", last, 5_000))
+        assertEquals("Assisted pull-up goes to bodyweight", Targets.nextTime("Assisted pull-up", last, 5_000, M))
     }
 
     @Test
@@ -188,9 +192,9 @@ class AssistedLiftTest {
         val rec = Recommendation(Action.ADD_REPS, 25_000, listOf(12, 12, 10), assisted = true)
         assertTrue(Targets.hit(rec, listOf(LoggedSet(WORKING, 20_000, 12), LoggedSet(WORKING, 25_000, 12), LoggedSet(WORKING, 25_000, 10))))
         assertFalse(Targets.hit(rec, listOf(LoggedSet(WORKING, 30_000, 12), LoggedSet(WORKING, 25_000, 12), LoggedSet(WORKING, 25_000, 10))))
-        assertEquals("5 kg less assist", Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 20_000, 8), LoggedSet(WORKING, 25_000, 12), assisted = true))
-        assertNull(Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 25_000, 8), null, assisted = true))
-        assertEquals("assist 25 × 12/11", Loads.describe(listOf(LoggedSet(WORKING, 25_000, 12), LoggedSet(WORKING, 25_000, 11)), LoadType.ASSISTED))
+        assertEquals("5 kg less assist", Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 20_000, 8), LoggedSet(WORKING, 25_000, 12), M, assisted = true))
+        assertNull(Targets.feedback(SetValues(20_000, 8), LoggedSet(WORKING, 25_000, 8), null, M, assisted = true))
+        assertEquals("assist 25 × 12/11", Loads.describe(listOf(LoggedSet(WORKING, 25_000, 12), LoggedSet(WORKING, 25_000, 11)), M, LoadType.ASSISTED))
     }
 
     @Test
@@ -202,5 +206,15 @@ class AssistedLiftTest {
         assertEquals(0L, SessionStats.of(0, 1, Loads.lifted(sets, LoadType.ASSISTED, null)).volumeG)
         // Other load types are untouched.
         assertEquals(sets, Loads.lifted(sets, LoadType.WEIGHTED, 80_000))
+    }
+
+    @Test
+    fun `assistance reads in lb (PR-05)`() {
+        // 20 lb is 9,072 g and 25 lb is 11,340 g.
+        val rec = Recommendation(Action.INCREASE, 9_072, listOf(8), assisted = true)
+        assertEquals("assist 20 × 8", Targets.describe(rec, LB))
+        assertEquals("Assisted pull-up goes to assist 20 lb", Targets.nextTime("Assisted pull-up", rec, 11_340, LB))
+        assertEquals("5 lb less assist", Targets.feedback(SetValues(9_072, 8), LoggedSet(WORKING, 9_072, 8), LoggedSet(WORKING, 11_340, 8), LB, assisted = true))
+        assertEquals("assist 25 × 8", Loads.describe(listOf(LoggedSet(WORKING, 11_340, 8)), LB, LoadType.ASSISTED))
     }
 }

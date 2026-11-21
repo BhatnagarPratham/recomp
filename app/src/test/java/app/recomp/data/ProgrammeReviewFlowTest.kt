@@ -24,6 +24,7 @@ import app.recomp.domain.persona.FinishLine
 import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.Profile
+import app.recomp.domain.persona.Units
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.ProgressionEngine
 import app.recomp.domain.training.WeeklyPlan
@@ -405,5 +406,16 @@ class ProgrammeReviewFlowTest {
         reviews.acceptDeloadWeek()
         assertNull(reviews.observeDeloadDue().first())
         assertEquals(app.db.programmeReviewDao().rotationExercises().toSet(), app.db.programmeReviewDao().pendingDeloads().toSet())
+    }
+
+    @Test
+    fun `routine loads are sent in the persona's unit (PR-05)`() = runBlocking {
+        onboard()
+        workout(week)
+        assertTrue(Regex(""": \d+ × \d+–\d+, 40 kg""").containsMatchIn(reviews.report(week, ReportSections()).text))
+        app.prefs.updatePersona { it.copy(units = Units.IMPERIAL) }
+        // 40 kg is 88.2 lb, with a point for the decimal mark whatever the phone's language.
+        val text = reviews.report(week, ReportSections()).text
+        assertTrue(text, Regex(""": \d+ × \d+–\d+, 88\.2 lb""").containsMatchIn(text))
     }
 }

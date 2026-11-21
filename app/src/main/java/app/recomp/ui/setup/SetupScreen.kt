@@ -40,10 +40,11 @@ import app.recomp.domain.model.SessionKind
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
-import app.recomp.domain.training.Loads
+import app.recomp.domain.units.LoadUnits
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.DayChips
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.OptionCard
 import app.recomp.ui.components.Stepper
@@ -301,6 +302,7 @@ internal fun WalkthroughCard(
     onIncrement: (Long, Int) -> Unit,
 ) {
     val chosen = item.options.first { it.id == chosenId }
+    val style = LocalUnitStyle.current
     var typing by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -319,16 +321,18 @@ internal fun WalkthroughCard(
                         else -> "Smallest step"
                     }
                     Text(label, style = MaterialTheme.typography.labelLarge)
-                    ChoiceChips((Loads.incrementChoicesG + step).distinct().sorted(), step, { Labels.kg(it) }, { onIncrement(chosen.id, it) })
+                    ChoiceChips((LoadUnits.incrementChoicesG(style.units) + step).distinct().sorted(), step, { Labels.step(it, style) }, { onIncrement(chosen.id, it) })
                     TextButton(onClick = { typing = true }) { Text("Other step…") }
                 }
             }
         }
     }
     if (typing) {
-        NumberEntryDialog("Smallest step for ${chosen.name}", Loads.formatKg(increments[chosen.id] ?: chosen.incrementG), decimal = true, suffix = "kg", onDismiss = { typing = false }) { text ->
+        val current = increments[chosen.id] ?: chosen.incrementG
+        val shown = LoadUnits.formatStep(current, style)
+        NumberEntryDialog("Smallest step for ${chosen.name}", shown, decimal = true, suffix = style.weight, onDismiss = { typing = false }) { text ->
             typing = false
-            Loads.parseKg(text)?.takeIf { it > 0 }?.let { onIncrement(chosen.id, it) }
+            (if (text.trim() == shown) current else LoadUnits.parse(text, style.units))?.takeIf { it > 0 }?.let { onIncrement(chosen.id, it) }
         }
     }
 }

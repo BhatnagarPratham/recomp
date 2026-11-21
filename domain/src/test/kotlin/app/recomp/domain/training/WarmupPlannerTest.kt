@@ -1,7 +1,11 @@
 package app.recomp.domain.training
 
 import org.junit.Assert.assertEquals
+import app.recomp.domain.units.UnitStyle
 import org.junit.Test
+
+private val M = UnitStyle.METRIC
+private val LB = UnitStyle.IMPERIAL
 
 /** WL-11: about 40%, 60% and 80% of today's target, rounded down to the step, nothing under two steps. */
 class WarmupPlannerTest {
@@ -11,7 +15,7 @@ class WarmupPlannerTest {
     @Test
     fun `a 50 kg target warms up at 20, 30 and 40`() {
         assertEquals(listOf("20" to 8, "30" to 5, "40" to 3), plan(50.0, 2.5))
-        assertEquals("Warm-up: 20 × 8 · 30 × 5 · 40 × 3", WarmupPlanner.describe(WarmupPlanner.plan(50_000, 2_500)))
+        assertEquals("Warm-up: 20 × 8 · 30 × 5 · 40 × 3", WarmupPlanner.describe(WarmupPlanner.plan(50_000, 2_500), M))
     }
 
     @Test
@@ -56,5 +60,19 @@ class WarmupPlannerTest {
     fun `no target load or no step means no warm-ups`() {
         assertEquals(emptyList<SetValues>(), WarmupPlanner.plan(0, 2_500))
         assertEquals(emptyList<SetValues>(), WarmupPlanner.plan(50_000, 0))
+    }
+
+    @Test
+    fun `in lb warm-ups round down to the lb grid (PR-05)`() {
+        val fiveLb = 2_268
+        // A 225 lb target (102,058 g) warms up at 90, 135 and 180 lb.
+        val onGrid = WarmupPlanner.plan(102_058, fiveLb, WarmupPlanner.barG(LB.units), LB.units)
+        assertEquals("Warm-up: 90 × 8 · 135 × 5 · 180 × 3", WarmupPlanner.describe(onGrid, LB))
+        // A kg-era 100 kg target still lands on 5 lb steps: 40, 60 and 80% are 88.2, 132.3 and 176.4 lb.
+        val kgEra = WarmupPlanner.plan(100_000, fiveLb, units = LB.units)
+        assertEquals("Warm-up: 85 × 8 · 130 × 5 · 175 × 3", WarmupPlanner.describe(kgEra, LB))
+        // The lb bar is 45 lb, so a light 60 lb target's warm-ups start there.
+        assertEquals("Warm-up: 45 × 8", WarmupPlanner.describe(WarmupPlanner.plan(27_216, fiveLb, WarmupPlanner.barG(LB.units), LB.units), LB))
+        assertEquals("Warm-up: 20 × 8", WarmupPlanner.describe(listOf(SetValues(20_000, 8)), M))
     }
 }

@@ -36,6 +36,9 @@ import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.Loads
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
+import app.recomp.ui.components.unitStyle
+import app.recomp.domain.units.UnitStyle
 import app.recomp.domain.training.SessionStats
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.navigation.SummaryRoute
@@ -116,6 +119,7 @@ class SummaryViewModel @Inject constructor(
         // this session, so an old summary still shows what that workout implied.
         val plan = session?.routineId?.let { workouts.routinePlan(it) }.orEmpty()
         val asOf = session?.startedAt ?: Long.MAX_VALUE
+        val style = unitStyle(progression.currentUnits())
         nextTime.value = rows
             .filter { ex -> ex.sets.any { it.completedAt != null } }
             .map { ex ->
@@ -129,7 +133,7 @@ class SummaryViewModel @Inject constructor(
                 )
                 val loads = ex.sets.filter { it.completedAt != null && it.setType == SetType.WORKING }.map { it.loadG ?: 0 }
                 val top = if (ex.exercise.loadType == LoadType.ASSISTED) loads.minOrNull() else loads.maxOrNull()
-                rec to Targets.nextTime(ex.exercise.name, rec, top)
+                rec to Targets.nextTime(ex.exercise.name, rec, top, style)
             }
             .sortedBy { (rec, _) -> if (rec.action == Action.INCREASE) 0 else 1 }
             .map { it.second }
@@ -138,10 +142,10 @@ class SummaryViewModel @Inject constructor(
     val ui: StateFlow<SummaryUi> = combine(
         workouts.observeSession(sessionId),
         workouts.observeSessionExercises(sessionId),
-        combine(routineName, differs, trendWeightG, inDeficit) { a, b, c, d -> Header(a, b, c, d) },
+        combine(routineName, differs, trendWeightG, inDeficit, progression.units) { a, b, c, d, e -> Header(a, b, c, d, unitStyle(e)) },
         progression.observeSessionRecords(sessionId),
         nextTime,
-    ) { session, exercises, (routine, differs, trendWeight, inDeficit), records, nextTime ->
+    ) { session, exercises, (routine, differs, trendWeight, inDeficit, style), records, nextTime ->
         if (session == null) return@combine SummaryUi(fromHistory = route.fromHistory, missing = true)
         // Volume counts what each set lifted, so an assisted set adds body weight minus the assistance.
         val sets = exercises.flatMap { ex ->
@@ -157,8 +161,8 @@ class SummaryViewModel @Inject constructor(
                 val hit = rec != null && done.isNotEmpty() && Targets.hit(rec, done)
                 SummaryExercise(
                     name = ex.exercise.name,
-                    sets = if (done.isEmpty()) "Skipped" else Loads.describe(done, ex.exercise.loadType).ifEmpty { "Warm-ups only" },
-                    target = rec?.takeIf { done.isNotEmpty() }?.let { "Target ${Targets.describe(it)} · ${if (hit) "hit" else "missed"}" },
+                    sets = if (done.isEmpty()) "Skipped" else Loads.describe(done, style, ex.exercise.loadType).ifEmpty { "Warm-ups only" },
+                    target = rec?.takeIf { done.isNotEmpty() }?.let { "Target ${Targets.describe(it, style)} · ${if (hit) "hit" else "missed"}" },
                     hit = hit,
                 )
             },
@@ -168,7 +172,7 @@ class SummaryViewModel @Inject constructor(
             records = records.map { pr ->
                 val exercise = exercises.firstOrNull { it.exercise.id == pr.exerciseId }?.exercise
                 val assisted = exercise?.loadType == LoadType.ASSISTED
-                "${exercise?.name ?: "Exercise"}: ${Labels.record(pr.type, assisted)}, ${Labels.recordValue(pr.type, pr.value, pr.loadG, assisted)}"
+                "${exercise?.name ?: "Exercise"}: ${Labels.record(pr.type, assisted)}, ${Labels.recordValue(pr.type, pr.value, pr.loadG, assisted, style)}"
             },
             nextTime = nextTime,
             inDeficit = inDeficit,
@@ -176,7 +180,7 @@ class SummaryViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SummaryUi())
 
-    private data class Header(val routine: String?, val differs: Boolean, val trendWeightG: Int?, val inDeficit: Boolean)
+    private data class Header(val routine: String?, val differs: Boolean, val trendWeightG: Int?, val inDeficit: Boolean, val style: UnitStyle)
 
     fun saveToRoutine() = viewModelScope.launch {
         workouts.saveToTemplate(sessionId)
@@ -206,7 +210,7 @@ fun SummaryScreen(onDone: () -> Unit, onEdit: (Long) -> Unit = {}, edited: Boole
                 Stat("Time", formatDuration(stats.durationMs), Modifier.weight(1f))
                 Stat("Sets", "${stats.sets}", Modifier.weight(1f))
                 Stat("Reps", "${stats.reps}", Modifier.weight(1f))
-                Stat("Volume", "${(stats.volumeG + 500) / 1000} kg", Modifier.weight(1.4f))
+                Stat("Volume", Labels.wholeLoad(stats.volumeG, LocalUnitStyle.current), Modifier.weight(1.4f))
             }
         }
         if (ui.inDeficit) Text(DeficitText.HOLDING, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

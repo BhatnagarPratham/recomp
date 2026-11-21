@@ -12,6 +12,7 @@ import app.recomp.domain.model.LoadType
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.review.FinishOutlook
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.checkin.ReviewText
 import java.time.LocalDate
@@ -33,6 +34,7 @@ class ReviewTextTest {
                 pr("Squat", PrType.SESSION_VOLUME, 1_800_000),
                 pr("Squat", PrType.MAX_LOAD, 62_500), // a later workout that week beats Monday's
             ),
+            UnitStyle.METRIC,
         )
         assertEquals(2, lines.size)
         assertEquals("Squat: heaviest weight 62.5 kg · best session volume 1,800 kg", lines[0])
@@ -43,7 +45,7 @@ class ReviewTextTest {
     fun `an assisted lift's PR shows its assistance`() {
         assertEquals(
             listOf("Assisted pull-up: least assistance assist 20 kg"),
-            ReviewText.records(listOf(pr("Assisted pull-up", PrType.MAX_LOAD, 0, loadG = 20_000, loadType = LoadType.ASSISTED))),
+            ReviewText.records(listOf(pr("Assisted pull-up", PrType.MAX_LOAD, 0, loadG = 20_000, loadType = LoadType.ASSISTED)), UnitStyle.METRIC),
         )
         assertEquals("and 3 more lifts with PRs", ReviewText.moreRecords(3))
         assertEquals("and 1 more lift with PRs", ReviewText.moreRecords(1))
@@ -106,6 +108,20 @@ class ReviewTextTest {
         assertEquals(
             "This week was before your current plan from ${BodyText.shortDate(since)}. The plan then isn't kept, so there's no pace or finish line for it.",
             ReviewText.earlierPlan(WeekPlan.EarlierPlan(since)),
+        )
+    }
+
+    @Test
+    fun `PR lines read in lb, with volume in whole lb (PR-05)`() {
+        // 225 lb is 102,058 g; 10,000 lb of volume is 4,535,924 g.
+        val lines = ReviewText.records(
+            listOf(pr("Squat", PrType.MAX_LOAD, 102_058), pr("Squat", PrType.SESSION_VOLUME, 4_535_924)),
+            UnitStyle.IMPERIAL,
+        )
+        assertEquals(listOf("Squat: heaviest weight 225 lb · best session volume 10,000 lb"), lines)
+        assertEquals(
+            listOf("Assisted pull-up: least assistance assist 20 lb"),
+            ReviewText.records(listOf(pr("Assisted pull-up", PrType.MAX_LOAD, 0, loadG = 9_072, loadType = LoadType.ASSISTED)), UnitStyle.IMPERIAL),
         )
     }
 }

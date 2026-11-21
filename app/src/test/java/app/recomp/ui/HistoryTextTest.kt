@@ -9,6 +9,8 @@ import app.recomp.domain.progression.ChartRange
 import app.recomp.domain.progression.ChartValue
 import app.recomp.domain.progression.ExerciseChartData
 import app.recomp.domain.training.MuscleSets
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.exercises.ExerciseChartText
 import app.recomp.ui.history.historyDetail
 import app.recomp.ui.history.historyTitle
@@ -57,11 +59,11 @@ class HistoryTextTest {
         val d1 = LocalDate.of(2026, 11, 2)
         val d2 = LocalDate.of(2026, 11, 16)
         val e1rm = ExerciseChartData(ExerciseChartData.Kind.E1RM, listOf(ChartValue(d1, 56.0), ChartValue(d2, 57.5)), listOf(ChartValue(d1, 40.0), ChartValue(d2, 45.0)))
-        assertEquals("Estimated 1RM and top set: 2 sessions, from 56 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d1))
-        assertEquals("Estimated 1RM and top set: 1 sessions, from 57.5 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d2))
+        assertEquals("Estimated 1RM and top set: 2 sessions, from 56 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d1, UnitStyle.METRIC))
+        assertEquals("Estimated 1RM and top set: 1 sessions, from 57.5 kg to 57.5 kg", ExerciseChartText.describe(e1rm, d2, UnitStyle.METRIC))
         val reps = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d1, 12.0), ChartValue(d2, 14.0)), emptyList())
-        assertEquals("Best set's reps: 2 sessions, from 12 reps to 14 reps", ExerciseChartText.describe(reps, d1))
-        assertEquals("The least assistance each session, in kg. Lower is better.", ExerciseChartText.caption(ExerciseChartData.Kind.ASSISTANCE))
+        assertEquals("Best set's reps: 2 sessions, from 12 reps to 14 reps", ExerciseChartText.describe(reps, d1, UnitStyle.METRIC))
+        assertEquals("The least assistance each session, in kg. Lower is better.", ExerciseChartText.caption(ExerciseChartData.Kind.ASSISTANCE, UnitStyle.METRIC))
         assertEquals("12 weeks", ExerciseChartText.range(ChartRange.WEEKS_12))
     }
 
@@ -78,5 +80,24 @@ class HistoryTextTest {
     fun `another app's session says where it came from, and your own notes never show in the list`() {
         assertEquals("35 min · Walk · from Google Fit", historyDetail(row(SessionKind.CARDIO, null, 35, style = "Walk", durationMin = 35, notes = "from Google Fit", hcRecordId = "hc-1")))
         assertEquals("60 min · Vinyasa", historyDetail(row(SessionKind.YOGA, "Yoga class", 60, style = "Vinyasa", durationMin = 60, notes = "Hips")))
+    }
+
+    @Test
+    fun `in lb the exercise chart plots and reads in lb (PR-05)`() {
+        val d1 = LocalDate.of(2026, 11, 2)
+        val d2 = LocalDate.of(2026, 11, 16)
+        // The domain's chart is in kg: 100 kg and 102.5 kg, shown as 220.5 lb and 226 lb.
+        val kgChart = ExerciseChartData(ExerciseChartData.Kind.E1RM, listOf(ChartValue(d1, 100.0), ChartValue(d2, 102.5)), listOf(ChartValue(d1, 90.0)))
+        val lb = ExerciseChartText.inUnits(kgChart, Units.IMPERIAL)
+        assertEquals("Estimated 1RM and top set: 2 sessions, from 220.5 lb to 226 lb", ExerciseChartText.describe(lb, d1, UnitStyle.IMPERIAL))
+        assertEquals(198.4, lb.dots.single().value, 0.05)
+        assertEquals(kgChart, ExerciseChartText.inUnits(kgChart, Units.METRIC))
+        val reps = ExerciseChartData(ExerciseChartData.Kind.REPS, listOf(ChartValue(d1, 12.0)), emptyList())
+        assertEquals(reps, ExerciseChartText.inUnits(reps, Units.IMPERIAL))
+        assertEquals("Line: best estimated 1RM each session. Circles: the heaviest set. In lb.", ExerciseChartText.caption(ExerciseChartData.Kind.E1RM, UnitStyle.IMPERIAL))
+        assertEquals(
+            "Estimated 1RM and top set: 2 sessions, from 220,5 lb to 226 lb",
+            ExerciseChartText.describe(lb, d1, UnitStyle(Units.IMPERIAL, ',')),
+        )
     }
 }

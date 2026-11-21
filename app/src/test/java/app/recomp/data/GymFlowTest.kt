@@ -14,7 +14,9 @@ import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.progression.Recommendation
+import app.recomp.domain.training.Loads
 import app.recomp.domain.training.SetValues
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.sameMovement
 import java.io.File
 import kotlinx.coroutines.flow.first
@@ -210,7 +212,7 @@ class GymFlowTest {
         assertTrue(PrType.E1RM in after)
         // History shows the assistance, and the e1RM of what you lifted: 60 × (1 + 10/30) = 80 kg.
         val history = app.progression.exerciseHistory(pullUp.id).first()
-        assertEquals("assist 20 × 10/10/10", history.sets)
+        assertEquals("assist 20 × 10/10/10", Loads.describe(history.sets, UnitStyle.METRIC, history.loadType))
         assertEquals(80_000.0, history.bestE1rmG!!.toDouble(), 1.0)
     }
 

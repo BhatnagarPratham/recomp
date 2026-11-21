@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.recomp.data.repo.WeekReview
 import app.recomp.domain.review.CalendarDay
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.SectionTitle
 import java.time.DayOfWeek
 import java.time.format.TextStyle
@@ -47,7 +48,7 @@ fun ReviewSections(r: WeekReview) {
     SectionTitle("Training")
     Text(ReviewText.plan(r.training), style = MaterialTheme.typography.bodyLarge)
     if (r.training.strengthTarget == null) Text(ReviewText.PAST_PLAN, style = MaterialTheme.typography.bodySmall, color = muted)
-    val records = ReviewText.records(r.training.records)
+    val records = ReviewText.records(r.training.records, LocalUnitStyle.current)
     if (records.isEmpty()) Text(ReviewText.NO_RECORDS, color = muted)
     records.take(ReviewText.RECORDS_SHOWN).forEach { Text(it) }
     if (records.size > ReviewText.RECORDS_SHOWN) Text(ReviewText.moreRecords(records.size - ReviewText.RECORDS_SHOWN), color = muted)

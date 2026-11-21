@@ -59,11 +59,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
-import app.recomp.domain.training.Loads
+import app.recomp.domain.units.LoadUnits
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.ExercisePickerSheet
 import app.recomp.ui.components.GymTouch
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LoadEntry
 import app.recomp.ui.components.MenuItem
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.OverflowMenu
@@ -271,13 +272,13 @@ fun WorkoutScreen(
                     owner?.equipment == Equipment.DUMBBELL -> "Weight per dumbbell"
                     else -> "Weight"
                 },
-                current?.load?.let(Loads::formatKg).orEmpty(),
+                LoadEntry.shown(current?.load, ui.style),
                 decimal = true,
-                suffix = "kg",
+                suffix = ui.style.weight,
                 onDismiss = { dialog = null },
             ) { text ->
                 dialog = null
-                val grams = Loads.parseKg(text) ?: return@NumberEntryDialog
+                val grams = LoadEntry.parse(text, current?.load, ui.style) ?: return@NumberEntryDialog
                 viewModel.enterLoad(d.setId, grams)
                 if (d.thenTick) viewModel.tick(d.setId, loadOverride = grams)
             }
@@ -328,9 +329,9 @@ private fun Elapsed(startedAt: Long) {
 
 private fun loadText(ex: ExerciseUi, load: Int?): String = when (ex.loadType) {
     LoadType.BODYWEIGHT -> "BW"
-    LoadType.BODYWEIGHT_PLUS -> if (load == null || load == 0) "BW" else "BW+${Loads.formatKg(load)}"
-    LoadType.ASSISTED -> if (load == 0) "BW" else "assist " + (load?.let { Loads.formatKg(it) } ?: "—")
-    LoadType.WEIGHTED -> load?.let { Loads.formatKg(it) } ?: "—"
+    LoadType.BODYWEIGHT_PLUS -> if (load == null || load == 0) "BW" else "BW+${LoadUnits.format(load, ex.style)}"
+    LoadType.ASSISTED -> if (load == 0) "BW" else "assist " + (load?.let { LoadUnits.format(it, ex.style) } ?: "—")
+    LoadType.WEIGHTED -> load?.let { LoadUnits.format(it, ex.style) } ?: "—"
 }
 
 @Composable
@@ -367,7 +368,7 @@ private fun ExerciseCard(
                     val details = buildList {
                         add("${exercise.repMin}–${exercise.repMax} reps")
                         add("rest ${formatRest(exercise.restSec)}")
-                        if (exercise.equipment == Equipment.DUMBBELL && exercise.logsLoad) add("kg per dumbbell")
+                        if (exercise.equipment == Equipment.DUMBBELL && exercise.logsLoad) add("${exercise.style.weight} per dumbbell")
                         if (exercise.unilateral) add("reps per side")
                     }
                     Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -496,16 +497,16 @@ private fun SetDock(
                 overflow = TextOverflow.Ellipsis,
             )
             if (ex.logsLoad) {
-                val step = Loads.formatKg(ex.incrementG)
+                val step = LoadUnits.formatStep(ex.incrementG, ex.style)
                 // No assistance left reads "BW", like the card.
                 val unassisted = ex.assisted && set.load == 0
                 DockStepper(
                     label = when {
                         unassisted -> ""
-                        ex.loadType == LoadType.BODYWEIGHT_PLUS -> "+ kg"
-                        else -> "kg"
+                        ex.loadType == LoadType.BODYWEIGHT_PLUS -> "+ ${ex.style.weight}"
+                        else -> ex.style.weight
                     },
-                    value = if (unassisted) "BW" else set.load?.let(Loads::formatKg) ?: if (ex.loadType == LoadType.BODYWEIGHT_PLUS) "0" else "—",
+                    value = if (unassisted) "BW" else set.load?.let { LoadUnits.format(it, ex.style) } ?: if (ex.loadType == LoadType.BODYWEIGHT_PLUS) "0" else "—",
                     ghost = set.loadIsGhost && !set.done,
                     minus = "−$step",
                     plus = "+$step",

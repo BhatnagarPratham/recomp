@@ -1,20 +1,24 @@
 package app.recomp.domain.progression
 
 import app.recomp.domain.model.SetType
-import app.recomp.domain.training.Loads
 import app.recomp.domain.training.LoggedSet
 import app.recomp.domain.training.SetValues
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitStyle
 
 /** Turning a [Recommendation] into what the screens show and grade against. */
 object Targets {
     /** Per-set ghost values for the working sets (PRD §7.4: working sets prefill from today's target). */
     fun workingSets(rec: Recommendation): List<SetValues> = rec.reps.map { SetValues(rec.loadG, it) }
 
-    /** "45 × 12/12/10", "assist 20 × 8", "BW × 15/15/15" (no assistance left, too), or "× 12" when the weight is yours to pick. */
-    fun describe(rec: Recommendation): String {
+    /**
+     * "45 × 12/12/10", "assist 20 × 8", "BW × 15/15/15" (no assistance left, too), or "× 12" when the weight is yours
+     * to pick. Loads are in [style]'s unit, with no unit word.
+     */
+    fun describe(rec: Recommendation, style: UnitStyle): String {
         val load = when {
             rec.assisted && rec.loadG == 0 -> "BW"
-            rec.loadG != null -> if (rec.assisted) "assist ${Loads.formatKg(rec.loadG)}" else Loads.formatKg(rec.loadG)
+            rec.loadG != null -> if (rec.assisted) "assist ${LoadUnits.format(rec.loadG, style)}" else LoadUnits.format(rec.loadG, style)
             rec.action == Action.BASELINE -> ""
             else -> "BW"
         }
@@ -49,7 +53,7 @@ object Targets {
      * Live feedback for a ticked working set (PO-03): only when it meets or beats its target, phrased
      * against last time's matching set. A miss says nothing. For an assisted lift, less assistance is the gain.
      */
-    fun feedback(target: SetValues?, done: LoggedSet, lastMatch: LoggedSet?, assisted: Boolean = false): String? {
+    fun feedback(target: SetValues?, done: LoggedSet, lastMatch: LoggedSet?, style: UnitStyle, assisted: Boolean = false): String? {
         if (target?.reps == null || done.type != SetType.WORKING) return null
         val load = done.loadG ?: 0
         val short = if (assisted) target.loadG != null && load > target.loadG else load < (target.loadG ?: 0)
@@ -58,18 +62,18 @@ object Targets {
         val loadGain = if (assisted) (lastMatch.loadG ?: 0) - load else load - (lastMatch.loadG ?: 0)
         val repDiff = done.reps - lastMatch.reps
         return when {
-            loadGain > 0 -> if (assisted) "${Loads.formatKg(loadGain)} kg less assist" else "+${Loads.formatKg(loadGain)} kg"
+            loadGain > 0 -> if (assisted) "${weight(loadGain, false, style)} less assist" else "+${weight(loadGain, false, style)}"
             loadGain == 0 && repDiff > 0 -> "+$repDiff rep" + if (repDiff > 1) "s" else ""
             else -> "target hit"
         }
     }
 
     /** "Lat pulldown goes to 50 kg" and friends, for the summary's "what changes next time". */
-    fun nextTime(name: String, rec: Recommendation, lastTopLoadG: Int?): String = when (rec.action) {
-        Action.INCREASE -> if (rec.harderVariation) "$name: add load or a harder variation" else "$name goes to ${weight(rec.loadG!!, rec.assisted)}"
-        Action.DELOAD -> "$name deloads to ${weight(rec.loadG!!, rec.assisted)}"
-        Action.ADD_REPS -> "$name: add a rep at ${rec.loadG?.let { weight(it, rec.assisted) } ?: "bodyweight"}"
-        Action.REPEAT -> "$name: repeat ${lastTopLoadG?.takeIf { it > 0 || rec.assisted }?.let { weight(it, rec.assisted) } ?: "the same"}, every set in the range"
+    fun nextTime(name: String, rec: Recommendation, lastTopLoadG: Int?, style: UnitStyle): String = when (rec.action) {
+        Action.INCREASE -> if (rec.harderVariation) "$name: add load or a harder variation" else "$name goes to ${weight(rec.loadG!!, rec.assisted, style)}"
+        Action.DELOAD -> "$name deloads to ${weight(rec.loadG!!, rec.assisted, style)}"
+        Action.ADD_REPS -> "$name: add a rep at ${rec.loadG?.let { weight(it, rec.assisted, style) } ?: "bodyweight"}"
+        Action.REPEAT -> "$name: repeat ${lastTopLoadG?.takeIf { it > 0 || rec.assisted }?.let { weight(it, rec.assisted, style) } ?: "the same"}, every set in the range"
         Action.BASELINE -> "$name: pick a starting weight"
     }
 
@@ -87,9 +91,10 @@ object Targets {
 
     private fun increaseLabel(rec: Recommendation) = if (rec.assisted) "less assistance" else "weight up"
 
-    private fun weight(loadG: Int, assisted: Boolean) = when {
+    /** "50 kg", "110 lb", "assist 20 kg", or "bodyweight" for no assistance left. */
+    fun weight(loadG: Int, assisted: Boolean, style: UnitStyle) = when {
         assisted && loadG == 0 -> "bodyweight"
-        assisted -> "assist ${Loads.formatKg(loadG)} kg"
-        else -> "${Loads.formatKg(loadG)} kg"
+        assisted -> "assist ${LoadUnits.format(loadG, style)} ${style.weight}"
+        else -> "${LoadUnits.format(loadG, style)} ${style.weight}"
     }
 }
