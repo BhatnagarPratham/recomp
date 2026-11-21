@@ -82,6 +82,8 @@ class UnitsTest {
         assertEquals("2.5", LoadUnits.formatStep(1134, lb))
         assertEquals("5.51", LoadUnits.formatStep(2500, lb))
         assertEquals("1.25", LoadUnits.formatStep(1250, kg))
+        // A kept lb step in kg, to 2 decimals like lb.
+        assertEquals("2.27", LoadUnits.formatStep(2268, kg))
     }
 
     @Test

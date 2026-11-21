@@ -102,7 +102,7 @@ object LoadUnits {
 
     /** A weight step, to 2 decimals: "1.25" (kg), "2.5" or "5.51" (lb). */
     fun formatStep(grams: Int, style: UnitStyle): String {
-        val value = if (style.imperial) UnitMath.gToLb(grams, 2) else BigDecimal(grams).divide(BigDecimal(1000))
+        val value = if (style.imperial) UnitMath.gToLb(grams, 2) else BigDecimal(grams).divide(BigDecimal(1000)).setScale(2, RoundingMode.HALF_UP)
         return style.mark(value.stripTrailingZeros().toPlainString())
     }
 

@@ -22,6 +22,8 @@ import app.recomp.data.repo.StepMove
 import app.recomp.data.repo.UnitSwitch
 import app.recomp.domain.persona.Units
 import app.recomp.domain.units.UnitStyle
+import app.recomp.domain.model.Equipment
+import app.recomp.domain.units.LoadUnits
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.unitStyle
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -56,7 +58,11 @@ object UnitsText {
     /** Moving is by nearest step, so going back doesn't always return the old step (1 kg → 2.5 lb → 1.25 kg). */
     const val ROUND_TRIP = "Switching back later moves steps to the nearest step again, which may not be the one you had."
 
-    fun keep(to: Units) = "If you keep them, they show converted, e.g. 2.5 kg as ${Labels.step(2_500, unitStyle(to))}."
+    /** A step common in the unit you're leaving, shown in the new one: "e.g. 2.5 kg as 5.51 lb", "e.g. 5 lb as 2.27 kg". */
+    fun keep(from: UnitStyle, to: UnitStyle): String {
+        val example = if (from.imperial) LoadUnits.defaultIncrementG(Equipment.BARBELL, from.units) else 2_500
+        return "If you keep them, they show converted, e.g. ${Labels.step(example, from)} as ${Labels.step(example, to)}."
+    }
 }
 
 /**
@@ -93,7 +99,7 @@ fun UnitsSetting(viewModel: UnitsViewModel = hiltViewModel()) {
                     moves.forEach { Text(UnitsText.move(it, from, toStyle)) }
                     Text(UnitsText.HISTORY, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(UnitsText.ROUND_TRIP, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(UnitsText.keep(to), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(UnitsText.keep(from, toStyle), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = { TextButton(onClick = { asking = null; viewModel.switch(to, moveSteps = true) }) { Text("Move steps") } },
