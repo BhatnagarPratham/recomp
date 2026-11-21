@@ -2,6 +2,7 @@ package app.recomp.data
 
 import app.recomp.data.health.HealthWriter
 import app.recomp.data.repo.ExtraDraft
+import app.recomp.data.repo.ExtraEdit
 import app.recomp.data.repo.HealthWriteRepository
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ScanInput
@@ -279,5 +280,31 @@ class HealthWriteFlowTest {
         assertTrue(app.prefs.exportable().asMap().keys.any { it.name == "health_share" })
         assertTrue(app.device.written().isNotEmpty())
         assertFalse(File(tmp.root, "app/settings.preferences_pb").readBytes().decodeToString().contains("recomp-workout-"))
+    }
+
+    @Test
+    fun `M10's history edits follow, a class moved to another day and a deleted workout`() = runBlocking {
+        val classRoutine = app.training.observeExtras().first().single()
+        val yoga = app.workouts.logExtra(classRoutine, ExtraEntry("Hatha", 60, 3, null), at(8))
+        val strength = workout()
+        writes.setShare(true)
+        writes.sync()
+        assertTrue("recomp-workout-$yoga" in hc.records && "recomp-workout-$strength" in hc.records)
+
+        // Edited in History: a day earlier and longer. Same id, written again at a later version.
+        assertNull(app.history.saveExtra(yoga, ExtraEdit(today.minusDays(1), 75, 3, "moved")))
+        app.clock.instant = app.clock.instant.plusSeconds(60)
+        val edited = writes.sync() as ShareResult.Done
+        assertEquals(1, edited.written)
+        val (record, version) = hc.records.getValue("recomp-workout-$yoga")
+        assertEquals(today.minusDays(1), (record as OutWorkout).date)
+        assertEquals(75L * 60, (record.end.epochSecond - record.start.epochSecond))
+        assertEquals(app.clock.millis(), version)
+
+        // Deleted in History: gone from Health Connect too.
+        assertTrue(app.history.deleteSession(strength))
+        app.clock.instant = app.clock.instant.plusSeconds(60)
+        assertEquals(1, (writes.sync() as ShareResult.Done).deleted)
+        assertFalse("recomp-workout-$strength" in hc.records)
     }
 }
