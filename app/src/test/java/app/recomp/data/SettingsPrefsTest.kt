@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.recomp.data.prefs.ExtraSchedule
 import app.recomp.data.prefs.StoredPersona
+import app.recomp.data.prefs.VolumeBand
 import app.recomp.domain.training.LogDates
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.data.health.HealthFeature
@@ -78,6 +79,25 @@ class SettingsPrefsTest {
         assertNull(prefs.scanSlot.first())
         assertEquals(LogDates.DEFAULT_DAY_START, prefs.dayStart.first())
         assertEquals(listOf("scan_slot"), prefs.unreadable.first())
+    }
+
+    @Test
+    fun `the weekly sets band defaults to 10 to 20, and a backup with a nonsense band is refused`() = runBlocking {
+        val min = intPreferencesKey("volume_band_min")
+        val max = intPreferencesKey("volume_band_max")
+        val (prefs, _) = storeWith()
+        assertEquals(VolumeBand(10, 20), prefs.volumeBand.first())
+        prefs.setVolumeBand(6, 12)
+        assertEquals(VolumeBand(6, 12), prefs.volumeBand.first())
+        assertEquals(emptyList<String>(), prefs.problems(mutablePreferencesOf(min to 6, max to 12)))
+        assertEquals(emptyList<String>(), prefs.problems(mutablePreferencesOf(max to 25)))
+        assertEquals(listOf("volume_band_min", "volume_band_max"), prefs.problems(mutablePreferencesOf(min to 12, max to 6)))
+        assertEquals(listOf("volume_band_min", "volume_band_max"), prefs.problems(mutablePreferencesOf(min to 30)))
+        assertEquals(listOf("volume_band_min"), prefs.problems(mutablePreferencesOf(stringPreferencesKey("volume_band_min") to "ten")))
+
+        // A stored band that makes no sense reads as the default.
+        val (odd, _) = storeWith(min to 40, max to 5)
+        assertEquals(VolumeBand(), odd.volumeBand.first())
     }
 
     private fun prefsOf(personaJson: String) = mutablePreferencesOf(persona to personaJson)

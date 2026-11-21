@@ -36,6 +36,7 @@ import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
+import app.recomp.data.repo.HistoryRepository
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
@@ -375,6 +376,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var reminders: app.recomp.reminders.ReminderRunner
         private set
+    lateinit var history: HistoryRepository
+        private set
 
     init {
         open()
@@ -402,6 +405,7 @@ class TestApp(private val dir: File) {
         health = HealthRepository(db, db.healthDao(), db.bodyDao(), db.workoutDao(), db.routineDao(), prefs, device, days, healthSource, clock)
         snapshots = app.recomp.data.repo.TodaySnapshotRepository(days, prefs, nutrition, training, workouts, progression, checkins, foods, foodLog, db.nudgeDao())
         reminders = app.recomp.reminders.ReminderRunner(prefs, device, days, snapshots, checkins, notifier)
+        history = HistoryRepository(db, db.historyDao(), db.workoutDao(), db.exerciseDao(), progression, prefs, days)
     }
 
     /** Simulates process death: everything not written to disk is gone. */

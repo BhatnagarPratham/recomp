@@ -806,18 +806,28 @@ These rules hold for every block:
 ### 12.6 M10: Training history (WL-10, PO-09, PO-10)
 
 - **History** on the Train tab: every workout and extra session, newest first.
+  - A workout opens its summary, which has *Edit workout*. Today's last-workout line opens the same summary.
+  - An extra session opens a small sheet: its date, minutes, intensity and notes, and *Delete session*.
+  - A past workout's summary doesn't offer *Save changes to the routine*: only the one you've just finished does.
 - **Editing a past workout (WL-10).** It opens like the summary, with editable rows:
   - weight, reps, RIR and set type; add or delete sets; remove an exercise;
   - the date, start and end times, and notes;
   - *Delete workout*, which asks first.
+  - Nothing is written until *Save*; *Cancel* asks before dropping changes. There's no adding, swapping, reordering or re-grouping exercises in a past workout. An exercise left with no sets stays as skipped.
+  - A start time before your "day starts at" time is that date's late night, and an end before the start means it ran past midnight. Times in the future aren't accepted, and neither is a start at or after a workout that's still in progress.
 
   Then:
   - PRs, stall cards and next time's targets are recomputed from the edited history, and the screen says so. Targets frozen on past sessions stay as they were shown.
+  - Whether a workout counted as an override (PO-07) follows the edit, so fixing a mistyped weight clears it.
+  - Removing one exercise of a superset of two leaves the other on its own.
+  - A stall *Hold* or *Deload* stays with the workout it was chosen in when that workout's time moves. Deleting that workout, or removing the lift from it, undoes the choice, so the stall card can come back.
   - Deleting your last strength workout moves the rotation back.
   - An active workout is still edited in the workout screen.
-- **In a deficit,** the summary and the stall card add "Holding strength in a deficit is a win" (§4.8).
-- **Charts (PO-09).** Exercise history gets a chart: the best e1RM per session as a line and the top set as dots, over 12 weeks or everything. Bodyweight exercises chart reps, and assisted ones the assistance (lower is better).
+- **In a deficit,** the summary and the stall card add "Holding strength in a deficit is a win" (§4.8). The summary shows it whenever the target in force on the workout's day was a deficit, whatever the lifts did.
+- **Charts (PO-09).** Exercise history gets a chart: the best e1RM per session as a line and the top set as dots, over 12 weeks or everything. Bodyweight exercises chart reps, and assisted ones the assistance (lower is better). Pull-ups and dips done without added load chart reps too, until a session adds load. With fewer than two sessions in the 12 weeks, it suggests *Everything*.
 - **Weekly sets per muscle (PO-10).** A Train tab card for this week: each muscle's working sets (1 for its primary muscle, ½ for each secondary) against a band.
+  - Only sets of type *Working* in finished workouts count: not warm-ups, drop or failure sets, and not the workout in progress. The week is Monday to Sunday.
+  - It lists every muscle with sets this week, and at zero the main muscles of the routines in your rotation. Custom exercises have no muscle yet, so they aren't listed.
   - The band is 10–20 by default, editable in Settings → Training.
   - It's information only: no warning colours and no notification.
 

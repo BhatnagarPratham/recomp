@@ -108,6 +108,13 @@ class BodyRepository @Inject constructor(
     /** The current trend weight, or null before the primary source has a weigh-in. */
     suspend fun trendKg(): Double? = trendOf(bodyDao.weighIns(), prefs.currentPersona().weightSource, null).trendKg
 
+    /**
+     * The trend weight as it stood at [at]: from the primary source's weigh-ins measured by then, or null
+     * before the first. Rebuilt assisted-lift PRs use it, so they match what finishing the workout found.
+     */
+    suspend fun trendKgAt(at: Long): Double? =
+        trendOf(bodyDao.weighIns().filter { it.measuredAt <= at }, prefs.currentPersona().weightSource, null).trendKg
+
     private fun trendOf(rows: List<BodyWeightEntity>, primary: WeightSource, pace: WeightPace?): BodyTrend {
         val points = TrendCalculator.trend(rows.map(BodyWeightEntity::toWeighIn), primary)
         return BodyTrend(primary, points, rows, TrendCalculator.weeklyRate(points), pace)

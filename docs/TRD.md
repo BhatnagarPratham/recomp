@@ -298,7 +298,7 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
   - `INCREASE` takes one step off (two with the double step), never below zero. At zero it suggests added load or a harder variation, like bodyweight.
   - The big-jump guard and the double step measure the step against the *effective load*: today's trend weight (§5.2) minus the assistance. Before the first weigh-in that's unknown, so neither applies and the lift moves one step at a time.
   - `DELOAD` adds the assistance that takes about 10% off the effective load, rounded *up* to the step; before a weigh-in, one step.
-  - e1RM, PRs, the stall score and session volume use today's trend weight minus each set's assistance (`Loads.lifted`). Every session is judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall.
+  - e1RM, PRs, the stall score and session volume use the trend weight minus each set's assistance (`Loads.lifted`), with every session in one comparison judged at the same body weight, so in effect on assistance and reps, and a cut doesn't read as a stall. Which trend weight depends on what's computed: stall detection, targets and displayed e1RMs compare at today's trend, while a session's stored PR records use the trend as of that session's end (the trend when it finished). A rebuild after an edit (M10) uses that same weight, so it reproduces what finishing wrote.
   - Before the first weigh-in, less assistance is the "least assistance" record, ties go to more reps, and there's no e1RM or volume. Records keep the assistance in `load_g`.
   - So an assisted MAX_LOAD record's `value` changes meaning at the first weigh-in: the assistance before it, trend weight minus assistance after. Charts and anything else that reads assisted records use `load_g` (or recompute from the sets), never `value`.
   - With no assistance left, targets and history read "BW", and the next step is added load or a harder variation.
@@ -313,6 +313,17 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
 - **Freezing the recommendation.** It's written to `session_exercise.recommendation_json` when the workout starts, or when an exercise is added or swapped in mid-workout, as kotlinx.serialization JSON (`action`, `loadG`, `reps[]`, `stalled`, `harderVariation`, and from M6 `steps` and `assisted`, which default to 1 and false). The summary then grades against what you were actually shown, even if the history changes later. Choosing *Deload* or *Hold* rewrites it for that session. Working sets' ghost values come from it (PRD §7.4).
 - **Overrides (PO-07).** `user_overrode` is true when the session's top completed working load (for an assisted lift, its least assistance) differs from the target load. It's recomputed whenever a set is ticked, unticked, retyped or deleted, so back-off sets and corrected typos don't count.
 - **PRs.** Compared with every earlier completed set of the exercise. None are written for an exercise's first exposure.
+- **Rebuilding PRs (WL-10, M10).** PRs are the only derived training data that's stored; the rotation, targets, stall flags and weekly plan are computed from the sessions on every read. So editing, moving or deleting a completed session rebuilds PRs and nothing else.
+  - `PrRebuilder` (`:domain`) takes every completed exposure of one exercise and returns the PRs of the sessions that start at or after `from`. It calls the same `PersonalRecords.detect` as finishing a workout, with the same history: sessions that started earlier (ties by session id), and never a second row of the same exercise in the same session.
+  - A PR depends only on earlier sets, so `from` is the earlier of the session's old and new start, and rows before it are never rewritten. `HistoryRepository.rebuildPrs` deletes the affected exercises' rows from there on and inserts the rebuilt ones, inside the edit's transaction. The affected exercises are every one the session had before the edit.
+  - A rebuild with no `from` recomputes everything. Tests compare the two after each kind of edit, and compare a full rebuild of untouched history with what finishing wrote.
+  - An assisted lift's sessions are each rebuilt at the trend weight as it stood when that session finished (`BodyRepository.trendKgAt`, from the weigh-ins measured by then), which is what finishing it used. So a rebuild gives back the records finishing wrote, however the trend has moved since, and a session finished before the first weigh-in keeps its least-assistance record in assistance grams. The "today's trend weight" rule above is for targets, stall detection and displayed e1RMs, not stored PRs. Finishing reads at most 500 earlier exposures of an exercise and a rebuild reads all of them, which differs only past 500 sessions of one lift.
+- **Editing a session (WL-10, M10).** `HistoryRepository.saveEdit` is one transaction over a draft the screen holds; only a COMPLETED strength session is accepted.
+  - `log_date` is recomputed from the new start, and every set's `completed_at` moves by the change in start. An added set takes the tick time of the set before it, or the session's end.
+  - `recommendation_json`, `target_sets`, the rep range and rest are never written: they're the plan as shown that day. `user_overrode` is recomputed with the same rule as in a live workout (`Targets.overrode`).
+  - Removing an exercise renormalizes the session's superset groups.
+  - While a workout is in progress, a past session can't be moved to start at or after it: finishing that workout judges its PRs against every finished session.
+  - A stall reset is "one millisecond before the start of the session it was chosen in". When that session's start moves, the reset moves with it; when the session is deleted or loses the exercise, the reset is cleared. Resets chosen in other sessions are plain timestamps and are left alone.
 
 ### 5.2 Weight trend (BM-01)
 
@@ -439,6 +450,10 @@ A proposal is always §5.3 recomputed with `tdee_new` at the current pace, and i
 ### 5.5 Weekly volume per muscle (PO-10, P1)
 
 Each working set counts as 1 set for the exercise's primary muscle and 0.5 for each secondary muscle. The weekly total per muscle is compared against an editable reference band (default 10–20). It's for information only and never triggers a notification.
+
+`MuscleVolume` (M10) counts in half sets, so the totals are exact. It takes completed sets of type `WORKING` from COMPLETED sessions whose `log_date` falls in the ISO week (Monday start, as `WeeklyPlan`), grouped per exercise by one query. A muscle listed as both primary and secondary counts once. The Train card also lists, at zero, the primary muscles of the exercises in the rotation's routines; `other` (custom exercises) is left out. The band lives in DataStore as `volume_band_min` and `volume_band_max`; a missing or invalid pair reads as 10–20, and a backup with an invalid pair is refused like any other bad setting.
+
+**Exercise charts (PO-09, M10).** `ExerciseChart` (`:domain`) turns an exercise's completed sessions into points by log date, warm-ups left out. Weighted lifts plot the best estimated 1RM per session (sets of 12 reps or fewer, as everywhere else) as a line and the heaviest set as hollow dots, both in kg. Weighted-bodyweight lifts (pull-ups, dips) plot reps like bodyweight ones until a session has added load; from then on, the e1RM line and the added load, for loaded sessions only, so a row of 0 kg is never drawn. Bodyweight lifts plot the best set's reps; assisted lifts plot the least assistance from the sets' own `load_g` (lower is better, said in the caption), never a record's `value`. The card uses M8's `ui/components/Chart` with the time axis from 12 weeks ago, or the first session, to today, and asks for two sessions within the chosen range before it draws (else it suggests *Everything*). Its "today" is the log date under "day starts at".
 
 ### 5.6 InBody trends (IB-02, IB-04)
 
@@ -1472,6 +1487,22 @@ Tests cover:
   - volume counting: secondary muscles, working sets only, the week boundary.
 - **Risks:** this rewrites PR history; the from-scratch comparison is the guard. M16's Health Connect writes must follow these edits later.
 - **Parallel:** with M9.
+
+**M10 results (2026-11-21, reference phone on Android 15; no Room change, built on M8).** Built to PRD §12.6 and the block above; §5.1 (*Rebuilding PRs*, *Editing a session*) and §5.5 describe what was built. Where the spec was silent, M10 took the readings now written into PRD §12.6:
+- A workout in History opens its summary, which has *Edit workout*; the editor works on a draft saved in one transaction. A past workout's summary doesn't offer to save its plan to the routine.
+- Extra sessions are listed too, and can be redated, changed and deleted from a small sheet.
+- Only *Working* sets count toward weekly sets, and the summary's deficit line follows the target in force that day.
+- Deleting the workout a Hold or Deload was chosen in, or removing the lift from it, clears that reset.
+- The exercise chart plots assistance itself for assisted lifts, from the sets' loads, with "lower is better" in its caption.
+
+Tests cover:
+- `PrRebuilderTest`: a from-scratch rebuild equals what finishing each session found; a raised old set takes a later PR away and a lowered one gives it back; added sets move the volume PR; deleting the first session leaves the next one without PRs; an incremental rebuild plus the untouched earlier rows equals a full one after six kinds of edit, including moving a session before and after the others; bodyweight and assisted rules.
+- `HistoryFlowTest` (real SQLite): the same incremental-versus-scratch check through the repository after retyping, set-type changes, adding and deleting sets, removing an exercise, moving dates and deleting; rebuilt rows point at their set and the session's end; deleting the last strength workout moves the rotation back, and moving a workout behind another moves it too; frozen targets and plans byte-for-byte unchanged while today's recommendation follows the edit; a fixed typo clears a false override; stall resets follow, stay or clear; superset regrouping; times, log date, tick times and notes; edits that can't be saved write nothing, and active or discarded workouts can't be edited or deleted; History's list and counts; extra-session edits; weekly sets from working sets of finished workouts only, across the week boundary; the band; the chart after an edit and for an assisted lift.
+- `MuscleVolumeTest`, `SessionEditTest`, `ExerciseChartTest`, `HistoryTextTest` and a band case in `SettingsPrefsTest`.
+
+On the phone:
+- A dev install with invented data: editing a past workout and saving said PRs were recomputed and showed the new ones and the new next target; *Delete workout* asked first and moved Today's next workout back; a workout finished under a deficit target showed the deficit line; the chart drew over 12 weeks and everything; the band saved. It found exercise history opening scrolled past the chart, now fixed by loading both together. The stall card's line wasn't seen, because in a deficit the invented lift was a session short of the longer stall window, as designed.
+- The release over the real data, looked at only: no crash; Train shows History and the weekly sets card; History lists the real sessions; a past summary offers *Edit workout* and no save to the routine. Nothing was edited or deleted.
 
 #### M11: Weekly programme review with AI
 
