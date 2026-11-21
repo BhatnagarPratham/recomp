@@ -16,7 +16,8 @@ object DescribeMerge {
      * word of the food's whole name. Amounts, unit words and filler words in the AI's name are ignored.
      *
      * [unsure] are the chunks sent to the AI to estimate: an item that names one of them at least as fully as it
-     * names a counted item is that chunk's answer, so it's kept ("Dal makhani" when "dal" was counted and
+     * names a counted item is that chunk's answer, so it's kept ("Coffee with milk" when the milk was counted and
+     * "coffee" sent) ("Dal makhani" when "dal" was counted and
      * "dal makhani" was sent).
      */
     fun merge(counted: List<ParsedItem>, ai: List<EstimatedItem>, unsure: List<String> = emptyList()): Merged {
@@ -29,7 +30,9 @@ object DescribeMerge {
             val countedBy = (typedKeys.filter { key.containsAll(it) } + fullKeys.filter { key.containsAll(it) }).maxOfOrNull { it.size }
                 ?: if (key in aliasKeys) key.size else null
             val askedBy = asked.filter { key.containsAll(it) }.maxOfOrNull { it.size }
-            countedBy != null && (askedBy == null || countedBy >= askedBy)
+            // A tie goes to the part that was sent: "Coffee with milk" answers "coffee" as much as it names the milk,
+            // and leaving it out would lose the coffee.
+            countedBy != null && (askedBy == null || countedBy > askedBy)
         }
         return Merged(kept, dropped)
     }

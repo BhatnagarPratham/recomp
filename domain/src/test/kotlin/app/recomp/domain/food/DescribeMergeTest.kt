@@ -61,4 +61,21 @@ class DescribeMergeTest {
     fun `with nothing counted, everything is kept`() {
         assertEquals(2, DescribeMerge.merge(emptyList(), listOf(ai("Roti"), ai("Dal"))).items.size)
     }
+
+    @Test
+    fun `re-check R1 - on a tie the part that was sent wins, so coffee with milk keeps its coffee`() {
+        val coffee = DescribeMerge.merge(listOf(parsed("Milk, whole", "milk")), listOf(ai("Coffee with milk"), ai("Milk coffee")), unsure = listOf("1 cup coffee"))
+        assertEquals(listOf("Coffee with milk", "Milk coffee"), coffee.items.map { it.name })
+        assertEquals(emptyList<EstimatedItem>(), coffee.alreadyCounted)
+
+        val chai = DescribeMerge.merge(listOf(parsed("Hot tea (Garam Chai)", "chai")), listOf(ai("Tea biscuits"), ai("Chai biscuit")), unsure = listOf("2 biscuits"))
+        assertEquals(listOf("Tea biscuits", "Chai biscuit"), chai.items.map { it.name })
+
+        val tikka = DescribeMerge.merge(listOf(parsed("Paneer", "100 g paneer")), listOf(ai("Paneer tikka")), unsure = listOf("tikka"))
+        assertEquals(listOf("Paneer tikka"), tikka.items.map { it.name })
+
+        // Without a sent part it names, it's still the counted food again.
+        val repeat = DescribeMerge.merge(listOf(parsed("Milk, whole", "milk")), listOf(ai("Whole milk (1 glass)")), unsure = listOf("1 cup coffee"))
+        assertEquals(listOf("Whole milk (1 glass)"), repeat.alreadyCounted.map { it.name })
+    }
 }

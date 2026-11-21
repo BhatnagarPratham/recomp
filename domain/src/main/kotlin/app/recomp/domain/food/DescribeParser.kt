@@ -229,8 +229,21 @@ object DescribeParser {
 
     private const val PLAIN_EXTRA_MAX = 2
 
-    /** Above this, a unit named after a countable dish ("gulab jamun", "egg") is a recipe's serving, not one piece. */
-    const val PIECE_MAX_GRAMS = 100.0
+    /**
+     * Foods that only ever come as small pieces, with the most one piece can weigh. A database unit named after one
+     * of them but heavier is a recipe's serving ("gulab jamun" at 156 g, a "boiled egg" at 151 g), not one piece.
+     * Dishes that can be big on their own (a masala dosa, a paratha, a samosa) have no cap.
+     */
+    val SMALL_PIECES: Map<String, Double> = mapOf(
+        "egg" to 70.0, "gulab jamun" to 60.0, "rasgulla" to 60.0, "idli" to 60.0, "laddoo" to 60.0, "ladoo" to 60.0, "laddu" to 60.0,
+        "modak" to 60.0, "biscuit" to 25.0, "cookie" to 30.0, "date" to 15.0, "almond" to 2.0,
+    )
+
+    /** The cap for a unit named after a small piece, or null when its label isn't one. */
+    internal fun pieceCap(label: String): Double? {
+        val words = FoodWords.words(label).map(FoodWords::singular)
+        return SMALL_PIECES.entries.firstOrNull { (piece, _) -> FoodWords.words(piece) == words || (words.size == 1 && FoodWords.canonical(words[0]) == FoodWords.canonical(piece)) }?.value
+    }
 
     /** The words as typed, in the singular, and with each synonym in turn. */
     private fun variants(name: List<String>): List<List<String>> {
@@ -298,7 +311,7 @@ object DescribeParser {
         fun named(unit: Pair<String, Double>) = FoodWords.words(unit.first).map(FoodWords::canonical).let { it.isNotEmpty() && words.containsAll(it) }
         // A unit named after the dish counts pieces, so one piece must weigh like one: INDB's "gulab jamun" unit is a
         // whole recipe's serving. Your own foods' units are yours, so they're taken as they are.
-        fun believable(unit: Pair<String, Double>) = food.own || !named(unit) || unit.second <= PIECE_MAX_GRAMS
+        fun believable(unit: Pair<String, Double>) = food.own || !named(unit) || unit.second <= (pieceCap(unit.first) ?: Double.MAX_VALUE)
         own.firstOrNull { named(it) && believable(it) && Portions.plausible(it.second) }?.let { return it to true }
         food.lastUnit?.let { last -> (own.firstOrNull { it.first == last } ?: household[last]?.let { last to it })?.let { return it to true } }
         own.firstOrNull()?.takeIf { (food.own || Portions.plausible(it.second)) && believable(it) }?.let { return it to (own.size == 1) }

@@ -455,6 +455,22 @@ class DescribeParserTest {
     }
 
     @Test
+    fun `re-check R2 - a dish that can be big on its own keeps its serving`() {
+        val index = TestIndex(listOf(food("Masala dosa", units = listOf("dosa" to 209.0)), food("Aloo paratha", units = listOf("paratha" to 120.0)), food("Samosa", units = listOf("samosa" to 110.0))))
+        val dosa = only("masala dosa", index)
+        assertEquals(209.0, dosa.grams, 1e-6)
+        assertEquals(Confidence.HIGH, dosa.confidence)
+        assertEquals(240.0, only("2 aloo paratha", index).grams, 1e-6)
+        assertEquals(Confidence.HIGH, only("1 samosa", index).confidence)
+        // Small pieces keep their caps, by any spelling.
+        assertEquals(70.0, DescribeParser.pieceCap("egg"))
+        assertEquals(70.0, DescribeParser.pieceCap("eggs"))
+        assertEquals(60.0, DescribeParser.pieceCap("Gulab jamun"))
+        assertEquals(null, DescribeParser.pieceCap("dosa"))
+        assertEquals(null, DescribeParser.pieceCap("bowl"))
+    }
+
+    @Test
     fun `a food from a source added later counts as your own`() {
         assertEquals(setOf(FoodSource.SEED, FoodSource.INDB, FoodSource.OFF), IndexedFood.BUNDLED)
         FoodSource.entries.forEach { source ->
