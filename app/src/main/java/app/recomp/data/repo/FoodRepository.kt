@@ -173,6 +173,8 @@ class FoodRepository @Inject constructor(
             ),
         )
         setServing(id, food.serving)
+        // A new diet tag reaches the recipes that hold this food (M14).
+        if (old.diet != food.diet) RecipeTags.refresh(db)
     }
 
     /** The first own unit of a custom food, which the form edits as its serving. */

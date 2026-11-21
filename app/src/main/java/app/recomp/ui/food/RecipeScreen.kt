@@ -182,11 +182,14 @@ class RecipeViewModel @Inject constructor(
 
 /** User-facing text for the recipe editor (PRD §12.10). */
 object RecipeText {
-    /** A typed amount back as text: "920", "2.5", or nothing. */
+    /**
+     * A stored amount back as text: "920", "2.25", or nothing. Up to three decimals, so anything typed reopens
+     * as typed and a save without touching it stores the same number.
+     */
     fun number(value: Double?): String = when {
         value == null -> ""
         value % 1.0 == 0.0 -> value.toLong().toString()
-        else -> "%.1f".format(value)
+        else -> "%.3f".format(java.util.Locale.ROOT, value).trimEnd('0').trimEnd('.')
     }
 
     /** A food weight. One place, so M20's units change it once. */
@@ -212,6 +215,7 @@ object RecipeText {
     fun problem(p: RecipeProblem): String = when (p) {
         RecipeProblem.NO_NAME -> "Give the recipe a name."
         RecipeProblem.NO_INGREDIENTS -> "Add at least one ingredient."
+        RecipeProblem.MISSING_INGREDIENT -> "One of the ingredients is no longer on this phone. Remove it and add it again."
         RecipeProblem.BAD_AMOUNT -> "Every ingredient needs an amount above 0 g."
         RecipeProblem.BAD_COOKED_WEIGHT -> "The cooked weight should be a number of grams, up to ${grams(Recipes.MAX_GRAMS)}."
         RecipeProblem.BAD_SERVINGS -> "Servings should be a number above 0."
@@ -449,7 +453,10 @@ private fun AmountDialog(a: Amount, onDismiss: () -> Unit, onRemove: (() -> Unit
     var text by remember { mutableStateOf(RecipeText.number(a.grams)) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    val grams = parseNumber(text)?.let { it * unit.grams }?.takeIf { it > 0 && it <= Recipes.MAX_GRAMS }
+    val initial = remember { RecipeText.number(a.grams) }
+    // Untouched, the amount stays exactly as stored: 1.5 pieces stays 82.35… g, not the 82.353 shown.
+    val grams = (if (text == initial && unit == gramsUnit && a.grams != null) a.grams else parseNumber(text)?.let { it * unit.grams })
+        ?.takeIf { it > 0 && it <= Recipes.MAX_GRAMS }
 
     AlertDialog(
         onDismissRequest = onDismiss,

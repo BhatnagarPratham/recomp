@@ -2,6 +2,7 @@ package app.recomp.data.repo
 
 import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
+import app.recomp.domain.food.FoodCaveat
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.db.FoodUnitEntity
 import app.recomp.data.db.RecipeEntity
@@ -76,7 +77,8 @@ class RecipeRepository @Inject constructor(private val db: AppDatabase) {
         require(foodId == null || old?.source == FoodSource.RECIPE) { "Only a recipe can be saved as one" }
 
         val foods = foodDao.get(draft.ingredients.map { it.first }.distinct()).associateBy { it.id }
-        if (draft.ingredients.any { it.first !in foods }) return@withTransaction RecipeSaved.Refused(RecipeProblem.NO_INGREDIENTS)
+        // Foods are archived, never deleted, so this only guards against a damaged backup.
+        if (draft.ingredients.any { it.first !in foods }) return@withTransaction RecipeSaved.Refused(RecipeProblem.MISSING_INGREDIENT)
         val lines = draft.ingredients.map { (id, grams) -> RecipeLine(foods.getValue(id), grams) }
         Recipes.problem(lines.map { it.ingredient }, draft.cookedWeightG, draft.servings)?.let { return@withTransaction RecipeSaved.Refused(it) }
 
@@ -85,10 +87,12 @@ class RecipeRepository @Inject constructor(private val db: AppDatabase) {
 
         val values = Recipes.values(lines.map { it.ingredient }, draft.cookedWeightG, draft.servings)!!
         val per = values.per100g
+        // A dish with a deep-fried INDB ingredient reads high for the same reason it does (TRD §6.4).
+        val caveat = lines.firstNotNullOfOrNull { it.food.caveat }
         val id = if (old == null) {
             foodDao.insert(
                 FoodEntity(
-                    name = name, source = FoodSource.RECIPE, diet = values.diet,
+                    name = name, source = FoodSource.RECIPE, diet = values.diet, caveat = caveat,
                     kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG,
                     createdAt = now,
                 ),
@@ -96,7 +100,7 @@ class RecipeRepository @Inject constructor(private val db: AppDatabase) {
         } else {
             foodDao.update(
                 old.copy(
-                    name = name, diet = values.diet,
+                    name = name, diet = values.diet, caveat = caveat,
                     kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG,
                 ),
             )
@@ -107,6 +111,8 @@ class RecipeRepository @Inject constructor(private val db: AppDatabase) {
         recipeDao.deleteIngredients(id)
         recipeDao.insertIngredients(lines.mapIndexed { i, line -> RecipeIngredientEntity(recipeId = id, position = i, foodId = line.food.id, grams = line.grams) })
         setServing(id, values.servingG)
+        // Recipes that hold this one take its new tag too.
+        RecipeTags.refresh(db)
         RecipeSaved.Ok(id)
     }
 

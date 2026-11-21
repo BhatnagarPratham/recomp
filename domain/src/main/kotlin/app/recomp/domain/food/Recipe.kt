@@ -23,7 +23,7 @@ data class RecipeValues(
 }
 
 /** Why a recipe can't be saved as it stands. */
-enum class RecipeProblem { NO_NAME, NO_INGREDIENTS, BAD_AMOUNT, BAD_COOKED_WEIGHT, BAD_SERVINGS, NO_YIELD, CONTAINS_ITSELF }
+enum class RecipeProblem { NO_NAME, NO_INGREDIENTS, MISSING_INGREDIENT, BAD_AMOUNT, BAD_COOKED_WEIGHT, BAD_SERVINGS, NO_YIELD, CONTAINS_ITSELF }
 
 object Recipes {
     /** The recipe's own unit: cooked weight ÷ servings. */

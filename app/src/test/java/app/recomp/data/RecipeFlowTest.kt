@@ -1,6 +1,14 @@
 package app.recomp.data
 
 import app.recomp.data.db.FoodEntity
+import app.recomp.data.food.FoodFile
+import app.recomp.data.food.FoodFileEntry
+import app.recomp.data.repo.AiItemToLog
+import app.recomp.domain.ai.Confidence
+import app.recomp.domain.ai.EstimatedItem
+import app.recomp.domain.food.FoodCaveat
+import app.recomp.domain.persona.FoodRegion
+import kotlinx.serialization.json.Json
 import app.recomp.data.repo.CustomFood
 import app.recomp.data.repo.RecipeDraft
 import app.recomp.data.repo.RecipeSaved
@@ -208,7 +216,7 @@ class RecipeFlowTest {
     fun `a recipe that can't be right is refused with nothing written`() = runBlocking {
         assertEquals(RecipeProblem.NO_NAME, refused(null, RecipeDraft("  ", listOf(rice to 100.0), null, 1.0)))
         assertEquals(RecipeProblem.NO_INGREDIENTS, refused(null, RecipeDraft("Test", emptyList(), null, 1.0)))
-        assertEquals(RecipeProblem.NO_INGREDIENTS, refused(null, RecipeDraft("Test", listOf(9_999L to 100.0), null, 1.0)))
+        assertEquals(RecipeProblem.MISSING_INGREDIENT, refused(null, RecipeDraft("Test", listOf(9_999L to 100.0), null, 1.0)))
         assertEquals(RecipeProblem.BAD_AMOUNT, refused(null, RecipeDraft("Test", listOf(rice to 0.0), null, 1.0)))
         assertEquals(RecipeProblem.NO_YIELD, refused(null, RecipeDraft("Test", listOf(rice to 100.0), null, null)))
         assertEquals(RecipeProblem.BAD_SERVINGS, refused(null, RecipeDraft("Test", listOf(rice to 100.0), null, -1.0)))
@@ -270,4 +278,116 @@ class RecipeFlowTest {
         assertEquals("Vegetarian, from its strictest ingredient.", RecipeText.diet(raw.values!!))
         assertEquals(listOf("920", "2.5", ""), listOf(RecipeText.number(920.0), RecipeText.number(2.5), RecipeText.number(null)))
     }
+
+    @Test
+    fun `a saved meal's serving of a recipe follows the recipe's latest serving`() = runBlocking {
+        // 1,000 g of dal rice for 4: a serving is 250 g.
+        val id = save(null, "Test dal rice", listOf(rice to 200.0, dal to 100.0), cooked = 1000.0, servings = 4.0)
+        app.foodLog.log(day, "lunch", food(id), 1.0, foods.units(id).first(), Origin.HOME)
+        app.foodLog.log(day, "lunch", food(rice), 50.0, foods.units(rice).last(), Origin.HOME)
+        val meal = app.foodLog.saveMeal("Test lunch", day, "lunch")
+
+        // Next time the pot weighs 900 g and feeds 5, so a serving is 180 g.
+        save(id, "Test dal rice", listOf(rice to 200.0, dal to 100.0), cooked = 900.0, servings = 5.0)
+        app.foodLog.logSavedMeal(meal, day.plusDays(1), "lunch")
+        val rows = app.foodLog.day(day.plusDays(1))
+        val serving = rows.single { it.foodId == id }
+        assertEquals(1.0 to "serving", serving.quantity to serving.unitLabel)
+        assertEquals(180.0, serving.grams!!, 1e-9)
+        assertEquals(1060.0 / 5, serving.kcal, 1e-6)
+        // Grams stay grams.
+        assertEquals(50.0, rows.single { it.foodId == rice }.grams!!, 1e-9)
+
+        // With no servings any more, the unit is gone, and the meal keeps the weight it was saved with.
+        save(id, "Test dal rice", listOf(rice to 200.0, dal to 100.0), cooked = 900.0, servings = null)
+        app.foodLog.logSavedMeal(meal, day.plusDays(2), "lunch")
+        assertEquals(250.0, app.foodLog.day(day.plusDays(2)).single { it.foodId == id }.grams!!, 1e-9)
+        // The day it was first logged is untouched throughout.
+        assertEquals(250.0, app.foodLog.day(day).single { it.foodId == id }.grams!!, 1e-9)
+    }
+
+    @Test
+    fun `a recalibrated unit of any food is what a saved meal logs`() = runBlocking {
+        app.foodLog.log(day, "lunch", food(dal), 2.0, foods.units(dal).first(), Origin.HOME)
+        val meal = app.foodLog.saveMeal("Test dal", day, "lunch")
+        foods.calibrate(dal, "katori", 55.0)
+        app.foodLog.logSavedMeal(meal, day.plusDays(1), "lunch")
+        assertEquals(110.0, app.foodLog.day(day.plusDays(1)).single().grams!!, 1e-9)
+        assertEquals(80.0, app.foodLog.day(day).single().grams!!, 1e-9)
+    }
+
+    @Test
+    fun `a recipe with a frying-oil ingredient carries the caveat, and loses it when that's taken out`() = runBlocking {
+        val poori = app.db.foodDao().insert(
+            FoodEntity(name = "Test poori", source = FoodSource.INDB, sourceKey = "indb:TEST1", diet = FoodDiet.VEGAN, kcal100g = 400.0, protein100g = 7.0, carbs100g = 45.0, fat100g = 22.0, fiber100g = 3.0, caveat = FoodCaveat.FRYING_OIL, createdAt = 1),
+        )
+        val id = save(null, "Test poori bhaji", listOf(poori to 120.0, dal to 100.0), null, 2.0)
+        assertEquals(FoodCaveat.FRYING_OIL, food(id).caveat)
+        // It passes up through a recipe inside a recipe too.
+        val outer = save(null, "Test thali", listOf(id to 200.0, rice to 50.0), null, 1.0)
+        assertEquals(FoodCaveat.FRYING_OIL, food(outer).caveat)
+        save(id, "Test poori bhaji", listOf(dal to 100.0), null, 2.0)
+        assertNull(food(id).caveat)
+    }
+
+    @Test
+    fun `a recipe's diet tag follows an ingredient whose tag is corrected, through nested recipes`() = runBlocking {
+        val mayo = foods.createCustom(CustomFood("Test mayo", null, Per100g(680.0, 1.0, 1.0, 75.0, 0.0), FoodDiet.VEGETARIAN, null))
+        val sandwich = save(null, "Test sandwich", listOf(rice to 100.0, mayo to 20.0), null, 1.0)
+        val platter = save(null, "Test platter", listOf(sandwich to 200.0, dal to 50.0), null, 2.0)
+        val kcal = food(sandwich).kcal100g
+        assertEquals(FoodDiet.VEGETARIAN, food(platter).diet)
+
+        // The mayo turns out to have egg: both recipes are tagged egg at once, and their values are unchanged.
+        foods.updateCustom(mayo, CustomFood("Test mayo", null, Per100g(700.0, 1.0, 1.0, 77.0, 0.0), FoodDiet.EGG, null))
+        assertEquals(FoodDiet.EGG, food(sandwich).diet)
+        assertEquals(FoodDiet.EGG, food(platter).diet)
+        assertEquals(kcal, food(sandwich).kcal100g, 1e-9)
+        app.prefs.edit { persona = persona.copy(diet = Diet.LACTO_VEGETARIAN) }
+        assertEquals(emptyList<String>(), foods.search("test sandwich").map { it.food.name })
+
+        // And back, when it's corrected again.
+        foods.updateCustom(mayo, CustomFood("Test mayo", null, Per100g(700.0, 1.0, 1.0, 77.0, 0.0), FoodDiet.VEGAN, null))
+        assertEquals(FoodDiet.VEGAN, food(platter).diet)
+    }
+
+    @Test
+    fun `a re-tagged AI-learned food or a re-imported database food re-tags the recipes that hold it`() = runBlocking {
+        fun estimate(diet: FoodDiet) = EstimatedItem("Test sauce", 1.0, "tbsp", 15.0, 60.0, 0.5, 2.0, 5.5, 0.0, Confidence.HIGH, "", diet)
+        val ids = app.foodLog.logAiMeal(day, "lunch", listOf(AiItemToLog(estimate(FoodDiet.VEGAN), edited = true)), Origin.HOME, requestId = 1, dietTag = FoodDiet.VEGAN, now = 1)
+        val sauce = app.foodLog.day(day).single { it.id == ids.single() }.foodId!!
+        val bowl = save(null, "Test sauce bowl", listOf(rice to 100.0, sauce to 15.0), null, 1.0)
+        assertEquals(FoodDiet.VEGAN, food(bowl).diet)
+        app.foodLog.logAiMeal(day, "dinner", listOf(AiItemToLog(estimate(FoodDiet.FISH), edited = true)), Origin.HOME, requestId = 2, dietTag = FoodDiet.VEGAN, now = 2)
+        assertEquals(sauce, app.db.foodDao().ownFoodNamed("Test sauce")!!.id)
+        assertEquals(FoodDiet.FISH, food(bowl).diet)
+
+        // A database food whose tag changes in a new data file.
+        fun file(version: String, diet: FoodDiet) =
+            Json.encodeToString(FoodFile(version, listOf(FoodFileEntry("indb:TEST2", "Test stock", diet, FoodRegion.INDIAN, 20.0, 1.0, 2.0, 0.5, 0.0))))
+        app.foodFiles.indbText = file("t1", FoodDiet.VEGAN)
+        app.foodSeeder.ensureSeeded()
+        val stock = foods.search("test stock").single().food.id
+        val soup = save(null, "Test soup", listOf(stock to 300.0, dal to 50.0), null, 2.0)
+        assertEquals(FoodDiet.VEGAN, food(soup).diet)
+        app.foodFiles.indbText = file("t2", FoodDiet.MEAT)
+        app.foodSeeder.ensureSeeded()
+        assertEquals(FoodDiet.MEAT, food(soup).diet)
+    }
+
+    @Test
+    fun `amounts reopen exactly as they were saved`() = runBlocking {
+        val id = save(null, "Test dal rice", listOf(rice to 82.35294117647059, dal to 100.0), cooked = 912.5, servings = 2.25)
+        val d = recipes.recipe(id)!!
+        val form = RecipeForm(d.food.name, d.lines, RecipeText.number(d.cookedWeightG), RecipeText.number(d.servings))
+        assertEquals("2.25" to "912.5", form.servings to form.cooked)
+        // Saving the reopened form untouched stores the same numbers.
+        save(id, form.name, form.draft.ingredients, form.draft.cookedWeightG, form.draft.servingCountOrNull())
+        val again = recipes.recipe(id)!!
+        assertEquals(2.25 to 912.5, again.servings to again.cookedWeightG)
+        assertEquals(82.35294117647059, again.lines.first().grams, 0.0)
+        assertEquals(listOf("0.333", "1.5", "2.125"), listOf(1.0 / 3, 1.5, 2.125).map(RecipeText::number))
+    }
+
+    private fun RecipeDraft.servingCountOrNull() = servings
 }
