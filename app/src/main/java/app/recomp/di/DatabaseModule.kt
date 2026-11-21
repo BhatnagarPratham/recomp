@@ -13,7 +13,9 @@ import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.ExerciseDao
 import app.recomp.data.db.FoodDao
 import app.recomp.data.db.FoodLogDao
+import app.recomp.data.db.HealthDao
 import app.recomp.data.db.NudgeDao
+import app.recomp.data.db.HistoryDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.ProgrammeReviewDao
 import app.recomp.data.db.ReviewDao
@@ -40,8 +42,9 @@ annotation class SettingsStore
 annotation class WorkoutStateStore
 
 /**
- * Device state (TRD §4): what belongs to this phone, not to your data, such as the reminder ledger. Its file is in
- * neither exports nor Android's own backup, so a restored or transferred phone starts it fresh.
+ * Device state (TRD §4): what belongs to this phone, not to your data: the reminder ledger (M12) and Health
+ * Connect's change tokens (M13). Its file is in neither exports nor Android's own backup, so a restored or
+ * transferred phone starts it fresh.
  */
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
@@ -91,7 +94,13 @@ object DatabaseModule {
     fun provideReviewDao(db: AppDatabase): ReviewDao = db.reviewDao()
 
     @Provides
+    fun provideHistoryDao(db: AppDatabase): HistoryDao = db.historyDao()
+
+    @Provides
     fun provideProgrammeReviewDao(db: AppDatabase): ProgrammeReviewDao = db.programmeReviewDao()
+
+    @Provides
+    fun provideHealthDao(db: AppDatabase): HealthDao = db.healthDao()
 
     @Provides
     fun provideNudgeDao(db: AppDatabase): NudgeDao = db.nudgeDao()

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,9 +48,13 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.BodyCompositionEntity
 import app.recomp.data.db.BodyWeightEntity
 import app.recomp.data.db.MeasurementEntity
+import app.recomp.data.db.ScanDraftEntity
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.BodyActivity
 import app.recomp.data.repo.BodyTrend
+import app.recomp.data.repo.HealthRepository
+import app.recomp.ui.health.HealthText
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.SectionTitle
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -63,16 +68,21 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Logging and editing weigh-ins and waist, shared by Body and Today (PRD §7.8). */
-class BodyEntries(private val body: BodyRepository) {
+class BodyEntries(private val body: BodyRepository, private val health: HealthRepository) {
+    /** With *Track sleep* on, a new weigh-in also asks about last night, prefilled from what's stored for this morning. */
     suspend fun newWeighIn(): WeighInDraft {
         val source = body.primarySource()
-        return WeighInDraft(null, body.prefillWeightG(source) ?: DEFAULT_WEIGHT_G, source, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val sleep = health.sleepFor(health.logDate(now))
+        return WeighInDraft(null, body.prefillWeightG(source) ?: DEFAULT_WEIGHT_G, source, now, askSleep = sleep != null, sleepHours = sleep?.hours)
     }
 
     fun edit(row: BodyWeightEntity) = WeighInDraft(row.id, row.weightG, row.source, row.measuredAt)
 
     suspend fun save(d: WeighInDraft) {
         if (d.id == null) body.logWeighIn(d.weightG, d.source, d.at) else body.updateWeighIn(d.id, d.weightG, d.source, d.at)
+        // The night that ended on the weigh-in's morning. What you type wins over a tracker (PRD §12.9).
+        if (d.askSleep && d.sleepTouched) health.setTypedSleep(health.logDate(d.at), d.sleepHours)
     }
 
     suspend fun newWaist(): WaistDraft = WaistDraft(null, ((body.lastWaistCm() ?: DEFAULT_WAIST_CM) * 10).roundToInt(), System.currentTimeMillis())
@@ -91,8 +101,17 @@ class BodyEntries(private val body: BodyRepository) {
 }
 
 @HiltViewModel
-class BodyViewModel @Inject constructor(private val body: BodyRepository, days: DayBoundary) : ViewModel() {
-    val entries = BodyEntries(body)
+class BodyViewModel @Inject constructor(private val body: BodyRepository, private val health: HealthRepository, days: DayBoundary) : ViewModel() {
+    val entries = BodyEntries(body, health)
+
+    /** InBody measurements waiting for muscle and visceral fat (IB-07). */
+    val drafts: StateFlow<List<ScanDraftEntity>> = health.observeDrafts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Steps and sleep over the last week (AR-01, AR-02). */
+    val activity: StateFlow<BodyActivity?> = health.observeWeek().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun dismiss(draft: ScanDraftEntity) = viewModelScope.launch { health.closeDraft(draft.id) }
+
     val today: StateFlow<LocalDate> = days.observeToday().stateIn(viewModelScope, SharingStarted.Eagerly, LocalDate.now())
     val trend: StateFlow<BodyTrend?> = body.observeTrend().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val waist: StateFlow<List<MeasurementEntity>> = body.observeWaist().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -127,7 +146,9 @@ private fun rangeLabel(days: Long?) = when (days) {
  * weigh-in, the weekly waist, and the scan table (HM-02).
  */
 @Composable
-fun BodyScreen(onOpenScan: (Long?) -> Unit, viewModel: BodyViewModel = hiltViewModel()) {
+fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewModel: BodyViewModel = hiltViewModel()) {
+    val drafts by viewModel.drafts.collectAsStateWithLifecycle()
+    val activity by viewModel.activity.collectAsStateWithLifecycle()
     val trend by viewModel.trend.collectAsStateWithLifecycle()
     val waist by viewModel.waist.collectAsStateWithLifecycle()
     val scans by viewModel.scans.collectAsStateWithLifecycle()
@@ -190,6 +211,33 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, viewModel: BodyViewModel = hiltViewM
                 Column {
                     SectionTitle("Waist")
                     WaistCard(waist, today, onLog = { scope.launch { waistDraft = viewModel.entries.newWaist() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
+                }
+            }
+
+            activity?.takeIf { it.stepsOn || it.sleepOn }?.let { week ->
+                item {
+                    Column {
+                        SectionTitle("Activity")
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                if (week.stepsOn) Text(HealthText.stepsWeek(week))
+                                if (week.sleepOn) Text(HealthText.sleepWeek(week))
+                            }
+                        }
+                    }
+                }
+            }
+
+            items(drafts, key = { "d${it.id}" }) { draft ->
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(HealthText.draft(draft), style = MaterialTheme.typography.titleMedium)
+                        Text(HealthText.draftDetail(draft) + " · from the InBody app")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { onOpenDraft(draft.id) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add the rest") }
+                            OutlinedButton(onClick = { viewModel.dismiss(draft) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Dismiss") }
+                        }
+                    }
                 }
             }
 

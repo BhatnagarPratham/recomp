@@ -11,7 +11,9 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.recomp.data.health.HealthFeature
 import app.recomp.di.SettingsStore
+import app.recomp.domain.health.Steps
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
 import app.recomp.domain.ai.AiNotice
@@ -42,6 +44,7 @@ import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.ExtraPlan
 import app.recomp.domain.training.LogDates
+import app.recomp.domain.training.MuscleVolume
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -331,6 +334,9 @@ data class StoredReminders(
     }
 }
 
+/** PO-10's reference band for weekly sets per muscle: information only, never a warning. */
+data class VolumeBand(val min: Int = MuscleVolume.DEFAULT_BAND_MIN, val max: Int = MuscleVolume.DEFAULT_BAND_MAX)
+
 /** What training reads from the persona: the part M1's interim setup used to store on its own. */
 data class TrainingSettings(
     val split: SplitTemplate? = null,
@@ -349,6 +355,10 @@ internal object SettingsKeys {
     val PROFILE = stringPreferencesKey("profile")
     val DAY_START_MINUTES = intPreferencesKey("day_start_minutes")
     val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+
+    /** PO-10: the reference band for weekly sets per muscle. Missing means the default, 10–20. */
+    val VOLUME_BAND_MIN = intPreferencesKey("volume_band_min")
+    val VOLUME_BAND_MAX = intPreferencesKey("volume_band_max")
     val TARGET_OVERRIDES = stringPreferencesKey("target_overrides")
     val PROTEIN_RAMP = stringPreferencesKey("protein_ramp")
     val MEAL_SLOTS = stringPreferencesKey("meal_slots")
@@ -411,6 +421,15 @@ internal object SettingsKeys {
 
     /** The privacy notices shown (TRD §6.2): `AiNotice.key`s, one per provider and kind of request. */
     val AI_NOTICES_SEEN = stringSetPreferencesKey("ai_notices_seen")
+
+    /** M13 (PRD §12.9): the Health Connect features turned on, as `HealthFeature` names. Absent is none. */
+    val HEALTH_FEATURES = stringSetPreferencesKey("health_features")
+
+    /** AR-01: the daily step goal, 2,000 to 20,000; absent is 8,000. Steps are on while the STEPS feature is. */
+    val STEPS_GOAL = intPreferencesKey("steps_goal")
+
+    /** AR-02: Settings → Body data → Track sleep. Absent is off. */
+    val TRACK_SLEEP = booleanPreferencesKey("track_sleep")
 
     /** M1/M2's `TrainingSettings` JSON, moved into [PERSONA] by [LegacyTrainingMigration]. */
     val LEGACY_TRAINING = stringPreferencesKey("training")
@@ -604,10 +623,21 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             }
             if (wrongType(SettingsKeys.KEEP_SCREEN_ON, Boolean::class)) add(SettingsKeys.KEEP_SCREEN_ON.name)
             if (wrongType(SettingsKeys.SCAN_TARGETS_DISMISSED, Long::class)) add(SettingsKeys.SCAN_TARGETS_DISMISSED.name)
+            if (wrongType(SettingsKeys.VOLUME_BAND_MIN, Int::class)) add(SettingsKeys.VOLUME_BAND_MIN.name)
+            if (wrongType(SettingsKeys.VOLUME_BAND_MAX, Int::class)) add(SettingsKeys.VOLUME_BAND_MAX.name)
+            val bandMin = values[SettingsKeys.VOLUME_BAND_MIN.name] as? Int
+            val bandMax = values[SettingsKeys.VOLUME_BAND_MAX.name] as? Int
+            if ((bandMin != null || bandMax != null) && !MuscleVolume.validBand(bandMin ?: MuscleVolume.DEFAULT_BAND_MIN, bandMax ?: MuscleVolume.DEFAULT_BAND_MAX)) {
+                add(SettingsKeys.VOLUME_BAND_MIN.name)
+                add(SettingsKeys.VOLUME_BAND_MAX.name)
+            }
             if (wrongType(SettingsKeys.AI_MONTHLY_CAP_USD, Double::class)) add(SettingsKeys.AI_MONTHLY_CAP_USD.name)
             if (wrongType(SettingsKeys.AI_NOTICE_SEEN, Boolean::class)) add(SettingsKeys.AI_NOTICE_SEEN.name)
             if (wrongType(SettingsKeys.AI_COMPATIBLE_INPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_INPUT_USD.name)
             if (wrongType(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD.name)
+            if (wrongType(SettingsKeys.STEPS_GOAL, Int::class)) add(SettingsKeys.STEPS_GOAL.name)
+            if (wrongType(SettingsKeys.TRACK_SLEEP, Boolean::class)) add(SettingsKeys.TRACK_SLEEP.name)
+            if (values[SettingsKeys.HEALTH_FEATURES.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.HEALTH_FEATURES.name)
             if (values[SettingsKeys.AI_NOTICES_SEEN.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.AI_NOTICES_SEEN.name)
             // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
             if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
@@ -673,6 +703,21 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     suspend fun setKeepScreenOn(on: Boolean) = store.edit { it[SettingsKeys.KEEP_SCREEN_ON] = on }
 
+    /** A stored band that isn't valid reads as the default, so the card never draws a nonsense range. */
+    val volumeBand: Flow<VolumeBand> = store.data.map { prefs ->
+        val min = prefs[SettingsKeys.VOLUME_BAND_MIN] ?: MuscleVolume.DEFAULT_BAND_MIN
+        val max = prefs[SettingsKeys.VOLUME_BAND_MAX] ?: MuscleVolume.DEFAULT_BAND_MAX
+        if (MuscleVolume.validBand(min, max)) VolumeBand(min, max) else VolumeBand()
+    }.distinctUntilChanged()
+
+    suspend fun setVolumeBand(min: Int, max: Int) {
+        require(MuscleVolume.validBand(min, max)) { "No such band: $min–$max" }
+        store.edit {
+            it[SettingsKeys.VOLUME_BAND_MIN] = min
+            it[SettingsKeys.VOLUME_BAND_MAX] = max
+        }
+    }
+
     val ai: Flow<AiSettings> = store.data.map { prefs ->
         fun price(key: Preferences.Key<Double>) = prefs[key]?.takeIf { it >= 0 && it.isFinite() } ?: 0.0
         AiSettings(
@@ -709,6 +754,28 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     }
 
     suspend fun setAiNoticeSeen(notice: AiNotice) = store.edit { it[SettingsKeys.AI_NOTICES_SEEN] = it[SettingsKeys.AI_NOTICES_SEEN].orEmpty() + notice.key }
+
+    // Health Connect (M13, PRD §12.9)
+
+    /** The features turned on. A name this version doesn't know (a newer backup) is ignored. */
+    val healthFeatures: Flow<Set<HealthFeature>> = store.data.map { prefs ->
+        prefs[SettingsKeys.HEALTH_FEATURES].orEmpty().mapNotNull { name -> HealthFeature.entries.firstOrNull { it.name == name } }.toSet()
+    }.distinctUntilChanged()
+
+    /** Turning on Health Connect sleep turns on *Track sleep* too (PRD §12.9); turning it off leaves that to you. */
+    suspend fun setHealthFeature(feature: HealthFeature, on: Boolean) = store.edit { prefs ->
+        val current = prefs[SettingsKeys.HEALTH_FEATURES].orEmpty()
+        prefs[SettingsKeys.HEALTH_FEATURES] = if (on) current + feature.name else current - feature.name
+        if (on && feature == HealthFeature.SLEEP) prefs[SettingsKeys.TRACK_SLEEP] = true
+    }
+
+    val stepsGoal: Flow<Int> = store.data.map { Steps.clampGoal(it[SettingsKeys.STEPS_GOAL] ?: Steps.DEFAULT_GOAL) }.distinctUntilChanged()
+
+    suspend fun setStepsGoal(goal: Int) = store.edit { it[SettingsKeys.STEPS_GOAL] = Steps.clampGoal(goal) }
+
+    val trackSleep: Flow<Boolean> = store.data.map { it[SettingsKeys.TRACK_SLEEP] ?: false }.distinctUntilChanged()
+
+    suspend fun setTrackSleep(on: Boolean) = store.edit { it[SettingsKeys.TRACK_SLEEP] = on }
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

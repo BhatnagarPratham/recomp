@@ -30,8 +30,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
 import app.recomp.data.prefs.TrainingSettings
+import app.recomp.data.repo.HistoryRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.ui.checkin.ScheduledDeloadCard
+import app.recomp.data.repo.WeekVolume
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.MenuItem
 import app.recomp.ui.components.OverflowMenu
@@ -56,7 +58,10 @@ data class TrainUi(
 )
 
 @HiltViewModel
-class TrainViewModel @Inject constructor(private val training: TrainingRepository) : ViewModel() {
+class TrainViewModel @Inject constructor(private val training: TrainingRepository, history: HistoryRepository) : ViewModel() {
+    /** PO-10's card; null until it's loaded. */
+    val volume: StateFlow<WeekVolume?> = history.observeWeekVolume().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val ui: StateFlow<TrainUi> = combine(
         training.settings,
         training.observeRotation(),
@@ -81,9 +86,11 @@ fun TrainScreen(
     onOpenRoutine: (Long) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenSetup: () -> Unit,
+    onOpenHistory: () -> Unit,
     viewModel: TrainViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val volume by viewModel.volume.collectAsStateWithLifecycle()
     val locale = LocalConfiguration.current.locales[0]
     val scope = rememberCoroutineScope()
     var naming by remember { mutableStateOf(false) }
@@ -106,6 +113,15 @@ fun TrainScreen(
                 Text("Split, experience, weekly plan, equipment", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+
+        Card(Modifier.fillMaxWidth().clickable(onClick = onOpenHistory)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("History", style = MaterialTheme.typography.titleMedium)
+                Text("Every workout and extra session. Edit or delete a past one.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        volume?.let { VolumeCard(it) }
 
         SectionTitle("Rotation")
         if (ui.rotation.isEmpty()) {

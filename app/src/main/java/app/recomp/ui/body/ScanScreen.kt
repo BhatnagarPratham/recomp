@@ -45,7 +45,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import app.recomp.data.db.BodyCompositionEntity
+import app.recomp.data.db.ScanDraftEntity
+import app.recomp.data.db.ScanSource
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.HealthRepository
 import app.recomp.data.repo.ScanInput
 import app.recomp.data.repo.SegmentalLean
 import app.recomp.domain.body.ProtocolCheck
@@ -132,6 +135,21 @@ data class ScanForm(
         private fun kg(g: Int) = BodyText.oneDecimal(g / 1000.0)
         private fun num(d: Double) = if (d % 1.0 == 0.0) d.toInt().toString() else d.toString()
 
+        /**
+         * An InBody draft (IB-07): its time, weight, body fat % and BMR are filled in, with fat mass worked out
+         * from the first two. Muscle and visceral fat are yours to type, and the protocol questions are asked as usual.
+         */
+        fun of(d: ScanDraftEntity): ScanForm = ScanForm(
+            loaded = true,
+            at = d.measuredAt,
+            weight = kg(d.weightG),
+            fatPct = d.bodyFatPct?.let(::num).orEmpty(),
+            fatPctTyped = d.bodyFatPct != null,
+            fatMass = d.bodyFatPct?.let { kg((d.weightG * it / 100).roundToInt()) }.orEmpty(),
+            more = d.bmrKcal != null,
+            bmr = d.bmrKcal?.toString().orEmpty(),
+        )
+
         fun of(s: BodyCompositionEntity): ScanForm {
             val seg = BodyRepository.segmental(s.segmentalLeanJson)
             return ScanForm(
@@ -159,8 +177,16 @@ data class ScanForm(
 }
 
 @HiltViewModel
-class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private val body: BodyRepository, private val images: ScanImages) : ViewModel() {
+class ScanViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val body: BodyRepository,
+    private val health: HealthRepository,
+    private val images: ScanImages,
+) : ViewModel() {
     private val scanId = savedState.toRoute<ScanRoute>().scanId.takeIf { it > 0 }
+
+    /** An InBody measurement from Health Connect that this form completes (IB-07). */
+    private var draftId = savedState.toRoute<ScanRoute>().draftId.takeIf { it > 0 }
 
     /** A shared InBody screenshot (IB-03), kept with the scan when it's saved. */
     private val sharedImage = savedState.toRoute<ScanRoute>().image.takeIf { it.isNotEmpty() }
@@ -177,7 +203,12 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
     init {
         viewModelScope.launch {
             val existing = scanId?.let { body.scan(it) }
-            _form.value = existing?.let(ScanForm::of) ?: ScanForm(loaded = true).let { it.copy(workout = body.trainedBefore(it.at)) }
+            // A shared screenshot picks up the InBody draft from the same time, if Health Connect has one (PRD §12.11).
+            if (existing == null && draftId == null && sharedImage != null) draftId = health.draftForShare(System.currentTimeMillis())?.id
+            val draft = if (existing == null) draftId?.let { health.draft(it) } else null
+            _form.value = existing?.let(ScanForm::of)
+                ?: draft?.let { ScanForm.of(it).copy(workout = body.trainedBefore(it.measuredAt)) }
+                ?: ScanForm(loaded = true).let { it.copy(workout = body.trainedBefore(it.at)) }
             (sharedImage ?: existing?.imagePath)?.let { _image.value = loadScanImage(images, it) }
         }
     }
@@ -217,7 +248,11 @@ class ScanViewModel @Inject constructor(savedState: SavedStateHandle, private va
         _saving.value = true
         viewModelScope.launch {
             try {
-                val saved = body.saveScan(input.copy(imagePath = sharedImage), _form.value.id)
+                val fromDraft = draftId?.takeIf { _form.value.id == null }
+                val withImage = input.copy(imagePath = sharedImage)
+                val saved = body.saveScan(if (fromDraft != null) withImage.copy(source = ScanSource.HEALTH_CONNECT) else withImage, _form.value.id)
+                // Saved as a scan, so the draft is done and never comes back.
+                fromDraft?.let { health.closeDraft(it) }
                 _form.update { it.copy(id = saved.id) }
                 _done.value = ScanDone.Saved(saved.slotSet)
             } finally {

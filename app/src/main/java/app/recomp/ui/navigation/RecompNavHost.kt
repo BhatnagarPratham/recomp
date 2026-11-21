@@ -36,7 +36,6 @@ import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.checkin.LocalOpenProgrammeReview
 import app.recomp.ui.checkin.ProgrammeReviewScreen
-import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
@@ -62,6 +61,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import app.recomp.ui.history.HistoryScreen
+import app.recomp.ui.history.SessionEditScreen
 import kotlinx.serialization.Serializable
 
 @Serializable data object TodayRoute
@@ -72,8 +73,11 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object BodyRoute
 
-/** A scan's form (IB-01); 0 is a new scan. [image] is a shared InBody screenshot pinned above it (IB-03). */
-@Serializable data class ScanRoute(val scanId: Long = 0, val image: String = "")
+/**
+ * A scan's form (IB-01); 0 is a new scan. [draftId] is an InBody draft from Health Connect it completes (IB-07), and
+ * [image] a shared InBody screenshot pinned above it (IB-03).
+ */
+@Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0, val image: String = "")
 
 /** "What is this?" for a shared image (IB-03, TRD §6.7); [image] is its kept copy, empty when it couldn't be read. */
 @Serializable data class ShareRoute(val image: String)
@@ -86,7 +90,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object SettingsRoute
 
-@Serializable data object DevRoute
+/** Settings → Health Connect (PRD §12.9). */
+@Serializable data object HealthConnectRoute
 
 /** Onboarding (PS-01); with [goalOnly], Settings → Goal runs the same goal flow (PRD §4.6). */
 @Serializable data class OnboardingRoute(val goalOnly: Boolean = false)
@@ -97,7 +102,14 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class WorkoutRoute(val sessionId: Long)
 
-@Serializable data class SummaryRoute(val sessionId: Long)
+/** [fromHistory]: a past workout opened from History or Today, which can be edited (WL-10). */
+@Serializable data class SummaryRoute(val sessionId: Long, val fromHistory: Boolean = false)
+
+/** Every past workout and extra session (PRD §12.6). */
+@Serializable data object HistoryRoute
+
+/** Editing one completed workout (WL-10). */
+@Serializable data class SessionEditRoute(val sessionId: Long)
 
 @Serializable data class RoutineRoute(val routineId: Long)
 
@@ -191,7 +203,7 @@ fun RecompNavHost(main: MainViewModel) {
                 CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
                     TodayScreen(
                         onOpenWorkout = nav::openWorkout,
-                        onOpenSummary = { nav.navigate(SummaryRoute(it)) },
+                        onOpenSummary = { nav.navigate(SummaryRoute(it, fromHistory = true)) },
                         onOpenFood = { nav.openTopLevel(FoodRoute) },
                         onOpenBody = { nav.openTopLevel(BodyRoute) },
                     )
@@ -203,7 +215,7 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
-            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
+            composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }, onOpenDraft = { nav.navigate(ScanRoute(draftId = it)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<ShareRoute> {
                 ShareScreen(
@@ -240,6 +252,7 @@ fun RecompNavHost(main: MainViewModel) {
                     onOpenRoutine = { nav.navigate(RoutineRoute(it)) },
                     onOpenLibrary = { nav.navigate(LibraryRoute) },
                     onOpenSetup = { nav.navigate(SetupRoute) },
+                    onOpenHistory = { nav.navigate(HistoryRoute) },
                 )
             }
             composable<SettingsRoute> {
@@ -247,15 +260,15 @@ fun RecompNavHost(main: MainViewModel) {
                     SettingsScreen(
                         onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
                         onOpenTraining = { nav.navigate(SetupRoute) },
-                        onOpenDev = { nav.navigate(DevRoute) },
+                        onOpenHealth = { nav.navigate(HealthConnectRoute) },
                         onOpenMeals = { nav.navigate(MealSlotsRoute) },
                         onOpenPortions = { nav.navigate(PortionSizesRoute) },
                         onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
                     )
                 }
             }
+            composable<HealthConnectRoute> { app.recomp.ui.health.HealthConnectScreen(onBack = { nav.popBackStack() }) }
             composable<RemindersRoute> { RemindersScreen(onBack = { nav.popBackStack() }) }
-            composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
             composable<LibraryRoute> { LibraryScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) }) }
             composable<ExerciseRoute> { ExerciseScreen(onBack = { nav.popBackStack() }, onOpenHistory = { nav.navigate(ExerciseHistoryRoute(it)) }) }
@@ -274,7 +287,40 @@ fun RecompNavHost(main: MainViewModel) {
                     onDiscarded = { nav.backToHome() },
                 )
             }
-            composable<SummaryRoute> { SummaryScreen(onDone = { nav.backToHome() }) }
+            composable<SummaryRoute> { entry ->
+                val fromHistory = entry.toRoute<SummaryRoute>().fromHistory
+                val edited by entry.savedStateHandle.getStateFlow(HistoryKeys.EDITED, false).collectAsStateWithLifecycle()
+                SummaryScreen(
+                    onDone = { if (fromHistory) nav.popBackStack() else nav.backToHome() },
+                    onEdit = { nav.navigate(SessionEditRoute(it)) },
+                    edited = edited,
+                )
+            }
+            composable<HistoryRoute> { entry ->
+                val deleted by entry.savedStateHandle.getStateFlow(HistoryKeys.DELETED, false).collectAsStateWithLifecycle()
+                HistoryScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenWorkout = { nav.navigate(SummaryRoute(it, fromHistory = true)) },
+                    deleted = deleted,
+                )
+            }
+            composable<SessionEditRoute> {
+                SessionEditScreen(
+                    onBack = { nav.popBackStack() },
+                    onSaved = {
+                        nav.previousBackStackEntry?.savedStateHandle?.set(HistoryKeys.EDITED, true)
+                        nav.popBackStack()
+                    },
+                    onDeleted = {
+                        // Back past the deleted workout's summary: to History if that's where it was opened, else home.
+                        if (nav.popBackStack<HistoryRoute>(inclusive = false)) {
+                            nav.currentBackStackEntry?.savedStateHandle?.set(HistoryKeys.DELETED, true)
+                        } else {
+                            nav.backToHome()
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -346,6 +392,12 @@ private fun NavHostController.finishDescribe(outcome: DescribeOutcome) {
 }
 
 /** Where Describe it leaves its outcome in the previous screen's saved state. */
+/** One-off results handed back to the screen underneath after an edit (PRD §12.6: "the screen says so"). */
+private object HistoryKeys {
+    const val EDITED = "history_edited"
+    const val DELETED = "history_deleted"
+}
+
 private object DescribeOutcomeKeys {
     const val MESSAGE = "describe_message"
     const val UNDO = "describe_undo"

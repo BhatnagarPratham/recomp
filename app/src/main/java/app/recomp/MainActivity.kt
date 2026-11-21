@@ -31,6 +31,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        mainViewModel.syncHealth()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == ACTION_OPEN_WORKOUT) mainViewModel.openActive() else mainViewModel.open(intent.action)
