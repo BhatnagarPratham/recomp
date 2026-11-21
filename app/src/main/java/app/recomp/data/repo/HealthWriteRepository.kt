@@ -101,7 +101,7 @@ class HealthWriteRepository @Inject constructor(
             val kind = SessionKind.entries.firstOrNull { it.name == c.getString(4) } ?: SessionKind.CARDIO
             SessionRow(
                 id = id, logDate = LocalDate.parse(c.getString(1)), startedAt = c.getLong(2), endedAt = c.getLong(3), kind = kind,
-                title = c.stringOrNull(5) ?: c.stringOrNull(6) ?: title(kind), importedFrom = c.stringOrNull(7), sets = sets[id].orEmpty(),
+                title = c.stringOrNull(6) ?: c.stringOrNull(5) ?: title(kind), importedFrom = c.stringOrNull(7), sets = sets[id].orEmpty(),
             )
         }
         val food = rows(FOOD, arrayOf(since)) { c ->
