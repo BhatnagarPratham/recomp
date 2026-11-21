@@ -271,4 +271,16 @@ class AutoBackupTest {
             storage.files.keys.filter { BackupRotation.dateOf(it) != null }.sorted(),
         )
     }
+
+    @Test
+    fun `a third backup on the same day is the one kept, and the run's file is still there`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        storage.files["recomp-backup-2026-09-13.zip"] = byteArrayOf(1)
+        storage.files["recomp-backup-2026-09-13 (1).zip"] = byteArrayOf(2)
+        app.clock.instant = sunday(1)
+        val run = backup.run() as BackupRun.Done
+        assertEquals("recomp-backup-2026-09-13.zip", run.name)
+        assertEquals(listOf("recomp-backup-2026-09-13.zip"), storage.files.keys.filter { BackupRotation.dateOf(it) != null })
+        assertTrue(storage.files.getValue(run.name).size > 2)
+    }
 }

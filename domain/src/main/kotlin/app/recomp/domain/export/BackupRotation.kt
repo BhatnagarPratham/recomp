@@ -37,10 +37,11 @@ object BackupRotation {
      * as "… (1).zip"; the latest copy is kept and the others go, so a day never takes two of the slots), and then only
      * the newest [KEEP] days. Only Recomp's own backup names count; anything else in the folder is left alone.
      */
-    fun <T> toDelete(files: List<T>, name: (T) -> String, keep: Int = KEEP): List<T> {
+    fun <T> toDelete(files: List<T>, name: (T) -> String, keep: Int = KEEP, justWritten: String? = null): List<T> {
         val byDay = files.mapNotNull { f -> dateOf(name(f))?.let { f to it } }
             .groupBy({ it.second }, { it.first })
-            .mapValues { (_, copies) -> copies.sortedByDescending { copyOf(name(it)) } }
+            // The file this run just wrote is the day's latest whatever its name; otherwise the highest "(n)" is.
+            .mapValues { (_, copies) -> copies.sortedWith(compareByDescending<T> { name(it) == justWritten }.thenByDescending { copyOf(name(it)) }) }
         val sameDay = byDay.values.flatMap { it.drop(1) }
         val oldDays = byDay.keys.sortedDescending().drop(keep).map { byDay.getValue(it).first() }
         return sameDay + oldDays

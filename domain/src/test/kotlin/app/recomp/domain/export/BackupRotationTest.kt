@@ -60,4 +60,12 @@ class BackupRotationTest {
         assertTrue("recomp-backup-2026-11-10 (1).zip" in kept && "recomp-backup-2026-11-10.zip" in gone)
         assertTrue("recomp-backup-2026-11-01.zip" in gone && "recomp-backup-2026-11-02.zip" in gone)
     }
+
+    @Test
+    fun `the file a run just wrote is always the one that stays for its day`() {
+        // A third backup that day: the run replaced the plain name, and "(1)" from the second run is still there.
+        val files = listOf("recomp-backup-2026-11-21.zip", "recomp-backup-2026-11-21 (1).zip")
+        assertEquals(listOf("recomp-backup-2026-11-21 (1).zip"), BackupRotation.toDelete(files, { it }, justWritten = "recomp-backup-2026-11-21.zip"))
+        assertEquals(listOf("recomp-backup-2026-11-21.zip"), BackupRotation.toDelete(files, { it }))
+    }
 }

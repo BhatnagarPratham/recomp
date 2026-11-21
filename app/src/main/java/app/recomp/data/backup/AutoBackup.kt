@@ -90,7 +90,7 @@ class AutoBackup @Inject constructor(
             val result = if (target.folder) {
                 val name = BackupRotation.fileName(days.of(now))
                 storage.write(target, name, scratch)
-                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name)
+                val old = BackupRotation.toDelete(storage.files(target), StoredFile::name, justWritten = name)
                 old.forEach { runCatching { storage.delete(it) } }
                 BackupRun.Done(name, old.size)
             } else {
