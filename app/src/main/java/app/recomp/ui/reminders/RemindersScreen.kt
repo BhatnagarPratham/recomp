@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -58,7 +59,6 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.format.TextStyle
-import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -113,6 +113,7 @@ fun RemindersSettingsRow(viewModel: RemindersViewModel = hiltViewModel()) {
 fun RemindersScreen(onBack: () -> Unit, viewModel: RemindersViewModel = hiltViewModel()) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val locale = LocalConfiguration.current.locales[0]
     var permitted by remember { mutableStateOf(AndroidReminderNotifier.permitted(context)) }
     // Coming back from the system's settings may have changed it.
     LifecycleResumeEffect(Unit) {
@@ -182,7 +183,7 @@ fun RemindersScreen(onBack: () -> Unit, viewModel: RemindersViewModel = hiltView
                 ReminderText.label(ReminderKind.SCAN),
                 if (slot == null) "Set your usual scan slot first (Settings → Body data), or log a scan."
                 else ReminderSchedule.scanReminder(slot).let { (day, time) ->
-                    "${day.getDisplayName(TextStyle.FULL, Locale.getDefault())} ${BodyText.time(time)}. " + ReminderText.skippedWhen(ReminderKind.SCAN, null)
+                    "${day.getDisplayName(TextStyle.FULL, locale)} ${BodyText.time(time)}. " + ReminderText.skippedWhen(ReminderKind.SCAN, null)
                 },
                 checked = r.scan && slot != null,
                 enabled = slot != null,
