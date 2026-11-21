@@ -136,6 +136,19 @@ class TestClock(var instant: Instant = Instant.parse("2026-10-18T06:30:00Z"), pr
     override fun instant(): Instant = instant
 }
 
+/** A provider, scripted, for the weekly programme review (M11): each call gets [next]'s reply. */
+class FakeSender : app.recomp.data.ai.AiSender {
+    val calls = mutableListOf<app.recomp.data.ai.AiCall>()
+    var next: (app.recomp.data.ai.AiCall) -> app.recomp.data.ai.AiResult = { call ->
+        app.recomp.data.ai.AiResult(AiStatus.OK, kotlinx.serialization.json.buildJsonObject {}, "{}", call.target.model, emptyList(), 10)
+    }
+
+    override suspend fun send(call: app.recomp.data.ai.AiCall): app.recomp.data.ai.AiResult {
+        calls += call
+        return next(call)
+    }
+}
+
 /** Claude, scripted: each request gets [next]'s reply. [hold] makes requests wait until a test completes it. */
 class FakeEstimator : MealEstimator {
     val requests = mutableListOf<MealRequest>()
@@ -186,6 +199,7 @@ class TestApp(private val dir: File) {
     val localNetwork = FakeLocalNetwork()
     val resolver = FakeHostResolver()
     val estimator = FakeEstimator()
+    val sender = FakeSender()
     val clock = TestClock()
 
     lateinit var db: AppDatabase
@@ -235,7 +249,7 @@ class TestApp(private val dir: File) {
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
-        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, foods, clock)
+        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, sender, foods, clock)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)

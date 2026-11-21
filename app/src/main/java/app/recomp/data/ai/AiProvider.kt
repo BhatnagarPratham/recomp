@@ -90,6 +90,17 @@ interface AiProvider {
     suspend fun send(call: AiCall): AiResult
 }
 
+/** Sends a call to its target's provider: the seam the weekly programme review (M11) goes through, faked in tests. */
+interface AiSender {
+    suspend fun send(call: AiCall): AiResult
+}
+
+/** [AiSender] over the real adapters. */
+@Singleton
+class ProviderSender @Inject constructor(private val providers: AiProviders) : AiSender {
+    override suspend fun send(call: AiCall): AiResult = providers.of(call.target.provider).send(call)
+}
+
 /** The adapter for each provider. The OpenAI-compatible provider speaks OpenAI's protocol at its own base URL. */
 @Singleton
 class AiProviders @Inject constructor(

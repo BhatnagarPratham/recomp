@@ -48,7 +48,8 @@ data class FoodFacts(
     val kcal: Int,
     val kcalTarget: Int,
     val proteinG: Int,
-    val proteinTargetG: Int,
+    /** Null in the protein ramp's baseline week, which has no target. */
+    val proteinTargetG: Int?,
     val proteinHit: Int,
     val proteinCounted: Int,
     val orderedPct: Double?,
@@ -149,9 +150,9 @@ object ProgrammeReports {
                     appendLine("No food logged.")
                 } else {
                     if (terms == TargetTerms.ABSOLUTE) {
-                        appendLine("Averages over ${food.daysLogged} days logged: ${food.kcal} kcal (target ${food.kcalTarget}), protein ${food.proteinG} g (target ${food.proteinTargetG})")
+                        appendLine("Averages over ${food.daysLogged} days logged: ${food.kcal} kcal (target ${food.kcalTarget}), protein ${food.proteinG} g" + (food.proteinTargetG?.let { " (target $it)" } ?: " (no target yet)"))
                     } else {
-                        appendLine("Averages over ${food.daysLogged} days logged: calories ${pct(food.kcal, food.kcalTarget)} of target, protein ${pct(food.proteinG, food.proteinTargetG)} of target")
+                        appendLine("Averages over ${food.daysLogged} days logged: calories ${pct(food.kcal, food.kcalTarget)} of target, protein " + (food.proteinTargetG?.let { "${pct(food.proteinG, it)} of target" } ?: "with no target yet"))
                     }
                     if (food.proteinCounted > 0) appendLine("Protein target hit on ${food.proteinHit} of ${food.proteinCounted} days")
                     if (food.orderedPct != null && food.packagedPct != null) {
