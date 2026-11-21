@@ -260,6 +260,7 @@ object DescribeParser {
         fun ownUnit(label: String) = own.firstOrNull { it.first.lowercase() == label } ?: own.firstOrNull { FoodWords.words(it.first).lastOrNull() == label }
         var resolved = true
         var sure = true
+        var capped = false
         val why: String
         val amount: Pair<String, Double>
         when {
@@ -277,21 +278,26 @@ object DescribeParser {
                 } else {
                     resolved = false
                     sure = false
-                    amount = usual(food, own, name, household).first
+                    amount = usual(food, own, name, household).unit
                     why = "no “$unit” for this food, so its usual serving was used"
                 }
             }
             else -> {
-                val (serving, certain) = usual(food, own, name, household)
-                amount = serving
-                sure = certain
-                why = if (serving.first == Portions.GRAMS) "no serving size known, so counted as 100 g each" else "1 ${serving.first} = ${Portions.format(serving.second)} g"
+                val serving = usual(food, own, name, household)
+                amount = serving.unit
+                sure = serving.sure
+                capped = serving.capped
+                why = when {
+                    serving.capped -> "its serving looked like more than one piece, so 1 ${serving.unit.first} is counted as ${Portions.format(serving.unit.second)} g"
+                    serving.unit.first == Portions.GRAMS -> "no serving size known, so counted as 100 g each"
+                    else -> "1 ${serving.unit.first} = ${Portions.format(serving.unit.second)} g"
+                }
             }
         }
         val grams = chunk.weight ?: (chunk.quantity * amount.second * if (amount.first == Portions.GRAMS) 100.0 else 1.0)
         val quantity = if (amount.first == Portions.GRAMS) grams else chunk.quantity
         // Counted at 100 g each although the food has servings: none of them looked like one piece (N2).
-        val refused = amount.first == Portions.GRAMS && chunk.weight == null && food.units.any { it.first != Portions.GRAMS }
+        val refused = capped || (amount.first == Portions.GRAMS && chunk.weight == null && food.units.any { it.first != Portions.GRAMS })
         val confidence = when {
             !resolved || refused -> Confidence.LOW
             exact && sure -> Confidence.HIGH
@@ -306,15 +312,32 @@ object DescribeParser {
      * The serving when no unit was typed, and whether it's a sure one: the food's unit named in the text
      * ("2 roti"), else the unit you logged it in last, else its first own serving, else 100 g.
      */
-    private fun usual(food: IndexedFood, own: List<Pair<String, Double>>, name: List<String>, household: Map<String, Double>): Pair<Pair<String, Double>, Boolean> {
+    /** A food's usual serving: the unit and its weight, whether it's sure, and whether a piece's weight was capped. */
+    private class Serving(val unit: Pair<String, Double>, val sure: Boolean, val capped: Boolean = false)
+
+    /** Unit labels that just count pieces, whatever the food. */
+    private val COUNT_WORDS = setOf("piece", "pc", "pcs", "nos", "no")
+
+    private fun usual(food: IndexedFood, own: List<Pair<String, Double>>, name: List<String>, household: Map<String, Double>): Serving {
         val words = name.map(FoodWords::canonical).toSet()
         fun named(unit: Pair<String, Double>) = FoodWords.words(unit.first).map(FoodWords::canonical).let { it.isNotEmpty() && words.containsAll(it) }
-        // A unit named after the dish counts pieces, so one piece must weigh like one: INDB's "gulab jamun" unit is a
-        // whole recipe's serving. Your own foods' units are yours, so they're taken as they are.
-        fun believable(unit: Pair<String, Double>) = food.own || !named(unit) || unit.second <= (pieceCap(unit.first) ?: Double.MAX_VALUE)
-        own.firstOrNull { named(it) && believable(it) && Portions.plausible(it.second) }?.let { return it to true }
-        food.lastUnit?.let { last -> (own.firstOrNull { it.first == last } ?: household[last]?.let { last to it })?.let { return it to true } }
-        own.firstOrNull()?.takeIf { (food.own || Portions.plausible(it.second)) && believable(it) }?.let { return it to (own.size == 1) }
-        return (Portions.GRAMS to 1.0) to false
+        // The small piece the typed name or the food's name is, if any ("rasgulla").
+        val nameWords = words + FoodWords.words(food.name).map(FoodWords::canonical)
+        val namedPiece = SMALL_PIECES.entries.firstOrNull { (piece, _) -> FoodWords.words(piece).map(FoodWords::canonical).let { nameWords.containsAll(it) } }?.value
+        // A unit that counts pieces of the dish ("gulab jamun", or a plain "piece" of rasgulla) must weigh like one:
+        // INDB's are often a whole recipe's serving. Your own foods' units are yours, so they're taken as they are.
+        fun cap(unit: Pair<String, Double>): Double? = when {
+            food.own -> null
+            named(unit) -> pieceCap(unit.first)
+            unit.first.lowercase() in COUNT_WORDS -> namedPiece
+            else -> null
+        }
+        fun believable(unit: Pair<String, Double>) = cap(unit)?.let { unit.second <= it } ?: true
+        own.firstOrNull { named(it) && believable(it) && Portions.plausible(it.second) }?.let { return Serving(it, true) }
+        food.lastUnit?.let { last -> (own.firstOrNull { it.first == last } ?: household[last]?.let { last to it })?.let { return Serving(it, true) } }
+        own.firstOrNull()?.takeIf { (food.own || Portions.plausible(it.second)) && believable(it) }?.let { return Serving(it, own.size == 1) }
+        // A refused piece counts at the most one piece can weigh, not 100 g: a best guess of 4 biscuits shouldn't be 400 g.
+        own.firstNotNullOfOrNull { unit -> cap(unit)?.takeIf { unit.second > it }?.let { unit.first to it } }?.let { return Serving(it, false, capped = true) }
+        return Serving(Portions.GRAMS to 1.0, false)
     }
 }

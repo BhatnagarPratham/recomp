@@ -444,8 +444,8 @@ class DescribeParserTest {
     fun `N2 - a dish-named unit too big for one piece isn't taken as one`() {
         val index = TestIndex(listOf(food("Gulab jamun", FoodDiet.VEGETARIAN, units = listOf("gulab jamun" to 156.0)), food("Boiled egg", FoodDiet.EGG, units = listOf("egg" to 151.0))))
         val jamun = guess("2 gulab jamun", index)
-        assertEquals(200.0, jamun.grams, 1e-6)
-        assertTrue(jamun.note, "100 g" in jamun.note)
+        assertEquals("re-check N8: one piece at the cap, not 100 g", 120.0, jamun.grams, 1e-6)
+        assertTrue(jamun.note, "more than one piece" in jamun.note)
         assertEquals(Confidence.LOW, guess("2 boiled eggs", index).confidence)
         // A piece-sized unit is still used, and your own foods' units are yours.
         val small = TestIndex(listOf(food("Gulab jamun", FoodDiet.VEGETARIAN, units = listOf("gulab jamun" to 40.0))))
@@ -477,5 +477,17 @@ class DescribeParserTest {
             val food = IndexedFood(1, "X", source, Per100g(1.0, 1.0, 1.0, 1.0))
             assertEquals(source.name, source !in IndexedFood.BUNDLED, food.own)
         }
+    }
+
+    @Test
+    fun `re-check N7 and N8 - a plain piece of a small sweet is capped, and a refused piece counts at the cap`() {
+        val index = TestIndex(listOf(food("Rasgulla", FoodDiet.VEGETARIAN, units = listOf("piece" to 341.0)), food("Olive biscuit", FoodDiet.VEGETARIAN, units = listOf("biscuit" to 100.0))))
+        val rasgulla = guess("1 rasgulla", index)
+        assertEquals(60.0, rasgulla.grams, 1e-6)
+        assertEquals("piece", rasgulla.unit)
+        assertEquals(100.0, guess("4 biscuits", index).grams, 1e-6)
+        // A believable piece is used as it is, and a "piece" of a food that isn't a small piece isn't capped.
+        assertEquals(Confidence.HIGH, only("1 rasgulla", TestIndex(listOf(food("Rasgulla", FoodDiet.VEGETARIAN, units = listOf("piece" to 45.0))))).confidence)
+        assertEquals(110.0, only("1 samosa", TestIndex(listOf(food("Samosa", units = listOf("piece" to 110.0))))).grams, 1e-6)
     }
 }
