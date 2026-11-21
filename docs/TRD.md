@@ -1619,6 +1619,11 @@ Tests cover:
   - staging limits and the clean-up.
 - `BackupRulesTest`: shared images are left out of cloud backup and device transfer.
 
+| Check | Result |
+|-------|--------|
+| Dev install with invented data | ✅ `app.recomp.m15dev` (d97cb5d), uninstalled afterwards; the real app untouched.<br>- An invented screenshot, labelled as such, was shared from Google Photos through the system share sheet. "What is this?" showed it, and *InBody result* opened the scan form with it pinned above.<br>- The typed scan saved on protocol, with the image kept in app-private storage.<br>- Body then offered *Targets from your scan*; *Save* took the scan-based targets, the card went, and Today showed the new target.<br>- The goal flow's body-fat finish line was enabled, and a 20% target filled the goal weight.<br>- The saved scan reopened with its image, and deleting it deleted the file. |
+| Not run on the phone | The InBody draft prefill, which lands with M13 (#19). A share sent from `adb` can't grant read access, so the app shows its "couldn't be read" screen, as designed; the real share sheet works. |
+
 #### M16: Data out
 
 *DA-02, DA-03, DA-04; PRD §12.12; no Room change.*
