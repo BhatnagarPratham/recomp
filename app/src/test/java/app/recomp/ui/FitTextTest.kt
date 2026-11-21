@@ -58,6 +58,9 @@ class FitTextTest {
         assertEquals("Calories to eat 600 → 220 · protein left 40 g → 20 g", FitText.line(fit))
         val past = FitCheck.of(Goal.LEAN_BULK, 2_800, ProteinGoal.Full(140), Intake(2_600, 100), Macros(380.0, 20.0))
         assertEquals("Calories to eat 200 → 180 over", FitText.calories(past))
+        // N4: exactly at the target is 0 to eat, not "0 over".
+        val at = FitCheck.of(Goal.LEAN_BULK, 2_800, ProteinGoal.Full(140), Intake(2_800, 100), Macros(300.0, 20.0))
+        assertEquals("Calories to eat 0 → 300 over", FitText.calories(at))
     }
 
     @Test
@@ -104,13 +107,22 @@ class FitTextTest {
         )
         val failed = DescribeText.notice(DescribedMeal(emptyList(), requestId = 4, aiFailure = AiStatus.TIMEOUT), AiProviderId.OPENAI)!!
         assertTrue(failed, failed.startsWith("OpenAI didn't answer in time, so these are only the foods matched"))
-        val counted = DescribeText.notice(DescribedMeal(emptyList(), alreadyCounted = listOf("Roti", "Dal"), requestId = 4), AiProviderId.ANTHROPIC)
-        assertEquals("Left out of the AI's part, because it was already counted: Roti, Dal.", counted)
+        assertNull("already-counted items have their own rows now", DescribeText.notice(DescribedMeal(emptyList(), requestId = 4), AiProviderId.ANTHROPIC))
     }
 
     @Test
     fun `the reason alone, for a screen that keeps no drafts`() {
         assertEquals("You're offline.", AiText.firstSentence("You're offline. Keep this as a draft and estimate it later; search works offline."))
         assertEquals("One sentence.", AiText.firstSentence("One sentence."))
+    }
+
+    @Test
+    fun `a best guess's line, and why a save failed`() {
+        val item = app.recomp.domain.ai.EstimatedItem("Stewed apple", 1.0, "bowl", 150.0, 120.4, 0.5, 30.0, 0.2, 3.0, app.recomp.domain.ai.Confidence.LOW, "")
+        assertEquals("Best guess: Stewed apple · 1 bowl · 120 kcal", DescribeText.guess(item))
+        assertEquals("Best guess: Stewed apple · 150 g · 120 kcal", DescribeText.guess(item.copy(unit = "g", quantity = 150.0)))
+        assertTrue(DescribeText.saveFailed(IllegalArgumentException("That food is gone")).startsWith("Couldn't save: one of these foods is no longer"))
+        assertEquals("Couldn't save: there's nothing to log. Add an item, or go back.", DescribeText.saveFailed(IllegalArgumentException("Nothing to log")))
+        assertEquals("Couldn't save this. Nothing was logged; try again.", DescribeText.saveFailed(IllegalStateException("disk")))
     }
 }

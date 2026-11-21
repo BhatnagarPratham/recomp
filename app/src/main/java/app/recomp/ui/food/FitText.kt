@@ -27,7 +27,7 @@ object FitText {
         is MainNumber.CaloriesInRange ->
             "Calories ${GoalText.n(fit.kcalBefore)} → ${GoalText.n(fit.kcalAfter)} (range ${GoalText.n(after.band.first)}–${GoalText.n(after.band.last)})"
         is MainNumber.CaloriesToEat -> when {
-            fit.kcalLeftBefore <= 0 -> "Calories ${over(fit.kcalLeftBefore)} → ${over(fit.kcalLeftAfter)}"
+            fit.kcalLeftBefore < 0 -> "Calories ${over(fit.kcalLeftBefore)} → ${over(fit.kcalLeftAfter)}"
             fit.kcalLeftAfter < 0 -> "Calories to eat ${GoalText.n(fit.kcalLeftBefore)} → ${over(fit.kcalLeftAfter)}"
             else -> "Calories to eat ${GoalText.n(fit.kcalLeftBefore)} → ${GoalText.n(fit.kcalLeftAfter)}"
         }

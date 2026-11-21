@@ -16,7 +16,7 @@ class DescribeMergeTest {
     fun `the AI's new items are kept`() {
         val merged = DescribeMerge.merge(listOf(parsed("Chapati/Roti", "2 roti")), listOf(ai("Cucumber salad")))
         assertEquals(listOf("Cucumber salad"), merged.items.map { it.name })
-        assertEquals(emptyList<String>(), merged.dropped)
+        assertEquals(emptyList<EstimatedItem>(), merged.alreadyCounted)
     }
 
     @Test
@@ -24,13 +24,37 @@ class DescribeMergeTest {
         val counted = listOf(parsed("Chapati/Roti", "2 phulkas"), parsed("Pea paneer curry (Matar paneer)", "1 katori matar paneer"))
         val merged = DescribeMerge.merge(counted, listOf(ai("Roti"), ai("Chapatis"), ai("Phulka"), ai("Matar Paneer"), ai("Pea paneer curry"), ai("Salad")))
         assertEquals(listOf("Salad"), merged.items.map { it.name })
-        assertEquals(listOf("Roti", "Chapatis", "Phulka", "Matar Paneer", "Pea paneer curry"), merged.dropped)
+        assertEquals(listOf("Roti", "Chapatis", "Phulka", "Matar Paneer", "Pea paneer curry"), merged.alreadyCounted.map { it.name })
     }
 
     @Test
-    fun `a different dish that shares a word is not dropped`() {
-        val merged = DescribeMerge.merge(listOf(parsed("Dal", "1 katori dal")), listOf(ai("Dal makhani"), ai("Paneer")))
-        assertEquals(listOf("Dal makhani", "Paneer"), merged.items.map { it.name })
+    fun `S3 - a counted dish the AI renames with descriptors is still counted`() {
+        val counted = listOf(parsed("Chapati/Roti", "2 roti"), parsed("Dal makhani", "1 katori dal makhani"))
+        val names = listOf(
+            "Roti", "Chapati", "Rotis", "2 Roti", "Dal Makhani", "Makhani dal",
+            "Roti (2 pcs)", "Whole wheat roti", "Butter roti", "Dal makhani (restaurant style)", "Black dal makhani",
+        )
+        val merged = DescribeMerge.merge(counted, names.map(::ai) + ai("Cucumber salad"))
+        assertEquals(names, merged.alreadyCounted.map { it.name })
+        assertEquals(listOf("Cucumber salad"), merged.items.map { it.name })
+    }
+
+    @Test
+    fun `an item that answers a part sent to the AI is kept, even when it shares a word with a counted one`() {
+        val counted = listOf(parsed("Dal", "1 katori dal"))
+        // "dal makhani" was sent to be estimated: the AI's dal makhani is that, not the counted dal again.
+        val asked = DescribeMerge.merge(counted, listOf(ai("Dal makhani"), ai("Paneer")), unsure = listOf("1 bowl dal makhani"))
+        assertEquals(listOf("Dal makhani", "Paneer"), asked.items.map { it.name })
+        // Nothing like it was sent, so it's the counted dal described again, set aside with Add anyway.
+        val repeat = DescribeMerge.merge(counted, listOf(ai("Dal makhani"), ai("Paneer")), unsure = listOf("paneer"))
+        assertEquals(listOf("Paneer"), repeat.items.map { it.name })
+        assertEquals(listOf("Dal makhani"), repeat.alreadyCounted.map { it.name })
+    }
+
+    @Test
+    fun `an egg dish isn't counted as the roti just because egg is also a unit word`() {
+        val merged = DescribeMerge.merge(listOf(parsed("Chapati/Roti", "2 roti")), listOf(ai("Egg curry"), ai("2 eggs")))
+        assertEquals(listOf("Egg curry", "2 eggs"), merged.items.map { it.name })
     }
 
     @Test

@@ -15,7 +15,15 @@ data class IndexedFood(
     val lastUnit: String? = null,
 ) {
     /** Yours: a custom food, one learned from an AI estimate you edited, or a label you scanned. */
-    val own: Boolean get() = source == FoodSource.CUSTOM || source == FoodSource.AI || source == FoodSource.LABEL_OCR
+    val own: Boolean get() = source !in BUNDLED
+
+    companion object {
+        /**
+         * The sources that come with the app or a public database. Every other source is yours (custom, AI-learned,
+         * a scanned label, and any kind of food added later, such as recipes), so a new source counts as yours.
+         */
+        val BUNDLED = setOf(FoodSource.SEED, FoodSource.INDB, FoodSource.OFF)
+    }
 }
 
 /**
@@ -52,8 +60,15 @@ data class ParsedItem(
     val counted: String get() = "$typed = ${food.name}, ${Portions.format(grams)} g"
 }
 
-/** A parsed description: what matched, and the chunks that didn't, as typed. */
-data class ParsedMeal(val items: List<ParsedItem>, val unmatched: List<String>)
+/**
+ * A parsed description: what matched, and the chunks that didn't, as typed. [guesses] are low-confidence matches
+ * (a food you've never logged whose name isn't what you typed, or an amount the parser couldn't place): with AI on
+ * they go to the AI like unmatched chunks, and with AI off they're offered as a best guess, never logged as matched.
+ */
+data class ParsedMeal(val items: List<ParsedItem>, val unmatched: List<String>, val guesses: List<ParsedItem> = emptyList()) {
+    /** Every chunk that isn't a sure match, in the order typed: unmatched text, or a guess. */
+    val unsure: List<String> get() = unmatched + guesses.map { it.typed }
+}
 
 /**
  * The local describe parser (AI-04, TRD §6.2): "2 roti, 1 katori dal makhani and salad" → matched foods with
@@ -66,16 +81,24 @@ object DescribeParser {
 
     private val HARD = Regex("""[,;\n+]""")
 
+    /** "1,5" is one and a half, as many phones type it: a comma between two digits is a decimal point, not a break. */
+    private val DECIMAL_COMMA = Regex("""(\d),(\d)""")
+
     /** One chunk read into its parts. [weight] is a typed weight in grams; [unit] the word typed as a unit. */
     internal data class Chunk(val quantity: Double, val weight: Double?, val unit: String?, val unitWord: String?, val name: List<String>, val typed: String)
 
     suspend fun parse(text: String, index: FoodIndex, household: Map<String, Double>): ParsedMeal {
         val items = mutableListOf<ParsedItem>()
         val unmatched = mutableListOf<String>()
-        val chunks = Quantities.normalise(text.take(MAX_CHARS)).split(HARD).map(Quantities::tokens).filter { it.isNotEmpty() }.take(MAX_CHUNKS)
+        val chunks = Quantities.normalise(text.take(MAX_CHARS)).replace(DECIMAL_COMMA, "$1.$2").split(HARD).map(Quantities::tokens).filter { it.isNotEmpty() }.take(MAX_CHUNKS)
         for (tokens in chunks) {
             // "poha with curd" is one dish when a food carries all of it; otherwise "and" and "with" split it.
-            val whole = if (tokens.any { it in FoodWords.SOFT }) chunk(tokens, index.unitLabels, keepSoft = true)?.let { match(it, index, household) } else null
+            // Only a sure match keeps it whole: a guess at a dish with "with" in it would hide two foods.
+            val whole = if (tokens.any { it in FoodWords.SOFT }) {
+                chunk(tokens, index.unitLabels, keepSoft = true)?.let { match(it, index, household) }?.takeIf { it.confidence != Confidence.LOW }
+            } else {
+                null
+            }
             if (whole != null) {
                 items += whole
                 continue
@@ -86,7 +109,8 @@ object DescribeParser {
                 if (item != null) items += item else unmatched += chunk.typed
             }
         }
-        return ParsedMeal(items, unmatched)
+        val (guesses, sure) = items.partition { it.confidence == Confidence.LOW }
+        return ParsedMeal(sure, unmatched, guesses)
     }
 
     /** A typed chunk without its amount and unit ("1 katori cucumber salad" → "cucumber salad"), to search for or name a quick add. */
@@ -153,11 +177,11 @@ object DescribeParser {
     }
 
     private suspend fun match(chunk: Chunk, index: FoodIndex, household: Map<String, Double>): ParsedItem? {
-        val asUnit = pick(chunk.name, index)?.let { item(chunk, it.first, it.second, chunk.name, chunk.unit, household) }
+        val asUnit = pick(chunk.name, index)?.let { item(chunk, it, chunk.name, chunk.unit, household) }
         if (chunk.unitWord == null || asUnit?.second == true) return asUnit?.first
         // The "unit" may be part of the name ("egg curry", "glass noodles"): tried when the food has no such unit.
         val named = listOf(chunk.unitWord) + chunk.name
-        val asName = pick(named, index)?.let { item(chunk, it.first, it.second, named, null, household) }
+        val asName = pick(named, index)?.let { item(chunk, it, named, null, household) }
         return asName?.first ?: asUnit?.first
     }
 
@@ -166,9 +190,14 @@ object DescribeParser {
      * the food's name: "dal makhani" never falls back to plain dal. Exact names among your own foods come first,
      * then exact names, then search's order.
      */
-    private suspend fun pick(name: List<String>, index: FoodIndex): Pair<IndexedFood, Boolean>? {
+    private suspend fun pick(name: List<String>, index: FoodIndex): Pick? {
         val found = LinkedHashMap<Long, Pair<IndexedFood, Int>>()
-        variants(name).forEachIndexed { v, words -> index.lookup(words).forEachIndexed { i, food -> found.getOrPut(food.id) { food to v * 1000 + i } } }
+        variants(name).forEachIndexed { v, words ->
+            index.lookup(words).forEachIndexed { i, food ->
+                // "Mayonnaise without eggs" has the word but not the food.
+                if (words.none { FoodWords.onlyNegated(food.name, it) }) found.getOrPut(food.id) { food to v * 1000 + i }
+            }
+        }
         if (found.isEmpty()) return null
         fun exact(food: IndexedFood) = FoodWords.aliases(food.name).any { FoodWords.sameName(it, name) }
         val wanted = FoodWords.key(name).toSet()
@@ -188,8 +217,20 @@ object DescribeParser {
                 { it.first.name.length },
             ),
         ).first().first
-        return best to exact(best)
+        // Near: the name differs only by everyday words, "rice" for "Boiled rice".
+        return Pick(best, exact(best), extra(best) in 1..PLAIN_EXTRA_MAX && FoodWords.aliases(best.name).any { alias ->
+            val k = FoodWords.key(alias)
+            k.containsAll(wanted) && (k - wanted).all { it in FoodWords.PLAIN }
+        })
     }
+
+    /** A picked food: whether its name is exactly what was typed, or differs only by everyday words. */
+    private class Pick(val food: IndexedFood, val exact: Boolean, val near: Boolean)
+
+    private const val PLAIN_EXTRA_MAX = 2
+
+    /** Above this, a unit named after a countable dish ("gulab jamun", "egg") is a recipe's serving, not one piece. */
+    const val PIECE_MAX_GRAMS = 100.0
 
     /** The words as typed, in the singular, and with each synonym in turn. */
     private fun variants(name: List<String>): List<List<String>> {
@@ -199,7 +240,9 @@ object DescribeParser {
     }
 
     /** The item for a picked food, and whether the typed unit (if any) was one the food or the household has. */
-    private fun item(chunk: Chunk, food: IndexedFood, exact: Boolean, name: List<String>, unit: String?, household: Map<String, Double>): Pair<ParsedItem, Boolean> {
+    private fun item(chunk: Chunk, pick: Pick, name: List<String>, unit: String?, household: Map<String, Double>): Pair<ParsedItem, Boolean> {
+        val food = pick.food
+        val exact = pick.exact
         val own = food.units.filter { (label, grams) -> label != Portions.GRAMS && grams > 0 }
         fun ownUnit(label: String) = own.firstOrNull { it.first.lowercase() == label } ?: own.firstOrNull { FoodWords.words(it.first).lastOrNull() == label }
         var resolved = true
@@ -234,10 +277,12 @@ object DescribeParser {
         }
         val grams = chunk.weight ?: (chunk.quantity * amount.second * if (amount.first == Portions.GRAMS) 100.0 else 1.0)
         val quantity = if (amount.first == Portions.GRAMS) grams else chunk.quantity
+        // Counted at 100 g each although the food has servings: none of them looked like one piece (N2).
+        val refused = amount.first == Portions.GRAMS && chunk.weight == null && food.units.any { it.first != Portions.GRAMS }
         val confidence = when {
-            !resolved -> Confidence.LOW
+            !resolved || refused -> Confidence.LOW
             exact && sure -> Confidence.HIGH
-            exact || (sure && food.useCount > 0) -> Confidence.MEDIUM
+            exact || (sure && (food.useCount > 0 || pick.near)) -> Confidence.MEDIUM
             else -> Confidence.LOW
         }
         val note = listOf("Matched “${chunk.typed}”", why).filter { it.isNotEmpty() }.joinToString("; ")
@@ -250,9 +295,13 @@ object DescribeParser {
      */
     private fun usual(food: IndexedFood, own: List<Pair<String, Double>>, name: List<String>, household: Map<String, Double>): Pair<Pair<String, Double>, Boolean> {
         val words = name.map(FoodWords::canonical).toSet()
-        own.firstOrNull { FoodWords.canonical(it.first.lowercase()) in words }?.let { return it to true }
+        fun named(unit: Pair<String, Double>) = FoodWords.words(unit.first).map(FoodWords::canonical).let { it.isNotEmpty() && words.containsAll(it) }
+        // A unit named after the dish counts pieces, so one piece must weigh like one: INDB's "gulab jamun" unit is a
+        // whole recipe's serving. Your own foods' units are yours, so they're taken as they are.
+        fun believable(unit: Pair<String, Double>) = food.own || !named(unit) || unit.second <= PIECE_MAX_GRAMS
+        own.firstOrNull { named(it) && believable(it) && Portions.plausible(it.second) }?.let { return it to true }
         food.lastUnit?.let { last -> (own.firstOrNull { it.first == last } ?: household[last]?.let { last to it })?.let { return it to true } }
-        own.firstOrNull()?.takeIf { food.own || Portions.plausible(it.second) }?.let { return it to (own.size == 1) }
+        own.firstOrNull()?.takeIf { (food.own || Portions.plausible(it.second)) && believable(it) }?.let { return it to (own.size == 1) }
         return (Portions.GRAMS to 1.0) to false
     }
 }

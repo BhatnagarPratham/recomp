@@ -96,11 +96,13 @@ class FoodLogRepository @Inject constructor(
         combine(foodLogDao.observeDay(date), prefs.mealSlots, nutrition.observeTargets(date), aiDao.observeDrafts(date), prefs.snackAllowance) { entries, slots, targets, drafts, allowance ->
             val bySlot = entries.groupBy { it.mealSlot }
             val draftsBySlot = drafts.groupBy { it.mealSlot }
+            // The allowance's meal, or the default one if that meal was removed (NU-06): the line always has a meal.
+            val allowed = allowance?.slotIn(slots)?.let { allowance.copy(slotKey = it) }
             val meals = MealSlots.forDay(slots, bySlot.keys + draftsBySlot.keys).map { slot ->
                 val rows = bySlot[slot.key].orEmpty()
-                MealGroup(slot, rows, DayTotals.of(rows.map { it.macros }), draftsBySlot[slot.key].orEmpty(), allowance?.kcal?.takeIf { allowance.slotKey == slot.key })
+                MealGroup(slot, rows, DayTotals.of(rows.map { it.macros }), draftsBySlot[slot.key].orEmpty(), allowed?.kcal?.takeIf { allowed.slotKey == slot.key })
             }
-            DayLog(date, meals, DayTotals.of(entries.map { it.macros }), targets, allowance)
+            DayLog(date, meals, DayTotals.of(entries.map { it.macros }), targets, allowed)
         }
 
     /** Logs [quantity] × [unit] of a food, snapshotting its macros (TRD §4). */

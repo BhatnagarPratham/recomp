@@ -55,6 +55,7 @@ import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.MealDescriber
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PortionChoice
+import app.recomp.data.repo.UnmatchedPart
 import app.recomp.data.repo.TodayNutrition
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiProviderId
@@ -90,9 +91,10 @@ sealed interface FitPhase {
     data class Result(
         val requestId: Long?,
         val items: List<ReviewItem>,
-        val unmatched: List<String>,
+        val unmatched: List<UnmatchedPart>,
         val rejected: List<String>,
         val notice: String?,
+        val alreadyCounted: List<ReviewItem> = emptyList(),
     ) : FitPhase
 }
 
@@ -186,9 +188,10 @@ class FitViewModel @Inject constructor(
                     unmatched = result.meal.unmatched,
                     rejected = result.meal.rejected,
                     notice = DescribeText.notice(result.meal, provider()),
+                    alreadyCounted = result.meal.countedItems(),
                 )
                 // Only when describing itself broke: nothing was found, and the reason is all there is to show.
-                is DescribeResult.Failed -> FitPhase.Result(null, emptyList(), listOf(description), emptyList(), AiText.reason(result.status, provider()) + ".")
+                is DescribeResult.Failed -> FitPhase.Result(null, emptyList(), listOf(UnmatchedPart(description)), emptyList(), AiText.reason(result.status, provider()) + ".")
             }
         }
     }
@@ -210,6 +213,8 @@ class FitViewModel @Inject constructor(
     override fun resolve(chunk: String, item: ReviewItem) = edit { it.copy(items = it.items + item, unmatched = ReviewEdits.without(it.unmatched, chunk)) }
 
     override fun skip(chunk: String) = edit { it.copy(unmatched = ReviewEdits.without(it.unmatched, chunk)) }
+
+    override fun addAnyway(index: Int) = edit { r -> ReviewEdits.addAnyway(r.items, r.alreadyCounted, index).let { (items, counted) -> r.copy(items = items, alreadyCounted = counted) } }
 
     override suspend fun searchFoods(query: String): List<FoodHit> = foods.search(query)
 
@@ -233,6 +238,11 @@ class FitViewModel @Inject constructor(
                 )
                 val name = log.mealSlots.first().firstOrNull { it.key == into }?.name ?: into
                 _outcome.value = DescribeOutcome("Logged to $name · ${FoodText.kcalProtein(result.items.totals())}", ids)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Nothing logged: the result stays, with the reason.
+                (_phase.value as? FitPhase.Result)?.let { _phase.value = it.copy(notice = DescribeText.saveFailed(e)) }
             } finally {
                 if (_outcome.value == null) _busy.value = false
             }
@@ -361,9 +371,16 @@ fun FitScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewModel: 
                         }
                     }
                     itemsIndexed(p.items) { index, r -> ReviewRow(r, onClick = { target = ReviewTarget.Edit(index) }) }
-                    itemsIndexed(p.unmatched) { _, chunk ->
-                        UnmatchedRow(chunk, onSearch = { target = ReviewTarget.Search(chunk) }, onQuickAdd = { target = ReviewTarget.Quick(chunk) }, onSkip = { viewModel.skip(chunk) })
+                    itemsIndexed(p.unmatched) { _, part ->
+                        UnmatchedRow(
+                            part,
+                            onUse = { part.guess?.let { viewModel.resolve(part.typed, it.reviewItem()) } },
+                            onSearch = { target = ReviewTarget.Search(part.typed) },
+                            onQuickAdd = { target = ReviewTarget.Quick(part.typed) },
+                            onSkip = { viewModel.skip(part.typed) },
+                        )
                     }
+                    itemsIndexed(p.alreadyCounted) { index, r -> CountedRow(r, onAdd = { viewModel.addAnyway(index) }) }
                 }
                 Column(Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Log it to", style = MaterialTheme.typography.labelLarge)

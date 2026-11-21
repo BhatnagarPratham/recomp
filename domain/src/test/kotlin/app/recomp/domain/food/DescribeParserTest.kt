@@ -70,7 +70,7 @@ class DescribeParserTest {
         food("Curd (dahi), whole milk", FoodDiet.VEGETARIAN, FoodSource.SEED),
         food("Curd rice (Dahi bhaat)", FoodDiet.VEGETARIAN, units = listOf("bowl" to 230.0)),
         food("Plain khitchdi (Plain khichri/khichdi)", units = listOf("bowl" to 258.0)),
-        food("Glucose biscuit", FoodDiet.VEGETARIAN, units = listOf("biscuit" to 6.0)),
+        food("Biscuit (glucose)", FoodDiet.VEGETARIAN, units = listOf("biscuit" to 6.0)),
         food("Chicken curry", FoodDiet.MEAT, units = listOf("bowl" to 240.0)),
         food("Hot tea (Garam Chai)", FoodDiet.VEGETARIAN, units = listOf("tea cup" to 210.0)),
         food("Oats porridge", FoodDiet.VEGETARIAN),
@@ -170,7 +170,7 @@ class DescribeParserTest {
         assertItem("roti x2", "Chapati/Roti", 80.0)
         assertItem("roti 2", "Chapati/Roti", 80.0)
         assertItem("rajma 1 katori", "Rajma (kidney beans), boiled", 150.0)
-        assertItem("2-3 biscuits", "Glucose biscuit", 15.0)
+        assertItem("2-3 biscuits", "Biscuit (glucose)", 15.0)
     }
 
     @Test
@@ -244,9 +244,20 @@ class DescribeParserTest {
         assertItem("2 eggs", "Egg, whole", 100.0)
     }
 
+    /** A low-confidence match is never an item: it's a guess, offered with the unmatched parts (S1). */
+    private fun guess(text: String, index: FoodIndex = TestIndex(foods)): ParsedItem {
+        val meal = parse(text, index)
+        assertEquals("items in “$text”: ${meal.items.map { it.food.name }}", emptyList<ParsedItem>(), meal.items)
+        assertEquals("unmatched in “$text”", emptyList<String>(), meal.unmatched)
+        val g = meal.guesses.single()
+        assertEquals(Confidence.LOW, g.confidence)
+        assertEquals(listOf(g.typed), meal.unsure)
+        return g
+    }
+
     @Test
-    fun `a unit the food doesn't have falls back to its usual serving, marked low`() {
-        val item = only("2 slices paneer")
+    fun `a unit the food doesn't have falls back to its usual serving, as a guess`() {
+        val item = guess("2 slices paneer")
         assertEquals("Paneer", item.food.name)
         assertEquals(50.0, item.grams, 1e-6)
         assertEquals("piece", item.unit)
@@ -277,9 +288,10 @@ class DescribeParserTest {
     fun `confidence follows how sure the match and the amount are`() {
         assertEquals(Confidence.HIGH, only("2 roti").confidence)
         assertEquals(Confidence.HIGH, only("1 katori rajma").confidence)
-        assertEquals("not an exact name and never logged", Confidence.LOW, only("1 plate rice").confidence)
-        val logged = foods.map { if (it.food.name.startsWith("Boiled rice")) it.copy(food = it.food.copy(useCount = 2)) else it }
-        assertEquals(Confidence.MEDIUM, only("1 plate rice", TestIndex(logged)).confidence)
+        assertEquals("only everyday words differ: rice is boiled rice", Confidence.MEDIUM, only("1 plate rice").confidence)
+        assertEquals("not an exact name and never logged", "Spanish rice", guess("1 plate spanish").food.name)
+        val logged = foods.map { if (it.food.name == "Spanish rice") it.copy(food = it.food.copy(useCount = 2)) else it }
+        assertEquals(Confidence.MEDIUM, only("1 plate spanish", TestIndex(logged)).confidence)
     }
 
     @Test
@@ -346,5 +358,108 @@ class DescribeParserTest {
         assertEquals(4.0, item.proteinG, 1e-6)
         assertEquals(2.0, item.quantity, 1e-6)
         assertEquals("roti", item.unit)
+    }
+
+    // PR #15's review: the reviewer's probes as cases, over invented foods named like the database's.
+
+    @Test
+    fun `S1 - a wrong dish that merely contains the word is a guess, never a match`() {
+        val index = TestIndex(
+            listOf(
+                food("Vegetarian egg kofta curry", FoodDiet.VEGETARIAN, units = listOf("bowl" to 250.0)),
+                food("Coffee drops", units = listOf("cup" to 240.0), kcal = 440.0),
+                food("Apple mousse", FoodDiet.VEGETARIAN, units = listOf("bowl" to 365.0)),
+                food("Stewed apple", units = listOf("bowl" to 150.0)),
+                food("Banana raita", FoodDiet.VEGETARIAN, units = listOf("bowl" to 200.0)),
+                food("Banana cake", FoodDiet.EGG, units = listOf("slice" to 60.0)),
+                food("Bread upma", units = listOf("bowl" to 200.0)),
+            ),
+        )
+        listOf("1 egg" to "Vegetarian egg kofta curry", "1 apple" to "Apple mousse", "2 bananas" to "Banana raita", "2 slices bread" to "Bread upma")
+            .forEach { (typed, dish) -> assertEquals(typed, dish, guess(typed, index).food.name) }
+        // With other parts typed, the guess still isn't counted.
+        val coffee = parse("1 cup coffee with milk", index)
+        assertTrue(coffee.items.none { it.food.name == "Coffee drops" })
+        assertEquals(listOf("1 cup coffee"), coffee.guesses.map { it.typed })
+        assertTrue(coffee.unsure.containsAll(listOf("1 cup coffee", "milk")))
+    }
+
+    @Test
+    fun `S1 - a word the name says the food is without never matches`() {
+        val index = TestIndex(listOf(food("Mayonnaise without eggs", FoodDiet.VEGETARIAN, units = listOf("cup" to 387.0)), food("Eggless cake (no egg)", FoodDiet.VEGETARIAN)))
+        val meal = parse("2 eggs", index)
+        assertEquals(emptyList<ParsedItem>(), meal.items + meal.guesses)
+        assertEquals(listOf("2 eggs"), meal.unmatched)
+        assertTrue(FoodWords.onlyNegated("Mayonnaise without eggs", "egg"))
+        assertTrue(!FoodWords.onlyNegated("Egg curry, no onion", "egg"))
+    }
+
+    @Test
+    fun `S1 - a sure match with an unsure one keeps only the sure one as matched`() {
+        val meal = parse("2 roti and 2 slices paneer")
+        assertEquals(listOf("Chapati/Roti"), meal.items.map { it.food.name })
+        assertEquals(listOf("2 slices paneer"), meal.guesses.map { it.typed })
+    }
+
+    @Test
+    fun `S2 - a slash after a longer name is another spelling of its last word, not a bare name`() {
+        assertEquals(
+            listOf(listOf("dal", "parantha", "paratha"), listOf("dal", "parantha"), listOf("dal", "paratha")),
+            FoodWords.aliases("Dal parantha/paratha"),
+        )
+        assertTrue(FoodWords.aliases("Quinoa khichdi/khichri").none { it == listOf("khichri") })
+        assertTrue(FoodWords.aliases("Okra/Lady's fingers fry (Bhindi sabzi/sabji/subji)").none { it.size == 1 && it[0] in setOf("sabji", "subji") })
+        assertTrue("between single words each side is a name", FoodWords.aliases("Chapati/Roti").containsAll(listOf(listOf("chapati"), listOf("roti"))))
+        assertTrue("after one word too", listOf("okra") in FoodWords.aliases("Okra/Lady's fingers fry (Bhindi sabzi/sabji/subji)"))
+
+        val index = TestIndex(
+            listOf(
+                food("Dal parantha/paratha", FoodDiet.VEGETARIAN, units = listOf("parantha" to 90.0)),
+                food("Quinoa khichdi/khichri", units = listOf("bowl" to 250.0)),
+                food("Okra/Lady's fingers fry (Bhindi sabzi/sabji/subji)", units = listOf("bowl" to 150.0)),
+            ),
+        )
+        assertEquals("Dal parantha/paratha", guess("paratha", index).food.name)
+        assertEquals("Quinoa khichdi/khichri", guess("khichdi", index).food.name)
+        assertEquals("Quinoa khichdi/khichri", guess("1 bowl khichdi", index).food.name)
+        assertEquals(Confidence.LOW, guess("subji", index).confidence)
+        assertEquals(Confidence.LOW, guess("1 bowl sabji", index).confidence)
+        // The full spelling is still exact.
+        assertEquals(Confidence.HIGH, parse("1 bowl quinoa khichri", index).items.single().confidence)
+        assertEquals(Confidence.HIGH, parse("1 bowl bhindi subji", index).items.single().confidence)
+        // And the everyday version is a sure match when there is one.
+        val plain = TestIndex(listOf(food("Plain parantha/paratha", units = listOf("parantha" to 80.0)), food("Dal parantha/paratha", FoodDiet.VEGETARIAN)))
+        assertEquals("Plain parantha/paratha", only("2 paratha", plain).food.name)
+        assertEquals(Confidence.MEDIUM, only("2 paratha", plain).confidence)
+    }
+
+    @Test
+    fun `N1 - a comma between digits is a decimal point`() {
+        assertItem("1,5 roti", "Chapati/Roti", 60.0)
+        assertEquals(1.5, only("1,5 roti").quantity, 1e-9)
+        assertEquals(listOf(80.0, 150.0), parse("2 roti,1 katori rajma").items.map { it.grams })
+    }
+
+    @Test
+    fun `N2 - a dish-named unit too big for one piece isn't taken as one`() {
+        val index = TestIndex(listOf(food("Gulab jamun", FoodDiet.VEGETARIAN, units = listOf("gulab jamun" to 156.0)), food("Boiled egg", FoodDiet.EGG, units = listOf("egg" to 151.0))))
+        val jamun = guess("2 gulab jamun", index)
+        assertEquals(200.0, jamun.grams, 1e-6)
+        assertTrue(jamun.note, "100 g" in jamun.note)
+        assertEquals(Confidence.LOW, guess("2 boiled eggs", index).confidence)
+        // A piece-sized unit is still used, and your own foods' units are yours.
+        val small = TestIndex(listOf(food("Gulab jamun", FoodDiet.VEGETARIAN, units = listOf("gulab jamun" to 40.0))))
+        assertEquals(80.0, only("2 gulab jamun", small).grams, 1e-6)
+        val mine = TestIndex(listOf(food("Gulab jamun", FoodDiet.VEGETARIAN, FoodSource.CUSTOM, units = listOf("gulab jamun" to 156.0))))
+        assertEquals(312.0, only("2 gulab jamun", mine).grams, 1e-6)
+    }
+
+    @Test
+    fun `a food from a source added later counts as your own`() {
+        assertEquals(setOf(FoodSource.SEED, FoodSource.INDB, FoodSource.OFF), IndexedFood.BUNDLED)
+        FoodSource.entries.forEach { source ->
+            val food = IndexedFood(1, "X", source, Per100g(1.0, 1.0, 1.0, 1.0))
+            assertEquals(source.name, source !in IndexedFood.BUNDLED, food.own)
+        }
     }
 }

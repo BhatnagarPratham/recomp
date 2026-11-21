@@ -55,9 +55,7 @@ object FoodWords {
     private val GROUP_OF: Map<String, List<String>> = NAME_GROUPS.flatMap { group -> group.map { it to group } }.toMap()
 
     /** Words that mark the everyday version of a food: "rice" means boiled rice before lemon rice. */
-    val PLAIN = setOf("plain", "boiled", "steamed", "cooked", "whole", "simple")
-
-    private val NAME_BREAK = Regex("""[/(),;]|\bor\b""")
+    val PLAIN = setOf("plain", "boiled", "steamed", "cooked", "whole", "simple", "hot")
 
     /** "rotis" → "roti", "mangoes" → "mango", "berries" → "berry". A guess: callers try the typed word first. */
     fun singular(word: String): String = when {
@@ -90,12 +88,42 @@ object FoodWords {
     fun words(text: String): List<String> = Quantities.tokens(text.lowercase()).filterNot(Quantities::isNumber)
 
     /**
-     * The names a food goes by: its whole name, and each part between `/`, brackets and commas, so
-     * "Chapati/Roti" is both a chapati and a roti and "Pea paneer curry (Matar paneer)" is matar paneer.
+     * The names a food goes by: its whole name, and each part between brackets and commas, so "Pea paneer curry
+     * (Matar paneer)" is matar paneer. A slash is read two ways, as the database uses it:
+     * - between single words ("Chapati/Roti") or after one word ("Okra/Lady's fingers fry"), each side is a name;
+     * - after a longer name, a single word is another spelling of its last word: "Quinoa khichdi/khichri" is quinoa
+     *   khichdi or quinoa khichri, never a bare khichri, and "Bhindi sabzi/sabji/subji" is never a bare subji.
      */
     fun aliases(name: String): List<List<String>> {
-        val parts = name.lowercase().split(NAME_BREAK).map(::words).filter { it.isNotEmpty() }
-        return (listOf(words(name)) + parts).distinct()
+        val parts = name.lowercase().split(SEGMENT).flatMap(::slashNames).filter { it.isNotEmpty() }
+        // The name without what's in brackets: "Milk, toned (3% fat)" is toned milk.
+        val outside = words(name.replace(BRACKETED, " ").replace('/', ' ')).takeIf { '(' in name }
+        return (listOf(words(name)) + listOfNotNull(outside) + parts).distinct()
+    }
+
+    private val SEGMENT = Regex("""[(),;]|\bor\b""")
+
+    private val BRACKETED = Regex("""\([^)]*\)""")
+
+    /** One bracket- or comma-separated part of a name, read for slashes (see [aliases]). */
+    private fun slashNames(part: String): List<List<String>> {
+        val sides = part.split('/').map(::words).filter { it.isNotEmpty() }
+        if (sides.size < 2) return sides
+        val first = sides.first()
+        if (first.size == 1) return sides
+        return listOf(first) + sides.drop(1).map { side -> if (side.size == 1) first.dropLast(1) + side else side }
+    }
+
+    /** Words after which a name lists what the food is without: "Mayonnaise without eggs" isn't eggs. */
+    val NEGATORS = setOf("without", "no", "eggless")
+
+    /** Whether every place [word] appears in [name] comes after "without" or "no", so the food doesn't have it. */
+    fun onlyNegated(name: String, word: String): Boolean {
+        val all = words(name).map(::canonical)
+        val target = canonical(word)
+        val at = all.indices.filter { all[it] == target }
+        val negator = all.indexOfFirst { it in NEGATORS }
+        return at.isNotEmpty() && negator >= 0 && at.all { it > negator }
     }
 
     /** Whether two names are the same food name, ignoring plurals, synonyms and word order. */

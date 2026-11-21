@@ -7,8 +7,11 @@ package app.recomp.domain.food
 data class SnackAllowance(val kcal: Int, val slotKey: String = DEFAULT_SLOT) {
     val valid: Boolean get() = kcal in OPTIONS && slotKey.isNotBlank()
 
-    /** What the rest of the day's meals have, once the snack is set aside. Never below zero. */
-    fun restOfDay(kcalTarget: Int): Int = (kcalTarget - kcal).coerceAtLeast(0)
+    /**
+     * The meal the allowance counts against today: its own, or, once that meal is removed, the meal a new allowance
+     * would take, so the day never says "includes a snack allowance" with no meal showing it.
+     */
+    fun slotIn(slots: List<MealSlot>): String? = slots.firstOrNull { it.key == slotKey && !it.removed }?.key ?: defaultSlot(slots)
 
     companion object {
         const val DEFAULT_SLOT = "snacks"

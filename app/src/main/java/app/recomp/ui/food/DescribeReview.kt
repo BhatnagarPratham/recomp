@@ -33,7 +33,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.recomp.data.db.FoodEntity
+import app.recomp.data.repo.DescribedItem
 import app.recomp.data.repo.DescribedMeal
+import app.recomp.data.repo.UnmatchedPart
 import app.recomp.data.repo.FoodHit
 import app.recomp.data.repo.ItemFrom
 import app.recomp.data.repo.MealItemToLog
@@ -98,7 +100,13 @@ data class ReviewItem(
 }
 
 /** A described meal's items as the review starts with them. */
-fun DescribedMeal.reviewItems(): List<ReviewItem> = items.map { ReviewItem(it.item, it.item, it.from, it.foodId) }
+fun DescribedMeal.reviewItems(): List<ReviewItem> = items.map { it.reviewItem() }
+
+/** An item as the review holds it. */
+fun DescribedItem.reviewItem(): ReviewItem = ReviewItem(item, item, from, foodId)
+
+/** AI items set aside as already counted, offered with *Add anyway*. */
+fun DescribedMeal.countedItems(): List<ReviewItem> = alreadyCounted.map { ReviewItem(it, it, ItemFrom.AI) }
 
 /** The items' totals, for the review's header and *Will it fit?*. */
 fun List<ReviewItem>.totals(): Macros = MealCheck.totals(map { it.current })
@@ -126,23 +134,52 @@ interface ReviewActions {
     /** Drops a "Couldn't find" chunk without adding anything. */
     fun skip(chunk: String)
 
+    /** Adds an AI item that was set aside as already counted (S3: the check errs on the side of not counting twice). */
+    fun addAnyway(index: Int)
+
     suspend fun searchFoods(query: String): List<FoodHit>
 
     suspend fun portion(foodId: Long): PortionChoice?
 }
 
-/** "Couldn't find: salad", with *Search* and *Quick add* (PRD §12.5). Nothing is logged until the meal is saved. */
+/**
+ * "Couldn't find: salad", with *Search* and *Quick add* (PRD §12.5). A low-confidence match is shown here as a best
+ * guess with *Use it*, never as matched. Nothing is logged until the meal is saved.
+ */
 @Composable
-internal fun UnmatchedRow(chunk: String, onSearch: () -> Unit, onQuickAdd: () -> Unit, onSkip: () -> Unit) {
+internal fun UnmatchedRow(part: UnmatchedPart, onUse: () -> Unit, onSearch: () -> Unit, onQuickAdd: () -> Unit, onSkip: () -> Unit) {
+    val chunk = part.typed
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Couldn't find: $chunk", style = MaterialTheme.typography.bodyLarge)
+            Text(if (part.guess == null) "Couldn't find: $chunk" else "Not sure about: $chunk", style = MaterialTheme.typography.bodyLarge)
+            part.guess?.let { g ->
+                Text(
+                    DescribeText.guess(g.item),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(onClick = onUse, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Use ${g.item.name} for $chunk" }) { Text("Use it") }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onSearch, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Search for $chunk" }) { Text("Search") }
                 OutlinedButton(onClick = onQuickAdd, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Quick add $chunk" }) { Text("Quick add") }
                 TextButton(onClick = onSkip, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Leave out $chunk" }) { Text("Leave out") }
             }
         }
+    }
+}
+
+/** An AI item set aside because the parser already counted it, with *Add anyway* (PRD §12.5, as built). */
+@Composable
+internal fun CountedRow(item: ReviewItem, onAdd: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Text(
+            "Already counted: ${item.current.name} · ${FoodText.kcalProtein(item.current.macros)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Add ${item.current.name} anyway" }) { Text("Add anyway") }
     }
 }
 
@@ -247,9 +284,15 @@ object ReviewEdits {
 
     fun remove(items: List<ReviewItem>, index: Int): List<ReviewItem> = items.filterIndexed { i, _ -> i != index }
 
-    /** Only the first chunk of that text goes, so "salad, salad" resolves one at a time. */
-    fun without(unmatched: List<String>, chunk: String): List<String> {
-        val at = unmatched.indexOf(chunk)
+    /** Only the first part with that text goes, so "salad, salad" resolves one at a time. */
+    fun without(unmatched: List<UnmatchedPart>, chunk: String): List<UnmatchedPart> {
+        val at = unmatched.indexOfFirst { it.typed == chunk }
         return if (at < 0) unmatched else unmatched.filterIndexed { i, _ -> i != at }
+    }
+
+    /** Moves one already-counted item into the items. */
+    fun addAnyway(items: List<ReviewItem>, counted: List<ReviewItem>, index: Int): Pair<List<ReviewItem>, List<ReviewItem>> {
+        val item = counted.getOrNull(index) ?: return items to counted
+        return (items + item) to counted.filterIndexed { i, _ -> i != index }
     }
 }

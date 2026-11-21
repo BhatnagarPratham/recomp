@@ -148,7 +148,7 @@ class DescribeFlowTest {
         vm.estimate()
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertTrue(review.items.isEmpty())
-        assertEquals(listOf("chai", "biscuits"), review.unmatched)
+        assertEquals(listOf("chai", "biscuits"), review.unmatched.map { it.typed })
         vm.backToText()
         vm.saveDraft()
         val outcome = eventually { vm.outcome.value }

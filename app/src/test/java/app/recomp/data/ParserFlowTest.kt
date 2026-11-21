@@ -9,6 +9,7 @@ import app.recomp.data.repo.DescribeResult
 import app.recomp.data.repo.DescribedMeal
 import app.recomp.data.repo.ItemFrom
 import app.recomp.data.repo.OnboardingResult
+import app.recomp.data.repo.UnmatchedPart
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiState
 import app.recomp.domain.ai.AiStatus
@@ -40,6 +41,7 @@ import app.recomp.ui.food.FitText
 import app.recomp.ui.food.FitViewModel
 import app.recomp.ui.food.QuickAddValues
 import app.recomp.ui.food.ReviewItem
+import app.recomp.ui.food.reviewItem
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -155,7 +157,7 @@ class ParserFlowTest {
         assertEquals(listOf(roti, rajma), meal.items.map { it.foodId })
         assertEquals(listOf(80.0, 150.0), meal.items.map { it.item.grams })
         assertEquals(240.0, meal.items[0].item.kcal, 1e-6)
-        assertEquals(listOf("blorp salad"), meal.unmatched)
+        assertEquals(listOf(UnmatchedPart("blorp salad")), meal.unmatched)
         assertNull(meal.requestId)
         assertTrue("nothing is sent", app.estimator.requests.isEmpty())
         assertTrue(requestKinds().isEmpty())
@@ -168,13 +170,13 @@ class ParserFlowTest {
         vm.estimate()
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertNull(review.requestId)
-        assertEquals(listOf("blorp salad"), review.unmatched)
+        assertEquals(listOf("blorp salad"), review.unmatched.map { it.typed })
         assertEquals(listOf(ItemFrom.DATABASE, ItemFrom.YOUR_FOOD), review.items.map { it.from })
 
         // A part nothing found: quick add it, here in the review. Nothing is logged yet.
         vm.resolve("blorp salad", ReviewItem.quick(QuickAddValues(null, 45.0, 2.0, null, null, Origin.HOME), "blorp salad"))
         assertTrue(rows().isEmpty())
-        assertEquals(emptyList<String>(), (vm.phase.value as DescribePhase.Review).unmatched)
+        assertTrue((vm.phase.value as DescribePhase.Review).unmatched.isEmpty())
 
         vm.save(null)
         val outcome = eventually { vm.outcome.value }
@@ -266,8 +268,8 @@ class ParserFlowTest {
 
         assertEquals(listOf("Chapati/Roti", "Dal makhani", "Cucumber salad"), meal.items.map { it.item.name })
         assertEquals(listOf(ItemFrom.DATABASE, ItemFrom.DATABASE, ItemFrom.AI), meal.items.map { it.from })
-        assertEquals(listOf("Roti"), meal.alreadyCounted)
-        assertEquals(emptyList<String>(), meal.unmatched)
+        assertEquals(listOf("Roti"), meal.alreadyCounted.map { it.name })
+        assertTrue(meal.unmatched.isEmpty())
         assertNotNull(meal.requestId)
 
         val ids = app.foodLog.saveDescribedMeal(date, "lunch", meal.items.map { ReviewItem(it.item, it.item, it.from, it.foodId).toLog() }, Origin.HOME, meal.requestId, FoodDiet.VEGETARIAN, "Usual lunch", null)
@@ -312,7 +314,7 @@ class ParserFlowTest {
         vm.estimate()
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertEquals(listOf("Chapati/Roti"), review.items.map { it.current.name })
-        assertEquals(listOf("cucumber salad"), review.unmatched)
+        assertEquals(listOf("cucumber salad"), review.unmatched.map { it.typed })
         assertTrue(review.notice!!, "didn't answer in time" in review.notice!!)
         assertNull("a failed request is not what the rows came from", review.requestId)
         assertTrue(app.ai.observeDrafts(date).first().isEmpty())
@@ -456,5 +458,119 @@ class ParserFlowTest {
         assertEquals(listOf("lunch"), app.foodLog.observeDay(today).first().meals.filter { it.allowanceKcal == 200 }.map { it.slot.key })
         app.prefs.setSnackAllowance(null)
         assertNull(app.foodLog.observeDay(today).first().allowance)
+    }
+
+    // PR #15's review
+
+    @Test
+    fun `S1 - with AI on, a guess goes to the AI and is never sent as already counted`() = runBlocking {
+        database("Banana raita", FoodDiet.VEGETARIAN, 90.0, "bowl" to 200.0)
+        aiOn()
+        replyWith(salad("Banana").copy(kcal = 105.0))
+        val meal = describe("2 roti and 2 bananas")
+        val sent = app.estimator.requests.single().user
+        assertTrue(sent, "- 2 roti = Chapati/Roti, 80 g" in sent)
+        assertFalse(sent, "Banana raita" in sent)
+        assertEquals(listOf("Chapati/Roti", "Banana"), meal.items.map { it.item.name })
+        assertTrue(meal.unmatched.isEmpty())
+
+        // Only a guess and nothing sure: still one request, never "fully matched".
+        replyWith(salad("Banana"))
+        assertEquals(listOf(ItemFrom.AI), describe("2 bananas").items.map { it.from })
+        assertEquals(2, app.estimator.requests.size)
+    }
+
+    @Test
+    fun `S1 - with AI off, a guess is offered under the unmatched parts, and Use it logs it`() = runBlocking {
+        val raita = database("Banana raita", FoodDiet.VEGETARIAN, 90.0, "bowl" to 200.0)
+        val meal = describe("2 roti and 2 bananas")
+        assertEquals(listOf("Chapati/Roti"), meal.items.map { it.item.name })
+        val part = meal.unmatched.single()
+        assertEquals("2 bananas", part.typed)
+        assertEquals("Banana raita", part.guess!!.item.name)
+        assertEquals(raita, part.guess!!.foodId)
+
+        val vm = describeVm()
+        vm.setText("2 roti and 2 bananas")
+        vm.estimate()
+        val review = eventually { vm.phase.value as? DescribePhase.Review }
+        assertEquals(listOf("Chapati/Roti"), review.items.map { it.current.name })
+        val guess = review.unmatched.single().guess!!
+        vm.resolve("2 bananas", guess.reviewItem())
+        vm.save(null)
+        eventually { vm.outcome.value }
+        assertEquals(listOf(roti, raita), rows().map { it.foodId })
+        assertEquals(listOf(LogSource.LOCAL_PARSE, LogSource.LOCAL_PARSE), rows().map { it.source })
+    }
+
+    @Test
+    fun `S3 - an AI item renamed from a counted one is set aside, and Add anyway logs it`() = runBlocking {
+        aiOn()
+        replyWith(salad("Roti (2 pcs)"), salad())
+        val vm = describeVm()
+        vm.setText("2 roti and cucumber salad")
+        vm.estimate()
+        val review = eventually { vm.phase.value as? DescribePhase.Review }
+        assertEquals(listOf("Chapati/Roti", "Cucumber salad"), review.items.map { it.current.name })
+        assertEquals(listOf("Roti (2 pcs)"), review.alreadyCounted.map { it.current.name })
+        vm.addAnyway(0)
+        val after = vm.phase.value as DescribePhase.Review
+        assertEquals(3, after.items.size)
+        assertTrue(after.alreadyCounted.isEmpty())
+    }
+
+    @Test
+    fun `N3 - a save that can't go through keeps the review and says why, instead of crashing`() = runBlocking {
+        val vm = describeVm()
+        vm.setText("2 roti")
+        vm.estimate()
+        eventually { vm.phase.value as? DescribePhase.Review }
+        // The food disappears under the review, as a backup import can do.
+        app.db.openHelper.writableDatabase.execSQL("DELETE FROM food_unit WHERE food_id = $roti")
+        app.db.openHelper.writableDatabase.execSQL("DELETE FROM food WHERE id = $roti")
+        vm.save(null)
+        val notice = eventually { (vm.phase.value as? DescribePhase.Review)?.notice }
+        assertTrue(notice, "no longer in your foods" in notice)
+        assertNull(vm.outcome.value)
+        assertFalse("the screen can try again", vm.busy.value)
+        assertTrue(rows().isEmpty())
+    }
+
+    @Test
+    fun `N3 - Log it that can't go through keeps the result and says why`() = runBlocking {
+        val today = onboard()
+        val vm = fitVm()
+        vm.setText("2 roti")
+        vm.setOrigin(Origin.HOME)
+        vm.check()
+        eventually { vm.phase.value as? FitPhase.Result }
+        app.db.openHelper.writableDatabase.execSQL("DELETE FROM food_unit WHERE food_id = $roti")
+        app.db.openHelper.writableDatabase.execSQL("DELETE FROM food WHERE id = $roti")
+        vm.logIt()
+        val notice = eventually { (vm.phase.value as? FitPhase.Result)?.notice }
+        assertTrue(notice, "Couldn't save" in notice)
+        assertNull(vm.outcome.value)
+        assertTrue(app.db.foodLogDao().day(today).isEmpty())
+    }
+
+    @Test
+    fun `N6 - removing the allowance's meal moves its line to the default meal`() = runBlocking {
+        val today = onboard()
+        app.prefs.setSnackAllowance(SnackAllowance(150, "lunch"))
+        app.prefs.edit { mealSlots = mealSlots.map { if (it.key == "lunch") it.copy(removed = true) else it } }
+        val day = app.foodLog.observeDay(today).first()
+        assertEquals(SnackAllowance(150, "snacks"), day.allowance)
+        assertEquals(listOf("snacks"), day.meals.filter { it.allowanceKcal != null }.map { it.slot.key })
+    }
+
+    @Test
+    fun `the parser's index leaves no source out, so foods of a kind added later are matched`() = runBlocking {
+        FoodSource.entries.forEach { source ->
+            app.db.foodDao().insert(
+                FoodEntity(name = "Zylo ${source.name.lowercase()}", source = source, diet = FoodDiet.VEGAN, kcal100g = 100.0, protein100g = 5.0, carbs100g = 10.0, fat100g = 2.0, fiber100g = 1.0, createdAt = 1),
+            )
+        }
+        val found = app.foods.describeIndex().lookup(listOf("zylo")).map { it.source }.toSet()
+        assertEquals(FoodSource.entries.toSet(), found)
     }
 }

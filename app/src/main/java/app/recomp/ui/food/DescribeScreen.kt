@@ -57,6 +57,7 @@ import app.recomp.data.repo.FoodHit
 import app.recomp.data.repo.ItemFrom
 import app.recomp.data.repo.MealDescriber
 import app.recomp.data.repo.PortionChoice
+import app.recomp.data.repo.UnmatchedPart
 import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.DraftPlan
 import app.recomp.data.repo.FoodLogRepository
@@ -109,7 +110,8 @@ sealed interface DescribePhase {
         val rejected: List<String>,
         val question: String?,
         val notice: String? = null,
-        val unmatched: List<String> = emptyList(),
+        val unmatched: List<UnmatchedPart> = emptyList(),
+        val alreadyCounted: List<ReviewItem> = emptyList(),
     ) : DescribePhase
 }
 
@@ -239,6 +241,7 @@ class DescribeViewModel @Inject constructor(
                             question = meal.question,
                             notice = DescribeText.notice(meal, provider()),
                             unmatched = meal.unmatched,
+                            alreadyCounted = meal.countedItems(),
                         )
                     }
                 }
@@ -282,6 +285,12 @@ class DescribeViewModel @Inject constructor(
     private suspend fun finishing(block: suspend () -> Unit) {
         try {
             block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A save that can't go through (a food gone after a backup import, nothing left to log) keeps the review
+            // and says why, rather than crashing.
+            (_phase.value as? DescribePhase.Review)?.let { _phase.value = it.copy(notice = DescribeText.saveFailed(e)) }
         } finally {
             if (_outcome.value == null) _busy.value = false
         }
@@ -294,6 +303,8 @@ class DescribeViewModel @Inject constructor(
     override fun resolve(chunk: String, item: ReviewItem) = editReview { it.copy(items = it.items + item, unmatched = ReviewEdits.without(it.unmatched, chunk)) }
 
     override fun skip(chunk: String) = editReview { it.copy(unmatched = ReviewEdits.without(it.unmatched, chunk)) }
+
+    override fun addAnyway(index: Int) = editReview { r -> ReviewEdits.addAnyway(r.items, r.alreadyCounted, index).let { (items, counted) -> r.copy(items = items, alreadyCounted = counted) } }
 
     override suspend fun searchFoods(query: String): List<FoodHit> = foods.search(query)
 
@@ -429,6 +440,8 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 onSearch = { target = ReviewTarget.Search(it) },
                 onQuickAdd = { target = ReviewTarget.Quick(it) },
                 onSkip = viewModel::skip,
+                onResolve = viewModel::resolve,
+                onAddAnyway = viewModel::addAnyway,
                 onReestimate = { answer -> p.question?.let { viewModel.estimate(Clarification(it, answer)) } },
                 onSave = { viewModel.save(null) },
                 onSaveAsMeal = { naming = text.trim().replace(Regex("\\s+"), " ").take(40).trimEnd(',', ' ') },
@@ -562,6 +575,8 @@ private fun ReviewStep(
     onSearch: (String) -> Unit,
     onQuickAdd: (String) -> Unit,
     onSkip: (String) -> Unit,
+    onResolve: (String, ReviewItem) -> Unit,
+    onAddAnyway: (Int) -> Unit,
     onReestimate: (String) -> Unit,
     onSave: () -> Unit,
     onSaveAsMeal: () -> Unit,
@@ -607,7 +622,16 @@ private fun ReviewStep(
                 }
             }
             itemsIndexed(review.items) { index, r -> ReviewRow(r, onClick = { onEdit(index) }) }
-            itemsIndexed(review.unmatched) { _, chunk -> UnmatchedRow(chunk, onSearch = { onSearch(chunk) }, onQuickAdd = { onQuickAdd(chunk) }, onSkip = { onSkip(chunk) }) }
+            itemsIndexed(review.unmatched) { _, part ->
+                UnmatchedRow(
+                    part,
+                    onUse = { part.guess?.let { onResolve(part.typed, it.reviewItem()) } },
+                    onSearch = { onSearch(part.typed) },
+                    onQuickAdd = { onQuickAdd(part.typed) },
+                    onSkip = { onSkip(part.typed) },
+                )
+            }
+            itemsIndexed(review.alreadyCounted) { index, r -> CountedRow(r, onAdd = { onAddAnyway(index) }) }
             if (review.items.isEmpty()) {
                 item {
                     Text(

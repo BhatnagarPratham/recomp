@@ -21,20 +21,26 @@ enum class ItemFrom { YOUR_FOOD, DATABASE, AI, QUICK_ADD }
 data class DescribedItem(val item: EstimatedItem, val from: ItemFrom, val foodId: Long? = null)
 
 /**
+ * A part of the description that isn't a sure match, as typed. [guess] is the parser's low-confidence pick, offered
+ * as "best guess" with *Use it* (PRD §12.5, as built); null when nothing came close.
+ */
+data class UnmatchedPart(val typed: String, val guess: DescribedItem? = null)
+
+/**
  * A described meal, ready to review: what the local parser matched, what the AI estimated for the rest, and the
- * chunks neither found ([unmatched], as typed).
+ * parts neither was sure of ([unmatched]).
  *
  * - [rejected]: AI items left out for having no usable weight or amount.
- * - [alreadyCounted]: AI items left out because the parser had counted them.
+ * - [alreadyCounted]: AI items set aside because the parser had counted them, which you can add anyway.
  * - [requestId]: the AI request, when one was sent. Null means the parser answered alone, at no cost.
  * - [aiFailure]: why the AI's part is missing, when a request was sent and failed.
  * - [aiState]: the gate when the meal was described; anything but READY means the parser answered alone.
  */
 data class DescribedMeal(
     val items: List<DescribedItem>,
-    val unmatched: List<String> = emptyList(),
+    val unmatched: List<UnmatchedPart> = emptyList(),
     val rejected: List<String> = emptyList(),
-    val alreadyCounted: List<String> = emptyList(),
+    val alreadyCounted: List<EstimatedItem> = emptyList(),
     val question: String? = null,
     val requestId: Long? = null,
     val aiFailure: AiStatus? = null,
@@ -81,19 +87,20 @@ class MealDescriber @Inject constructor(
         val state = ai.state()
         if (state != AiState.READY) return@withContext DescribeResult.Described(local(foods.parseMeal(text), state))
         val parsed = if (origin == Origin.ORDERED) null else foods.parseMeal(text)
-        if (parsed != null && parsed.items.isNotEmpty() && parsed.unmatched.isEmpty()) return@withContext DescribeResult.Described(local(parsed, state))
+        // Only sure matches stay local: a guess goes to the AI with the rest, so a wrong dish is never "counted".
+        if (parsed != null && parsed.items.isNotEmpty() && parsed.unsure.isEmpty()) return@withContext DescribeResult.Described(local(parsed, state))
 
         val counted = parsed?.items.orEmpty()
         // With something matched there's a review either way, so no draft: saving both would count the meal twice.
         val plan = draft.takeIf { counted.isEmpty() && !parserOnFailure }
         when (val result = ai.estimate(text, origin, clarification, plan, kind, counted.map { it.counted })) {
             is EstimateResult.Estimated -> {
-                val merged = DescribeMerge.merge(counted, result.meal.items)
+                val merged = DescribeMerge.merge(counted, result.meal.items, parsed?.unsure.orEmpty())
                 DescribeResult.Described(
                     DescribedMeal(
                         items = counted.map(::described) + merged.items.map { DescribedItem(it, ItemFrom.AI) },
                         rejected = result.meal.rejected,
-                        alreadyCounted = merged.dropped,
+                        alreadyCounted = merged.alreadyCounted,
                         question = result.meal.clarifyingQuestion,
                         requestId = result.requestId,
                     ),
@@ -109,7 +116,12 @@ class MealDescriber @Inject constructor(
         }
     }
 
-    private fun local(parsed: ParsedMeal, state: AiState) = DescribedMeal(parsed.items.map(::described), parsed.unmatched, aiState = state)
+    /** The parser's answer alone: sure matches as items, and the rest as parts to resolve, each guess offered. */
+    private fun local(parsed: ParsedMeal, state: AiState) = DescribedMeal(
+        items = parsed.items.map(::described),
+        unmatched = parsed.unmatched.map { UnmatchedPart(it) } + parsed.guesses.map { UnmatchedPart(it.typed, described(it)) },
+        aiState = state,
+    )
 
     private fun described(item: ParsedItem) = DescribedItem(item.estimated(), if (item.food.own) ItemFrom.YOUR_FOOD else ItemFrom.DATABASE, item.food.id)
 }
