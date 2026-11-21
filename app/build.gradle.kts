@@ -22,7 +22,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         // Open Food Facts asks apps to identify themselves with a contact (TRD §10 M18). It's each builder's own,
-        // from local.properties (`recomp.off.contact=you@example.com`), so it never enters the public repo.
+        // from local.properties (`recomp.off.contact=<your email>`), so it never enters the public repo.
         val localProps = Properties().apply {
             rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
         }
