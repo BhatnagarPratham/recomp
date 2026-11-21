@@ -135,4 +135,30 @@ class LabelParserTest {
         assertTrue(v.empty)
         assertEquals(emptySet<LabelField>(), v.filled)
     }
+
+    @Test
+    fun `slips seen in the on-phone trial, a unit read as 9 and decimal points lost, are mended`() {
+        // Shaped like Tesseract's output for our invented test labels (M18 trial): no real product.
+        val fssai = """
+            Nutrient Per 100 g Per Serve (30 g)
+            Energy (kcal) _ 456 137
+            Protein (g) 12.5 3.8
+            Carbohydrate (9) 61.0 18.3
+            Total Fat (g) 17.9 5.4
+            Dietary Fibre (g) 42 1.3
+        """.trimIndent()
+        assertEquals(LabelValues(LabelBasis.PER_100G, 456.0, 12.5, 61.0, 17.9, 4.2, 30.0), LabelParser.parse(fssai))
+        val eu = """
+            Typical values per 100 g per 30 g portion
+            Energy 1680 kJ / 402 kcal 504 kJ / 121 kcal
+            Fat 95g 2,9g
+            Carbohydrate 64g 19g
+            Protein 10g 3,0g
+        """.trimIndent()
+        val v = LabelParser.parse(eu)
+        assertEquals(listOf(9.5, 64.0, 10.0), listOf(v.fatG, v.carbsG, v.proteinG))
+        // Without a serving weight the energy columns give the ratio.
+        val noWeight = "Nutrient Per 100 g Per Serve\nEnergy (kcal) 400 120\nDietary Fibre (g) 50 1.5\nProtein (g) 20 6"
+        assertEquals(listOf(5.0, 20.0), LabelParser.parse(noWeight).let { listOf(it.fiberG, it.proteinG) })
+    }
 }

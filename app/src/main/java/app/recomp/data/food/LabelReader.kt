@@ -72,7 +72,11 @@ class TesseractLabelReader @Inject constructor(@ApplicationContext private val c
         /** tessdata_fast's commit for the bundled model; change it with the model so phones copy the new one. */
         const val MODEL_VERSION = "tessdata_fast-8741641"
 
-        /** One uniform block of text: a nutrition table read row by row (chosen in M18's trial). */
+        /**
+         * One uniform block of text: a nutrition table read row by row. M18's trial on invented labels (FSSAI, EU
+         * kJ/kcal, US, and a photographed one) read every row this way in 0.3–0.4 s; auto (PSM 3) and columns
+         * (PSM 4) lost rows, and scaling up 2x only doubled the time.
+         */
         const val PAGE_SEG_MODE = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
 
         /** Label photos are decoded larger than AI photos, since small print needs the pixels. */

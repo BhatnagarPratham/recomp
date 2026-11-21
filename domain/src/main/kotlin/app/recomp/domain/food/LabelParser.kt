@@ -64,10 +64,28 @@ object LabelParser {
             LabelBasis.PER_SERVING -> layout.servingIndex ?: 0
         }
 
+        fun row(field: LabelField): List<Double> {
+            val line = lines.firstOrNull { matches(field, it) } ?: return emptyList()
+            return if (field == LabelField.KCAL) energy(line, lines) else numbers(afterLabel(line))
+        }
+
+        // How the serving column relates to the per-100 g one: the serving's weight, else the two energy values.
+        val servingIndex = layout.servingIndex
+        val ratio: Double? = if (basis == LabelBasis.PER_100G && layout.per100Index != null && servingIndex != null) {
+            serving?.div(100.0) ?: row(LabelField.KCAL).let { e ->
+                val a = e.getOrNull(column)
+                val b = e.getOrNull(servingIndex)
+                if (a != null && b != null && a > 0) b / a else null
+            }
+        } else {
+            null
+        }
+
         fun pick(field: LabelField): Double? {
-            val line = lines.firstOrNull { matches(field, it) } ?: return null
-            val numbers = if (field == LabelField.KCAL) energy(line, lines) else numbers(afterLabel(line))
-            return numbers.getOrNull(column) ?: numbers.takeIf { it.size == 1 }?.first()
+            val numbers = row(field)
+            val value = numbers.getOrNull(column) ?: numbers.takeIf { it.size == 1 }?.first() ?: return null
+            val other = servingIndex?.let { numbers.getOrNull(it) }
+            return if (field != LabelField.KCAL && ratio != null && other != null) lostPoint(value, other, ratio) else value
         }
 
         val values = LabelValues(
@@ -183,16 +201,28 @@ object LabelParser {
     // Cleaning and checks
 
     /**
-     * OCR's usual slips inside numbers: O for 0, l or I for 1, a comma for the decimal point, and a space after
-     * the point ("12. 5"). Words are left alone.
+     * OCR's usual slips inside numbers: O for 0, l or I for 1, a comma for the decimal point, a space after the
+     * point ("12. 5"), and "(g)" read as "(9)". Words are left alone.
      */
     fun clean(line: String): String {
         var s = line.replace(' ', ' ').replace('|', ' ')
+        // A unit "(g)" read as "(9)" would otherwise be taken for the first value.
+        s = Regex("""\(\s*[9q]\s*\)""").replace(s, "(g)")
         s = Regex("""(?<=\d)[Oo](?=[\d\s.,gk]|$)|(?<=[\s(])[Oo](?=[.,]\d)""").replace(s, "0")
         s = Regex("""(?<=\d)[lI](?=[\d.,\s]|$)|(?<=\s)[lI](?=\d)""").replace(s, "1")
         s = Regex("""(?<=\d),(?=\d)""").replace(s, ".")
         s = Regex("""(?<=\d)\.\s(?=\d)""").replace(s, ".")
         return s.trim()
+    }
+
+    /**
+     * OCR drops decimal points ("9,5 g" read as "95g", "4.2" as "42"). When the per-serving column disagrees with the
+     * per-100 g value but agrees with a tenth of it, the tenth is what the label says.
+     */
+    private fun lostPoint(per100: Double, perServing: Double, ratio: Double): Double {
+        if (perServing <= 0 || per100 % 1.0 != 0.0) return per100
+        fun close(x: Double) = kotlin.math.abs(x * ratio - perServing) <= maxOf(0.15 * perServing, 0.1)
+        return if (!close(per100) && close(per100 / 10)) per100 / 10 else per100
     }
 
     private fun plausible(v: LabelValues): LabelValues = v.copy(
