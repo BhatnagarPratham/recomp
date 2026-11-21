@@ -15,6 +15,7 @@ import app.recomp.data.backup.PendingOutcome
 import app.recomp.data.backup.PendingRestore
 import app.recomp.data.backup.SchemaItem
 import app.recomp.data.backup.SettingValue
+import app.recomp.data.db.ProgrammeReviewEntity
 import app.recomp.data.db.AiRequestLogEntity
 import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
@@ -182,6 +183,17 @@ class BackupTest {
         )
         app.checkins.setFoodIncomplete(today.minusDays(1), true)
         app.prefs.setCheckinSeen(today.minusWeeks(1).with(DayOfWeek.MONDAY))
+
+        // Programme review (M11): a review with its reply and an applied suggestion, a deload mark, and the deload week's settings.
+        app.db.programmeReviewDao().insert(
+            ProgrammeReviewEntity(
+                weekStart = today.minusWeeks(1).with(DayOfWeek.MONDAY), createdAt = now, sections = "goal,food,training", sentText = "Weekly programme review.",
+                aiRequestId = 1, responseJson = "{\"reply\":{\"summary\":\"ok\",\"suggestions\":[]},\"exercises\":{},\"routines\":{}}", appliedJson = "[0]",
+            ),
+        )
+        app.db.programmeReviewDao().markDeload(listOf(exercise.exercise.id))
+        app.prefs.setDeloadWeek(today.minusWeeks(8))
+        app.prefs.setDeloadSnoozedUntil(today.plusDays(3))
     }
 
     /** Everything a backup should bring back: every table's rows and every exported setting. */
@@ -383,6 +395,28 @@ class BackupTest {
         assertTrue(s.noticeSeen(AiKind.MEAL_TEXT))
         assertFalse(s.copy(provider = AiProviderId.OPENAI).noticeSeen(AiKind.MEAL_TEXT))
         assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+    }
+
+    @Test
+    fun `an M7 v10 backup, like the phone's safety export before M11, imports into v11 with no review and no deload marks`() = runBlocking {
+        // The phone before M11: a provider in the AI log, and the exercise's stall fields set.
+        val data = backupAt(10) { db ->
+            db.execSQL("UPDATE exercise SET stall_reset_at = 99, stall_reset_keeps_baseline = 1 WHERE id = 1")
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, response_json, provider) " +
+                    "VALUES (1, 5, 'MEAL_TEXT', 'gpt-6.1-sol', 2000, 900, 0, 0, 0.02, 'OK', 4200, '{}', 'OPENAI')",
+            )
+        }
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(data)))
+        assertEquals(Schemas.current, app.db.openHelper.readableDatabase.version)
+        val exercise = app.db.exerciseDao().get(1)!!
+        assertEquals(99L, exercise.stallResetAt)
+        assertTrue(exercise.stallResetKeepsBaseline)
+        assertFalse(exercise.deloadPending)
+        assertEquals(AiProviderId.OPENAI, app.db.aiDao().request(1)!!.provider)
+        assertEquals(listOf(40_000 to 3), app.db.workoutDao().sessionExercises(1).single().sets.map { it.loadG to it.rir })
+        assertTrue(app.db.programmeReviewDao().observeAll().first().isEmpty())
+        assertTrue(app.db.programmeReviewDao().pendingDeloads().isEmpty())
     }
 
     @Test

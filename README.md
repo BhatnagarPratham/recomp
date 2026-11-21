@@ -21,6 +21,8 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M6: in the gym: supersets, warm-up suggestions for the first heavy lift, assisted pull-ups and dips, two steps up for beginners with reps to spare, and same-movement substitutes when you swap.
 > - M7: a choice of AI provider: Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible endpoint such as OpenRouter or a server on your own network. Each keeps its own encrypted key and model, and one monthly cap covers them all.
 > - M8: a weekly review on the check-in screen, week by week: food against target with protein days hit and the share of ordered and packaged food, training against your plan with PRs and stalls, the trend, waist and scans, the finish line at your current rate, a month calendar with no streaks, and a body-composition chart on Body.
+> - M11: with AI on, a weekly programme review: you tick what's sent (body trends off by default), read the full text, and get up to 5 suggestions you apply one by one, with Undo. Train also offers a deload week every 6–8 weeks (4–6 for advanced lifters).
+> - M12: opt-in reminders (weigh-in, lunch not logged, the evening nudge, workout days, the weekly check-in, scan day), at most two a day and only when still needed; an evening card on Today that suggests your own protein foods in portions that fit and logs one in a tap; and a home-screen widget.
 > - M14: recipes: *New food* → *Recipe* builds a dish from the foods in it, with a cooked weight or a number of servings. It becomes one of your foods, with values per 100 g and per serving and its strictest ingredient's diet tag.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.

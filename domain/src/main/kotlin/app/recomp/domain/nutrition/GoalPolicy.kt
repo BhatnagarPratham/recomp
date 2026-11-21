@@ -1,5 +1,7 @@
 package app.recomp.domain.nutrition
 
+import app.recomp.domain.nudge.NudgeKind
+
 /** The persona's goal (PRD §4.2). It decides energy balance, protein and progression pacing. */
 enum class Goal { FAT_LOSS, RECOMP, MAINTAIN, LEAN_BULK }
 
@@ -26,6 +28,8 @@ data class GoalPolicy(
     val surplusFraction: Double = 0.0,
     /** Grams of protein per kg of reference weight (goal weight if set, else current weight). */
     val proteinGPerKg: Double,
+    /** What the evening nudge is about (GL-08, PRD §12.8). The goal's defaults unless a policy sets its own. */
+    val nudges: Set<NudgeKind> = NudgeKind.defaultsFor(goal),
 ) {
     init {
         require(lossRatePctPerWeek >= 0 && surplusFraction >= 0) { "Rates are magnitudes; the goal sets the direction" }

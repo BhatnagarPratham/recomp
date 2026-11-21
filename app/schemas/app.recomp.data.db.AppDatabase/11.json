@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "2cceef8c71d778ceb6ad9cce35629e69",
+    "identityHash": "3940cea13a24a75ef46e05811606b120",
     "entities": [
       {
         "tableName": "exercise",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `primary_muscle` TEXT NOT NULL, `secondary_muscles` TEXT NOT NULL, `equipment` TEXT NOT NULL, `mechanic` TEXT NOT NULL, `movement_pattern` TEXT NOT NULL, `load_type` TEXT NOT NULL, `increment_g` INTEGER NOT NULL, `default_rep_min` INTEGER NOT NULL, `default_rep_max` INTEGER NOT NULL, `default_rest_sec` INTEGER NOT NULL, `is_unilateral` INTEGER NOT NULL, `setup_notes` TEXT, `is_custom` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `seed_key` TEXT, `stall_reset_at` INTEGER, `stall_reset_keeps_baseline` INTEGER NOT NULL DEFAULT 0)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `primary_muscle` TEXT NOT NULL, `secondary_muscles` TEXT NOT NULL, `equipment` TEXT NOT NULL, `mechanic` TEXT NOT NULL, `movement_pattern` TEXT NOT NULL, `load_type` TEXT NOT NULL, `increment_g` INTEGER NOT NULL, `default_rep_min` INTEGER NOT NULL, `default_rep_max` INTEGER NOT NULL, `default_rest_sec` INTEGER NOT NULL, `is_unilateral` INTEGER NOT NULL, `setup_notes` TEXT, `is_custom` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `seed_key` TEXT, `stall_reset_at` INTEGER, `stall_reset_keeps_baseline` INTEGER NOT NULL DEFAULT 0, `deload_pending` INTEGER NOT NULL DEFAULT 0)",
         "fields": [
           {
             "fieldPath": "id",
@@ -116,6 +116,13 @@
           {
             "fieldPath": "stallResetKeepsBaseline",
             "columnName": "stall_reset_keeps_baseline",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deloadPending",
+            "columnName": "deload_pending",
             "affinity": "INTEGER",
             "notNull": true,
             "defaultValue": "0"
@@ -1970,49 +1977,8 @@
         }
       },
       {
-        "tableName": "recipe",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`food_id` INTEGER NOT NULL, `servings` REAL, `cooked_weight_g` REAL, PRIMARY KEY(`food_id`), FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "foodId",
-            "columnName": "food_id",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "servings",
-            "columnName": "servings",
-            "affinity": "REAL"
-          },
-          {
-            "fieldPath": "cookedWeightG",
-            "columnName": "cooked_weight_g",
-            "affinity": "REAL"
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "food_id"
-          ]
-        },
-        "foreignKeys": [
-          {
-            "table": "food",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "food_id"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
-          }
-        ]
-      },
-      {
-        "tableName": "recipe_ingredient",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recipe_id` INTEGER NOT NULL, `position` INTEGER NOT NULL, `food_id` INTEGER NOT NULL, `grams` REAL NOT NULL, FOREIGN KEY(`recipe_id`) REFERENCES `recipe`(`food_id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "tableName": "programme_review",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `week_start` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `sections` TEXT NOT NULL, `sent_text` TEXT NOT NULL, `ai_request_id` INTEGER, `response_json` TEXT, `applied_json` TEXT NOT NULL DEFAULT '[]')",
         "fields": [
           {
             "fieldPath": "id",
@@ -2021,28 +1987,45 @@
             "notNull": true
           },
           {
-            "fieldPath": "recipeId",
-            "columnName": "recipe_id",
+            "fieldPath": "weekStart",
+            "columnName": "week_start",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
             "affinity": "INTEGER",
             "notNull": true
           },
           {
-            "fieldPath": "position",
-            "columnName": "position",
-            "affinity": "INTEGER",
+            "fieldPath": "sections",
+            "columnName": "sections",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "foodId",
-            "columnName": "food_id",
-            "affinity": "INTEGER",
+            "fieldPath": "sentText",
+            "columnName": "sent_text",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "grams",
-            "columnName": "grams",
-            "affinity": "REAL",
-            "notNull": true
+            "fieldPath": "aiRequestId",
+            "columnName": "ai_request_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "responseJson",
+            "columnName": "response_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "appliedJson",
+            "columnName": "applied_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
           }
         ],
         "primaryKey": {
@@ -2053,53 +2036,20 @@
         },
         "indices": [
           {
-            "name": "index_recipe_ingredient_recipe_id",
+            "name": "index_programme_review_week_start",
             "unique": false,
             "columnNames": [
-              "recipe_id"
+              "week_start"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_recipe_id` ON `${TABLE_NAME}` (`recipe_id`)"
-          },
-          {
-            "name": "index_recipe_ingredient_food_id",
-            "unique": false,
-            "columnNames": [
-              "food_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_food_id` ON `${TABLE_NAME}` (`food_id`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "recipe",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "recipe_id"
-            ],
-            "referencedColumns": [
-              "food_id"
-            ]
-          },
-          {
-            "table": "food",
-            "onDelete": "NO ACTION",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "food_id"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_programme_review_week_start` ON `${TABLE_NAME}` (`week_start`)"
           }
         ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2cceef8c71d778ceb6ad9cce35629e69')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3940cea13a24a75ef46e05811606b120')"
     ]
   }
 }

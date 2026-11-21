@@ -1,5 +1,6 @@
 package app.recomp.data
 
+import app.recomp.data.db.ProgrammeReviewEntity
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -37,6 +38,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
@@ -440,6 +443,45 @@ class MigrationTest {
     }
 
     @Test
+    fun `10 to 11 adds the programme review's history and a deload mark, and keeps exercises and the AI log`() {
+        val file = File(tmp.root, "v10.db")
+        createAt(10, file).use { db ->
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, increment_g, " +
+                    "default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, stall_reset_keeps_baseline, stall_reset_at) " +
+                    "VALUES (1, 'My press', 'chest', '[]', 'MACHINE', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 5000, 8, 12, 120, 0, 1, 0, 1, 99)",
+            )
+            db.execSQL(
+                "INSERT INTO ai_request_log (id, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, status, latency_ms, response_json, provider) " +
+                    "VALUES (1, 10, 'MEAL_TEXT', 'gpt-6.1-sol', 2000, 1000, 0, 0, 0.02, 'OK', 4000, '{}', 'OPENAI')",
+            )
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            val exercise = room.exerciseDao().get(1)!!
+            assertFalse(exercise.deloadPending)
+            assertEquals(99L, exercise.stallResetAt)
+            assertTrue(exercise.stallResetKeepsBaseline)
+            assertEquals(AiProviderId.OPENAI, room.aiDao().request(1)!!.provider)
+            val reviews = room.programmeReviewDao()
+            assertTrue(reviews.observeAll().first().isEmpty())
+            val id = reviews.insert(ProgrammeReviewEntity(weekStart = LocalDate.of(2026, 11, 9), createdAt = 5, sections = "goal,food,training", sentText = "report", aiRequestId = 1))
+            assertEquals("[]", reviews.get(id)!!.appliedJson)
+            reviews.markDeload(listOf(1))
+            assertTrue(room.exerciseDao().get(1)!!.deloadPending)
+            assertEquals(listOf(1L), reviews.pendingDeloads())
+        }
+        // Rows written without the new columns get Room's defaults.
+        room.openHelper.writableDatabase.execSQL("INSERT INTO programme_review (week_start, created_at, sections, sent_text) VALUES ('2026-11-02', 1, 'goal', 't')")
+        room.openHelper.readableDatabase.query("SELECT applied_json FROM programme_review WHERE week_start = '2026-11-02'").use {
+            it.moveToFirst()
+            assertEquals("[]", it.getString(0))
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
     fun `8 to 9 to 10 in one open keeps M5's check-ins and the AI log`() {
         val file = File(tmp.root, "v8-chain.db")
         createAt(8, file).use { db ->
@@ -493,10 +535,20 @@ class MigrationTest {
     }
 
     @Test
-    fun `10 to 11 keeps foods, units, logs and saved meals, and adds recipes on top of them`() {
-        val file = File(tmp.root, "v10.db")
-        createAt(10, file).use { db ->
-            // The phone's v10: a custom food with a calibrated unit, logged and in a saved meal, and an AI request.
+    fun `11 to 12 keeps foods, units, logs, saved meals and M11's reviews, and adds recipes on top of them`() {
+        val file = File(tmp.root, "v11-recipes.db")
+        createAt(11, file).use { db ->
+            // The phone's v11: a custom food with a calibrated unit, logged and in a saved meal, an AI request,
+            // and M11's programme review with a deload waiting.
+            db.execSQL(
+                "INSERT INTO exercise (id, name, primary_muscle, secondary_muscles, equipment, mechanic, movement_pattern, load_type, increment_g, " +
+                    "default_rep_min, default_rep_max, default_rest_sec, is_unilateral, is_custom, archived, stall_reset_keeps_baseline, deload_pending) " +
+                    "VALUES (1, 'My press', 'chest', '[]', 'MACHINE', 'COMPOUND', 'horizontal_push', 'WEIGHTED', 5000, 8, 12, 120, 0, 1, 0, 0, 1)",
+            )
+            db.execSQL(
+                "INSERT INTO programme_review (id, week_start, created_at, sections, sent_text, ai_request_id, applied_json) " +
+                    "VALUES (1, '2026-11-09', 5, 'goal,food', 'report', 1, '[\"deload\"]')",
+            )
             db.execSQL(
                 "INSERT INTO food (id, name, source, diet, kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g, use_count, last_used_at, archived, created_at) " +
                     "VALUES (1, 'Test dal', 'CUSTOM', 'VEGAN', 120, 7, 18, 2, 4, 1, 5, 0, 1)",
@@ -529,6 +581,8 @@ class MigrationTest {
             assertEquals(216.0, room.foodLogDao().day(LocalDate.of(2026, 10, 18)).single().kcal, 0.0)
             assertEquals(1L, room.savedMealDao().get(1)!!.items.single().foodId)
             assertEquals(AiProviderId.OPENAI, room.aiDao().request(1)!!.provider)
+            assertEquals("[\"deload\"]", room.programmeReviewDao().get(1)!!.appliedJson)
+            assertEquals(listOf(1L), room.programmeReviewDao().pendingDeloads())
 
             // No recipes yet, and the new tables take one built from the old foods.
             val recipes = room.recipeDao()
@@ -555,12 +609,12 @@ class MigrationTest {
                 // expected
             }
         }
-        assertEquals(11, db.version)
+        assertEquals(Schemas.current, db.version)
         room.close()
     }
 
     @Test
-    fun `9 to 10 to 11 in one open keeps the AI log and foods`() {
+    fun `9 to 10 to 11 to 12 in one open keeps the AI log and foods`() {
         val file = File(tmp.root, "v9-two-hops.db")
         createAt(9, file).use { db ->
             db.execSQL(

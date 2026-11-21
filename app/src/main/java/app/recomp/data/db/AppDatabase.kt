@@ -35,10 +35,11 @@ import kotlinx.serialization.json.Json
         MeasurementEntity::class,
         WeeklyCheckinEntity::class,
         DailyActivityEntity::class,
+        ProgrammeReviewEntity::class,
         RecipeEntity::class,
         RecipeIngredientEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -54,8 +55,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bodyDao(): BodyDao
     abstract fun checkinDao(): CheckinDao
     abstract fun reviewDao(): ReviewDao
+    abstract fun programmeReviewDao(): ProgrammeReviewDao
     abstract fun recipeDao(): RecipeDao
     abstract fun backupCheckDao(): BackupCheckDao
+    abstract fun nudgeDao(): NudgeDao
 
     companion object {
         const val NAME = "recomp.db"
@@ -70,6 +73,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_8_9,
             Migrations.MIGRATION_9_10,
             Migrations.MIGRATION_10_11,
+            Migrations.MIGRATION_11_12,
         )
     }
 }

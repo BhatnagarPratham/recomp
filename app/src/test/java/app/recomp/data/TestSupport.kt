@@ -27,6 +27,7 @@ import app.recomp.data.repo.FoodRepository
 import app.recomp.data.repo.NutritionRepository
 import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
+import app.recomp.data.repo.ProgrammeReviewRepository
 import app.recomp.data.repo.ReviewRepository
 import app.recomp.data.repo.RecipeRepository
 import app.recomp.data.repo.TrainingRepository
@@ -137,6 +138,19 @@ class TestClock(var instant: Instant = Instant.parse("2026-10-18T06:30:00Z"), pr
     override fun instant(): Instant = instant
 }
 
+/** A provider, scripted, for the weekly programme review (M11): each call gets [next]'s reply. */
+class FakeSender : app.recomp.data.ai.AiSender {
+    val calls = mutableListOf<app.recomp.data.ai.AiCall>()
+    var next: (app.recomp.data.ai.AiCall) -> app.recomp.data.ai.AiResult = { call ->
+        app.recomp.data.ai.AiResult(AiStatus.OK, kotlinx.serialization.json.buildJsonObject {}, "{}", call.target.model, emptyList(), 10)
+    }
+
+    override suspend fun send(call: app.recomp.data.ai.AiCall): app.recomp.data.ai.AiResult {
+        calls += call
+        return next(call)
+    }
+}
+
 /** Claude, scripted: each request gets [next]'s reply. [hold] makes requests wait until a test completes it. */
 class FakeEstimator : MealEstimator {
     val requests = mutableListOf<MealRequest>()
@@ -156,6 +170,19 @@ class FakeEstimator : MealEstimator {
             attempts: List<TokenUsage> = listOf(TokenUsage("claude-opus-5-5", 2_000, 1_000)),
             servedBy: String = "claude-opus-5-5",
         ) = EstimatorReply(status, estimate, servedBy, attempts, latencyMs = 1_234, responseText = estimate?.let { "{\"items\":[]}" })
+    }
+}
+
+/** Reminders, collected instead of shown. [allowed] is the notification permission; [blocked] are channels switched off. */
+class FakeNotifier : app.recomp.reminders.ReminderNotifier {
+    var allowed = true
+    val blocked = mutableSetOf<app.recomp.domain.nudge.ReminderKind>()
+    val shown = mutableListOf<app.recomp.reminders.ReminderContent>()
+
+    override fun canNotify() = allowed
+    override fun canShow(kind: app.recomp.domain.nudge.ReminderKind) = kind !in blocked
+    override fun show(content: app.recomp.reminders.ReminderContent) {
+        shown += content
     }
 }
 
@@ -187,7 +214,11 @@ class TestApp(private val dir: File) {
     val localNetwork = FakeLocalNetwork()
     val resolver = FakeHostResolver()
     val estimator = FakeEstimator()
+    val sender = FakeSender()
     val clock = TestClock()
+    /** Device state (TRD §4), in its own file beside the settings. */
+    val device = app.recomp.data.prefs.DevicePrefs(PreferenceDataStoreFactory.create { File(dir, "device.preferences_pb") })
+    val notifier = FakeNotifier()
 
     lateinit var db: AppDatabase
         private set
@@ -219,6 +250,12 @@ class TestApp(private val dir: File) {
         private set
     lateinit var reviews: ReviewRepository
         private set
+    lateinit var programmeReviews: ProgrammeReviewRepository
+        private set
+    lateinit var snapshots: app.recomp.data.repo.TodaySnapshotRepository
+        private set
+    lateinit var reminders: app.recomp.reminders.ReminderRunner
+        private set
 
     init {
         open()
@@ -239,10 +276,13 @@ class TestApp(private val dir: File) {
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
         recipes = RecipeRepository(db)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
-        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, foods, clock)
+        ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, sender, foods, clock)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)
+        programmeReviews = ProgrammeReviewRepository(db, db.programmeReviewDao(), db.exerciseDao(), db.routineDao(), db.nutritionDao(), prefs, days, personas, training, progression, reviews, ai)
+        snapshots = app.recomp.data.repo.TodaySnapshotRepository(days, prefs, nutrition, training, workouts, progression, checkins, foods, foodLog, db.nudgeDao())
+        reminders = app.recomp.reminders.ReminderRunner(prefs, device, days, snapshots, checkins, notifier)
     }
 
     /** Simulates process death: everything not written to disk is gone. */
