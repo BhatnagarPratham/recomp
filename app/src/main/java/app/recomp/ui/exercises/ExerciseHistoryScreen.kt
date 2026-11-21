@@ -130,7 +130,7 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(Loads.describe(entry.sets, style, entry.loadType), style = MaterialTheme.typography.titleMedium)
-                        entry.bestE1rmG?.let { Text("Estimated 1RM ${Labels.wholeLoad(it.toLong(), style)}", style = MaterialTheme.typography.bodySmall) }
+                        entry.bestE1rmG?.let { Text("Estimated 1RM ${Labels.e1rm(it, style)}", style = MaterialTheme.typography.bodySmall) }
                         if (entry.records.isNotEmpty()) {
                             Text("PR: " + entry.records.joinToString { Labels.record(it, exercise?.loadType == LoadType.ASSISTED) }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
                         }

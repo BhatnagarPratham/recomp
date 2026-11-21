@@ -97,4 +97,16 @@ class UnitSwitchTest {
         switch.switch(Units.IMPERIAL, moveSteps = true)
         assertTrue(switch.preview(Units.IMPERIAL).isEmpty())
     }
+
+    @Test
+    fun `onboarding in lb moves the library's kg default steps, but not the walkthrough's`() = runBlocking {
+        app.training.ensureLibrarySeeded()
+        val all = app.db.exerciseDao().observeActive().first().filter { it.loadType != LoadType.BODYWEIGHT }
+        val chosen = all.first()
+        app.db.exerciseDao().update(chosen.copy(incrementG = 1_134))
+        app.training.moveDefaultSteps(Units.IMPERIAL, keep = setOf(chosen.id))
+        val after = app.db.exerciseDao().observeActive().first().filter { it.loadType != LoadType.BODYWEIGHT }
+        assertEquals(1_134, after.single { it.id == chosen.id }.incrementG)
+        after.filter { it.id != chosen.id }.forEach { assertTrue("${it.name}: ${it.incrementG} g", it.incrementG in listOf(454, 1_134, 2_268, 4_536)) }
+    }
 }

@@ -209,6 +209,8 @@ class PersonaRepository @Inject constructor(
                 increments = result.increments,
             ),
         )
+        // The library was seeded in kg; in lb its default steps move to lb steps too (PRD §12.16).
+        if (chosen.units == Units.IMPERIAL) training.moveDefaultSteps(Units.IMPERIAL, keep = result.increments.keys)
         writeTarget(targetsFor(result.profile, plan, result.overrides, today, leanMassKg = leanMassKg(today)), plan, today, TargetReason.INITIAL, now)
         prefs.edit {
             persona = this.persona.copy(

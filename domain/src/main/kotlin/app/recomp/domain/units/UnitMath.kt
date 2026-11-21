@@ -156,6 +156,16 @@ object LoadUnits {
     }
 
     /**
+     * A step that's one of the other unit's offered steps, moved to the nearest one in [to]; any other step as it is.
+     * For onboarding: the library is seeded before you pick units, so its default kg steps follow a choice of lb
+     * (2.5 kg → 5 lb), while a step you typed stays yours.
+     */
+    fun defaultIn(incrementG: Int, to: Units): Int {
+        val other = if (to == Units.IMPERIAL) Units.METRIC else Units.IMPERIAL
+        return if (incrementG in incrementChoicesG(other)) nearestIncrementG(incrementG, to) else incrementG
+    }
+
+    /**
      * The switch dialog's mapping (PRD §12.16): a step moves to the nearest step offered in the other unit, the
      * larger on a tie. 2.5 kg → 5 lb; 5 lb → 2.5 kg.
      */

@@ -113,4 +113,14 @@ class UnitsTest {
         assertEquals("kg" to "cm", kg.weight to kg.length)
         assertEquals("lb" to "in", lb.weight to lb.length)
     }
+
+    @Test
+    fun `onboarding's seeded kg steps follow a choice of lb, and typed steps stay`() {
+        assertEquals(2268, LoadUnits.defaultIn(2500, Units.IMPERIAL))
+        assertEquals(4536, LoadUnits.defaultIn(5000, Units.IMPERIAL))
+        assertEquals(2268, LoadUnits.defaultIn(2268, Units.IMPERIAL))
+        assertEquals(3000, LoadUnits.defaultIn(3000, Units.IMPERIAL))
+        assertEquals(2500, LoadUnits.defaultIn(2268, Units.METRIC))
+        assertEquals(2500, LoadUnits.defaultIn(2500, Units.METRIC))
+    }
 }

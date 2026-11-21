@@ -49,6 +49,7 @@ import app.recomp.domain.persona.Projection
 import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.training.LogDates
 import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
 import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.unitStyle
@@ -401,7 +402,8 @@ class OnboardingViewModel @Inject constructor(
                     step = Step.EQUIPMENT,
                     walkthrough = items,
                     choices = items.associate { it.slotKey to it.selectedId },
-                    increments = items.flatMap { it.options }.associate { it.id to it.incrementG },
+                    // The library is seeded in kg; a choice of lb shows lb steps (PRD §12.16).
+                    increments = items.flatMap { it.options }.associate { it.id to LoadUnits.defaultIn(it.incrementG, state.draft.units) },
                     busy = false,
                 )
             }
@@ -440,7 +442,12 @@ class OnboardingViewModel @Inject constructor(
      * already typed are shown again in them, keeping their exact values.
      */
     fun setUnits(units: Units) = _ui.update {
-        it.copy(draft = it.draft.copy(units = units), about = it.about.inUnits(units), goal = it.goal.inUnits(units))
+        it.copy(
+            draft = it.draft.copy(units = units),
+            about = it.about.inUnits(units),
+            goal = it.goal.inUnits(units),
+            increments = it.increments.mapValues { (_, g) -> LoadUnits.defaultIn(g, units) },
+        )
     }
 
     // Goal (PRD §4.6)

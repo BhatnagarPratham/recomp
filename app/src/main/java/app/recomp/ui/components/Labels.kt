@@ -131,6 +131,10 @@ object Labels {
         PrType.SESSION_VOLUME -> "best session volume"
     }
 
+    /** An estimated 1RM: to 0.1 kg as before M20, or whole lb. */
+    fun e1rm(grams: Int, style: UnitStyle): String =
+        if (style.imperial) wholeLoad(grams.toLong(), style) else load((grams + 50) / 100 * 100, style)
+
     /** A PR's value. An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
     fun recordValue(type: PrType, value: Long, loadG: Int?, assisted: Boolean): String = when (type) {
         PrType.MAX_LOAD -> if (assisted) assist(loadG ?: 0) else "${Loads.formatKg(value.toInt())} kg"

@@ -27,6 +27,8 @@ import app.recomp.domain.persona.Units
 import app.recomp.domain.units.LoadUnits
 import app.recomp.domain.training.Rotation
 import app.recomp.domain.training.Supersets
+import kotlinx.coroutines.flow.first
+import app.recomp.domain.training.Loads
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -89,6 +91,17 @@ class TrainingRepository @Inject constructor(
     fun policy(experience: Experience) = ExperiencePolicy.defaultFor(experience)
 
     /** Inserts any bundled exercise that isn't in the library yet. Safe to call on every launch. */
+    /**
+     * Onboarding in lb (PRD §12.16): every active exercise that logs a load and still has one of the kg steps moves to
+     * the nearest lb step, except [keep], whose steps the walkthrough just set.
+     */
+    suspend fun moveDefaultSteps(to: Units, keep: Set<Long>) {
+        val moved = exerciseDao.observeActive().first().filter { it.id !in keep && Loads.logsLoad(it.loadType) }.mapNotNull { e ->
+            LoadUnits.defaultIn(e.incrementG, to).takeIf { it != e.incrementG }?.let { e.copy(incrementG = it) }
+        }
+        if (moved.isNotEmpty()) exerciseDao.updateAll(moved)
+    }
+
     suspend fun ensureLibrarySeeded() {
         val policy = policy(prefs.currentTraining().experience)
         val present = exerciseDao.seeded().mapNotNull { it.seedKey }.toSet()
