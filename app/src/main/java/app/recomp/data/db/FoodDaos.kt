@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 interface FoodDao {
     /**
      * NU-11. [match] is an FTS4 expression (`FoodQuery.match`) and [prefix] the query with LIKE wildcards
-     * escaped. Foods you've logged come first, then custom, AI-learned, the basics and the databases,
+     * escaped. Foods you've logged come first, then custom foods and recipes, AI-learned, the basics and the databases,
      * caveat foods last among those, then names that start with the query, then shorter names.
      */
     @Query(
@@ -26,7 +26,7 @@ interface FoodDao {
         WHERE food_fts MATCH :match AND food.archived = 0 AND food.diet IN (:diets)
           AND (food.region IS NULL OR food.region = :region)
         ORDER BY food.use_count > 0 DESC, food.use_count DESC, food.last_used_at DESC,
-          CASE food.source WHEN 'CUSTOM' THEN 0 WHEN 'AI' THEN 1 WHEN 'SEED' THEN 2 ELSE 3 END,
+          CASE food.source WHEN 'CUSTOM' THEN 0 WHEN 'RECIPE' THEN 0 WHEN 'AI' THEN 1 WHEN 'SEED' THEN 2 ELSE 3 END,
           food.caveat IS NOT NULL,
           CASE WHEN food.name LIKE :prefix || '%' ESCAPE '\' THEN 0 ELSE 1 END,
           length(food.name), food.name
@@ -54,12 +54,12 @@ interface FoodDao {
     suspend fun basics(diets: List<String>, region: String, limit: Int): List<FoodEntity>
 
     /**
-     * Your own foods for Describe it's prompt (TRD §6.2): custom and AI-learned, unarchived, allowed by the diet
-     * and region, most used first.
+     * Your own foods for Describe it's prompt (TRD §6.2): custom, AI-learned and your recipes (M14), unarchived,
+     * allowed by the diet and region, most used first.
      */
     @Query(
         """
-        SELECT * FROM food WHERE archived = 0 AND source IN ('CUSTOM', 'AI') AND diet IN (:diets) AND (region IS NULL OR region = :region)
+        SELECT * FROM food WHERE archived = 0 AND source IN ('CUSTOM', 'AI', 'RECIPE') AND diet IN (:diets) AND (region IS NULL OR region = :region)
         ORDER BY use_count DESC, last_used_at DESC, created_at DESC LIMIT :limit
         """,
     )

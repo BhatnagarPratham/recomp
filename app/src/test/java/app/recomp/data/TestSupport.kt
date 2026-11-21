@@ -42,6 +42,7 @@ import app.recomp.data.repo.PersonaRepository
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.ProgrammeReviewRepository
 import app.recomp.data.repo.ReviewRepository
+import app.recomp.data.repo.RecipeRepository
 import app.recomp.data.repo.TrainingRepository
 import app.recomp.data.repo.WorkoutRepository
 import app.recomp.data.seed.SeedData
@@ -356,6 +357,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var foodLog: FoodLogRepository
         private set
+    lateinit var recipes: RecipeRepository
+        private set
     lateinit var foodSeeder: FoodSeeder
         private set
     lateinit var ai: AiRepository
@@ -396,6 +399,7 @@ class TestApp(private val dir: File) {
         nutrition = NutritionRepository(db.nutritionDao(), db.foodLogDao(), db.checkinDao(), prefs, days)
         foods = FoodRepository(db, db.foodDao(), db.foodLogDao(), prefs)
         foodLog = FoodLogRepository(db, db.foodDao(), db.foodLogDao(), db.savedMealDao(), db.aiDao(), prefs, nutrition)
+        recipes = RecipeRepository(db)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, sender, foods, clock)
         backup = BackupManager(context, db, prefs)

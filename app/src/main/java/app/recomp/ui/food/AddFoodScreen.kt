@@ -194,6 +194,9 @@ fun AddFoodScreen(
     onDescribe: (LocalDate, String) -> Unit,
     describeOutcome: DescribeOutcome?,
     onDescribeOutcomeShown: () -> Unit,
+    onRecipe: (id: Long?, name: String) -> Unit,
+    recipeOutcome: RecipeOutcome?,
+    onRecipeOutcomeShown: () -> Unit,
     viewModel: AddFoodViewModel = hiltViewModel(),
 ) {
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -232,6 +235,15 @@ fun AddFoodScreen(
     fun open(foodId: Long) = scope.launch {
         val choice = viewModel.portion(foodId) ?: return@launch
         logging = Logging(choice.food, PortionSheetState(choice.food.name, choice.food.caveat, choice.units, choice.quantity, choice.unit, choice.origin))
+    }
+
+    // Back from the recipe editor (NU-22): a new recipe is usually about to be logged, like a new food.
+    LaunchedEffect(recipeOutcome) {
+        val outcome = recipeOutcome ?: return@LaunchedEffect
+        onRecipeOutcomeShown()
+        viewModel.refresh()
+        if (outcome.created) open(outcome.foodId)
+        else scope.launch { snackbar.showSnackbar("Saved the recipe. Entries already logged keep their numbers.") }
     }
 
     Scaffold(
@@ -315,10 +327,14 @@ fun AddFoodScreen(
                     FoodRow(
                         hit,
                         onOpen = { open(hit.food.id) },
-                        onEdit = if (hit.food.source == FoodSource.CUSTOM) {
-                            { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
-                        } else {
-                            null
+                        onEdit = when (hit.food.source) {
+                            FoodSource.CUSTOM -> {
+                                { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
+                            }
+                            FoodSource.RECIPE -> {
+                                { onRecipe(hit.food.id, hit.food.name) }
+                            }
+                            else -> null
                         },
                         onHide = {
                             scope.launch {
@@ -381,6 +397,11 @@ fun AddFoodScreen(
             household = household,
             defaultDiet = f.diet,
             onDismiss = { form = null },
+            onRecipe = if (f.id == null) {
+                { name -> form = null; onRecipe(null, name) }
+            } else {
+                null
+            },
         ) { food ->
             form = null
             scope.launch {
@@ -445,6 +466,7 @@ private fun FoodRow(hit: FoodHit, onOpen: () -> Unit, onEdit: (() -> Unit)?, onH
         Column(Modifier.weight(1f).heightIn(min = 56.dp).clickable(onClickLabel = "Log ${food.name}", onClick = onOpen).padding(vertical = 8.dp)) {
             val mark = when (food.source) {
                 FoodSource.CUSTOM -> " · yours"
+                FoodSource.RECIPE -> " · your recipe"
                 FoodSource.AI -> " · AI-learned"
                 else -> ""
             }
