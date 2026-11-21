@@ -1074,3 +1074,23 @@ These rules hold for every block:
 
   Food stays in grams and the region's household measures.
 - Switching asks whether to move your exercises' weight steps to the nearest lb plates (2.5 kg → 5 lb). Logged history stays exact, because storage is always metric.
+- ◆ **Decided (2026-11-21):**
+  - **Where you choose.** Onboarding asks for units at the top of *About you*, before height and weight (lb and in by default for a US, Liberia or Myanmar phone, kg and cm otherwise), and again on the review step. Stone isn't offered.
+  - **Steps and precision.**
+    - Body weight steps by 0.2 lb and is typed to 0.1 lb; it shows one decimal ("177.2 lb").
+    - Lift steps are 1, 2.5, 5 or 10 lb, or another step you type. The defaults are 5 lb for barbells, plate-loaded machines, dumbbells (per dumbbell), kettlebells and added load, and 10 lb for machines and cables.
+    - Loads show to 0.1 lb without trailing zeros ("225 lb", "93.7 lb"). Volume, estimated 1RM and chart axes are whole lb.
+    - Waist, other tape sites and sit-and-reach step by ¼ in. Height is feet and whole inches.
+  - **Targets in lb** land on your exercise's lb steps: a weight increase from 100 kg with a 5 lb step suggests 225 lb, not 225.5 lb. A deload rounds down to a step; a repeat keeps what you lifted. <!-- pii-ok: illustrative -->
+  - **Nothing you didn't change is rewritten.** Opening and saving a set, a past workout or a scan without changing a number keeps the stored value exactly, even though it shows rounded in lb.
+  - **The switch.** It lists each step it would move ("Bench press and 11 more: 2.5 kg → 5 lb"), with *Move steps*, *Keep my steps* (they then show converted, e.g. 5.51 lb) and *Cancel*. It changes only exercises' weight steps. A workout in progress keeps its targets, shown converted.
+  - **What stays metric:**
+    - protein (in g per kg of your goal weight, with that weight shown in lb);
+    - the app's internal thresholds (stall rules, noise bands, the waist flag, BMI guardrails);
+    - the CSV export (`weight_kg`) and what's written to Health Connect, so switching rewrites nothing outside the app.
+  - **What converts with you:**
+    - the programme review's report to the AI, which says "Weights in lb, lengths in inches" at the top;
+    - the scan form, which has its own kg/lb switch, because the InBody sheet's unit is the machine's;
+    - a suggested goal weight, which rounds to a whole lb.
+  - **Decimal marks** follow your phone's language everywhere ("80,4 kg" in German); typing accepts either mark.
+  - **Records across a switch** are compared on the stored weight, so a lb-era 226 lb (102,512 g) beats a kg-era 102.5 kg. <!-- pii-ok: illustrative -->
