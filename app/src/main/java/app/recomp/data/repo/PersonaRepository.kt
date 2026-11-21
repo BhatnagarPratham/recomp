@@ -193,10 +193,16 @@ class PersonaRepository @Inject constructor(
      * Saves a goal, body-data or override change and, if the targets moved, a new version from today. The
      * stored body data then holds the weight those targets used, the trend weight once there is one.
      */
-    suspend fun save(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null, now: Long = System.currentTimeMillis()) {
+    suspend fun save(
+        plan: GoalPlan? = null,
+        profile: Profile? = null,
+        overrides: TargetOverrides? = null,
+        now: Long = System.currentTimeMillis(),
+        reason: TargetReason = TargetReason.MANUAL,
+    ) {
         val p = preview(plan, profile, overrides)
         val today = days.of(now)
-        if (p.changes) writeTarget(p.after, p.plan, today, TargetReason.MANUAL, now)
+        if (p.changes) writeTarget(p.after, p.plan, today, reason, now)
         prefs.edit {
             persona = this.persona.copy(goal = StoredGoal.of(p.plan))
             if (profile != null || p.changes) setProfile(p.profile)

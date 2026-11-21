@@ -848,6 +848,11 @@ These rules hold for every block:
 - **The progression engine stays plain rules.** AI never sets a set's weight or reps, and nothing changes without your tap.
 - **History:** each past review keeps what was sent, what came back and what you applied.
 - With AI off, the weekly review shows the numbers only.
+- ◆ **Built (M11):**
+  - Without *Body trends*, the week's food averages also go as % of target, not in kcal and grams.
+  - A suggestion is checked again whenever it's shown, so one that no longer fits (an exercise since archived) shows as advice.
+  - Calorie suggestions stay within Settings' *Adjust* range, with no deficit under BMI 18.5. Protein stays in the goal's range.
+  - Train's deload card offers *Deload next workouts* or *Not now*, which hides it for a week.
 
 ### 12.8 M12: Nudges, reminders and the widget (RM-01, NU-23, GL-08 nudges, PO-11, IB-06, HM-05)
 

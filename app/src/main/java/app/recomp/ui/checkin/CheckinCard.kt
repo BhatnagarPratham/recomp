@@ -83,6 +83,7 @@ fun WeeklyCheckinCard(viewModel: CheckinCardViewModel = hiltViewModel()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Weekly check-in", style = MaterialTheme.typography.titleMedium)
             Text(CheckinText.cardLine(week), color = MaterialTheme.colorScheme.onSecondaryContainer)
+            ProgrammeReviewCardLine()
             Button(onClick = { open(week.weekStart) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Open check-in") }
         }
     }

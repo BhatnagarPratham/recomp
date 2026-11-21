@@ -33,6 +33,8 @@ import app.recomp.ui.body.BodyScreen
 import app.recomp.ui.body.ScanScreen
 import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
+import app.recomp.ui.checkin.LocalOpenProgrammeReview
+import app.recomp.ui.checkin.ProgrammeReviewScreen
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -72,6 +74,9 @@ import kotlinx.serialization.Serializable
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
+
+/** M11's weekly programme review for a week; [reviewId] opens a past one. */
+@Serializable data class ProgrammeReviewRoute(val weekStart: String, val reviewId: Long = 0)
 
 @Serializable data object SettingsRoute
 
@@ -175,7 +180,12 @@ fun RecompNavHost(main: MainViewModel) {
                     )
                 }
             }
-            composable<CheckinRoute> { CheckinScreen(onBack = { nav.popBackStack() }) }
+            composable<CheckinRoute> {
+                CompositionLocalProvider(LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
+                    CheckinScreen(onBack = { nav.popBackStack() })
+                }
+            }
+            composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
             composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->

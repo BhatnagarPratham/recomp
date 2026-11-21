@@ -46,9 +46,9 @@ import kotlinx.serialization.json.JsonObject
  */
 @Singleton
 class AnthropicProvider @Inject constructor() : AiProvider {
-    /** Tests point the client at a local server and shorten the timeout. */
+    /** Tests point the client at a local server and shorten the timeout; otherwise it's the call's. */
     internal var baseUrl: String? = null
-    internal var timeout: Duration = TIMEOUT
+    internal var timeout: Duration? = null
 
     override suspend fun send(call: AiCall): AiResult = withContext(Dispatchers.IO) {
         val request = call
@@ -69,7 +69,7 @@ class AnthropicProvider @Inject constructor() : AiProvider {
         try {
             client = AnthropicOkHttpClient.builder()
                 .apiKey(request.target.apiKey.orEmpty())
-                .timeout(timeout)
+                .timeout(timeout ?: request.timeout)
                 .maxRetries(0)
                 .apply { baseUrl?.let { baseUrl(it) } }
                 .build()
@@ -123,11 +123,11 @@ class AnthropicProvider @Inject constructor() : AiProvider {
             .build()
         return MessageCreateParams.builder()
             .model(request.target.model)
-            .maxTokens(MAX_TOKENS)
+            .maxTokens(request.maxTokens)
             .systemOfBetaTextBlockParams(listOf(system))
             .outputConfig(
                 BetaOutputConfig.builder()
-                    .effort(BetaOutputConfig.Effort.LOW)
+                    .effort(if (request.effort == AiEffort.MEDIUM) BetaOutputConfig.Effort.MEDIUM else BetaOutputConfig.Effort.LOW)
                     .format(BetaJsonOutputFormat.builder().schema(schema(request.schema)).build())
                     .build(),
             )
