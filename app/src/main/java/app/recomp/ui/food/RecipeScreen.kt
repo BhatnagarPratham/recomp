@@ -134,7 +134,8 @@ class RecipeViewModel @Inject constructor(
     val missing = MutableStateFlow(false)
 
     private var saved = RecipeForm(name = route.name)
-    val dirty: Boolean get() = form.value != saved
+    /** Whether [current] differs from what was loaded: leaving then asks first. */
+    fun dirty(current: RecipeForm): Boolean = current != saved
 
     val query = MutableStateFlow("")
 
@@ -243,8 +244,10 @@ fun RecipeScreen(onBack: () -> Unit, onSaved: (RecipeOutcome) -> Unit, viewModel
     var saving by remember { mutableStateOf(false) }
     val editing = viewModel.recipeId != null
 
-    fun leave() = if (viewModel.dirty) leaving = true else onBack()
-    BackHandler(enabled = viewModel.dirty) { leaving = true }
+    // Read from the form here, in the screen's own scope, so the back handler follows every edit.
+    val dirty = viewModel.dirty(form)
+    fun leave() = if (dirty) leaving = true else onBack()
+    BackHandler(enabled = dirty && !saving) { leaving = true }
     LaunchedEffect(missing) { if (missing) onBack() }
 
     fun pick(food: FoodEntity, index: Int?, grams: Double?) = scope.launch { amount = Amount(food, viewModel.units(food.id), index, grams) }
@@ -325,12 +328,12 @@ fun RecipeScreen(onBack: () -> Unit, onSaved: (RecipeOutcome) -> Unit, viewModel
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     YieldField("Servings", form.servings, null, Modifier.weight(1f)) { text -> viewModel.edit { it.copy(servings = text) } }
-                    YieldField("Cooked weight (optional)", form.cooked, "g", Modifier.weight(1f)) { text -> viewModel.edit { it.copy(cooked = text) } }
+                    YieldField("Cooked weight", form.cooked, "g", Modifier.weight(1f)) { text -> viewModel.edit { it.copy(cooked = text) } }
                 }
             }
             item {
                 Text(
-                    "Weigh the finished dish without the pot for the cooked weight. One serving is the dish's weight ÷ servings.",
+                    "The cooked weight is optional: weigh the finished dish without the pot. One serving is the dish's weight ÷ servings.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

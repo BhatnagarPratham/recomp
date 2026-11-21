@@ -115,13 +115,18 @@ body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CON
                     mins_since_meal, workout_before_scan, mins_from_slot?, protocol_ok, image_path?, notes?  -- IB-01/02
 measurement         id, log_date, measured_at, type(WAIST|CHEST|ARM|THIGH|HIP), value   -- cm; YG-04 adds mobility types
 progress_photo      id, log_date, pose(FRONT|SIDE|BACK), file_path   -- app-private storage
-food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR), barcode?,
+food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR|RECIPE), barcode?,
                     source_key?           -- unique: "seed:paneer", "indb:ASC001"; ties a row to its bundled file
                     diet(VEGAN|VEGETARIAN|EGG|FISH|MEAT), region(INDIAN|INTERNATIONAL)?   -- null = every region
                     kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g,
                     caveat(FRYING_OIL)?, use_count, last_used_at?, archived, created_at
 food_fts            FTS4 over food.name, external content: Room's triggers keep it in sync with food
 food_unit           id, food_id, label("roti","katori","bowl"…), grams, calibrated   -- unique (food_id, label)
+recipe              food_id (PK, → food, deleted with it), servings?, cooked_weight_g?
+                                          -- NU-22 (M14, v11): the food row holds the name, diet tag and values per 100 g,
+                                          -- recomputed from the ingredients on each save; null cooked weight = the ingredients'
+                                          -- own weight; null servings = no serving unit
+recipe_ingredient   id, recipe_id (→ recipe, deleted with it), position, food_id (→ food), grams   -- grams as weighed, raw
 food_log            id, log_date, meal_slot (a slot key, §6.4), food_id?, name, quantity, unit_label, grams?,
                     kcal, protein_g, carbs_g?, fat_g?, fiber_g?, origin(HOME|ORDERED|PACKAGED),
                     source(MANUAL|SAVED_MEAL|QUICK_ADD|AI_TEXT|AI_PHOTO|LOCAL_PARSE|LABEL|BARCODE),
@@ -176,12 +181,12 @@ M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMi
 
 A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
-**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`, `recipe_ingredient(recipe_id)`, `recipe_ingredient(food_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
-- New tables: `programme_review` (M11), `scan_draft` (M13), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
+- New tables: `programme_review` (M11), `scan_draft` (M13), `progress_photo` (M17, as above plus `taken_at`). (`recipe` and `recipe_ingredient` landed with M14, above.)
 - New columns: `exercise.deload_pending` (M11), `daily_activity.sleep_source` (M13). (`ai_request_log.provider` landed with M7, above.)
-- New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
+- New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); the mobility `MeasurementType`s (M17).
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
@@ -1511,7 +1516,7 @@ Tests cover:
 
 #### M14: Recipes
 
-*NU-22; PRD §12.10; Room v13.*
+*NU-22; PRD §12.10; Room v11 (planned as v13; versions go in merge order).*
 - **Scope:** the recipe editor. A recipe is a `food` with `source = RECIPE`, whose values are recomputed from its ingredients when it's saved, and whose serving is a `food_unit`.
 - **Data (v13):**
   ```text
@@ -1522,6 +1527,25 @@ Tests cover:
 - **Tests:** values per 100 g with and without a cooked weight; the diet tag from the strictest ingredient; an edited ingredient leaving past logs alone; a recipe inside itself refused; the migration to v13.
 - **Risks:** raw and cooked weights are easy to mix up, so the editor says which one the totals assume.
 - **Parallel:** with M13.
+
+**M14 results (2026-11-20; Room v11, after M7's v10: main's next version when it was built, not the planned 13).** Built to PRD §12.10 and the block above. `Recipes` (`:domain`) does the arithmetic, `RecipeRepository` saves, and `ui/food/RecipeScreen.kt` is the editor, opened from *New food* → *Recipe · build it from ingredients* and from a recipe's *Edit* in search. Where the spec was silent:
+- **Servings, cooked weight, or both.** At least one is needed. With no cooked weight, the dish is taken to weigh what its ingredients do. With no servings, the recipe has no *serving* unit and is logged by weight. One serving is the dish's weight ÷ servings, so a serving's numbers are the same whether or not the pot was weighed.
+- **Raw or cooked.** Ingredient amounts are always raw, as weighed going in, and the amount field says so. Under the totals the editor says which weight per 100 g uses: "Per 100 g is for the cooked dish, using the 920 g you weighed", or "No cooked weight, so per 100 g assumes the dish weighs what its ingredients do raw (310 g)…".
+- **Amounts** are typed in grams or in one of the ingredient's units (katori, piece…) and stored as grams.
+- **Values are fixed when the recipe is saved.** A later change to an ingredient (a corrected custom food, or a recipe inside this one) reaches the recipe the next time it's saved; the editor opens with the ingredients' current values, so opening and saving is enough. Nothing recomputes behind your back.
+- **Editing changes future logs only,** because log rows snapshot their macros (§4). A saved meal that holds the recipe recomputes from it when logged, like any food.
+- **A recipe inside a recipe** is allowed, and passes its diet tag up. A recipe is never offered as its own ingredient, nor is any recipe that contains it at any depth; `RecipeRepository.save` refuses one too, with nothing written.
+- **The *serving* unit** is the recipe's first unit, replaced on each save. Units you calibrated for the recipe stay. It prefills in the portion sheet however heavy it is (`Portions.MAX_UNIT_GRAMS` is for database units).
+- **Search** ranks a recipe with your custom foods and marks it "your recipe". It's among your own foods in *Describe it*'s prompt. The learning loop never overwrites one: an AI estimate named like a recipe becomes its own AI-learned food.
+- **Hiding** a recipe archives its food, as for any food; the recipe and its ingredients stay for the logs that point at them. There's no delete.
+- **Leaving with unsaved changes** asks first.
+- **Limits:** an ingredient or a pot up to 50 kg, up to 200 servings.
+
+| Check | Result |
+|-------|--------|
+| Tests | `RecipeTest` (`:domain`, 6): values with and without a cooked weight, the diet tag, bad amounts, a recipe inside itself at one, two and three levels. `RecipeFlowTest` (`:app`, 9): the food row, serving unit and search; no cooked weight; the diet tag following the ingredients and the diet filter; an edit leaving a past log and its name alone while a new log and a saved meal use the new values; an ingredient's change arriving on the next save; self-containment refused with nothing written; calibrated units kept; the editor's weight note. `MigrationTest`: 10→11 from the exported schema with foods, units, logs and a saved meal kept and the new foreign keys enforced, and 9→10→11 in one open. `BackupTest`: the round trip with two recipes (one inside the other), and a v10 backup imported. |
+| Dev install `app.recomp.m14dev` (invented data, uninstalled afterwards) | ✅ *New food* → *Recipe* opened the editor. Three ingredients from search, one typed as 2 katori (300 g). Totals, per 100 g and per serving showed as they were added, with the raw-weight note, then the cooked-weight note once 520 g was typed, and "Has egg, from its strictest ingredient". Saving opened the portion sheet at 1 serving (130 g); it logged at 289 kcal. Search showed it as "your recipe" with *Edit*, and its own ingredient search didn't offer it. After removing the egg and saving, it read Vegetarian at 253 kcal a serving, and the entry already logged still read 289 kcal. The run found Back leaving without asking after an edit, and a field label that wrapped; both fixed. <!-- pii-ok: invented dev-install values --> |
+| Release build over the real data | Not yet. M13 was also developing a v11, so installing M14's v11 on the phone before the merge order was known could have left it on a schema main never has. It's installed once this branch is rebased onto the main it merges after. |
 
 #### M15: InBody share and scan-informed targets
 
