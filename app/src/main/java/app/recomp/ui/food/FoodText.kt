@@ -16,6 +16,12 @@ import kotlin.math.roundToInt
 
 /** User-facing text for food logging (PRD §7.7). */
 object FoodText {
+    /** A wait in plain words: "30 s", "2 min". */
+    fun wait(ms: Long): String {
+        val s = ((ms + 999) / 1000).coerceAtLeast(1)
+        return if (s < 90) "$s s" else "${(s + 59) / 60} min"
+    }
+
     fun origin(o: Origin) = when (o) {
         Origin.HOME -> "Home"
         Origin.ORDERED -> "Ordered"

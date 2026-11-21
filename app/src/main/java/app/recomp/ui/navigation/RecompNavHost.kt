@@ -24,6 +24,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import app.recomp.ui.food.LabelScanScreen
+import app.recomp.ui.camera.BarcodeScanScreen
 import app.recomp.data.backup.PendingOutcome
 import app.recomp.ui.AppNav
 import app.recomp.ui.MainViewModel
@@ -106,6 +108,13 @@ import kotlinx.serialization.Serializable
 
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
 @Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
+
+/** M18's camera food: a pack's barcode, a nutrition label (for New food, named [name] so far), a meal photo. */
+@Serializable data object ScanBarcodeRoute
+
+@Serializable data class LabelScanRoute(val name: String = "")
+
+@Serializable data object MealPhotoRoute
 
 @Serializable data object MealSlotsRoute
 
@@ -211,12 +220,29 @@ fun RecompNavHost(main: MainViewModel) {
             }
             composable<AddFoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
+                val camera = hasCamera()
+                val (barcode, barcodeShown) = entry.result<String>(CameraKeys.BARCODE)
+                val (label, labelShown) = entry.result<Boolean>(CameraKeys.LABEL)
                 AddFoodScreen(
                     onDone = { nav.popBackStack() },
                     onDescribe = { date, slot -> nav.navigate(DescribeRoute(date.toString(), slot)) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
+                    onScanBarcode = if (camera) { { nav.navigate(ScanBarcodeRoute) } } else null,
+                    onScanLabel = { name -> nav.navigate(LabelScanRoute(name)) },
+                    scannedBarcode = barcode,
+                    labelScanned = label == true,
+                    onCameraResultShown = {
+                        barcodeShown()
+                        labelShown()
+                    },
                 )
+            }
+            composable<ScanBarcodeRoute> {
+                BarcodeScanScreen(onBack = { nav.popBackStack() }, onCode = { code -> nav.finishWith(CameraKeys.BARCODE, code) })
+            }
+            composable<LabelScanRoute> {
+                LabelScanScreen(onBack = { nav.popBackStack() }, onScanned = { nav.finishWith(CameraKeys.LABEL, true) })
             }
             composable<DescribeRoute> {
                 DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
@@ -332,6 +358,34 @@ private fun NavHostController.finishDescribe(outcome: DescribeOutcome) {
         set(DescribeOutcomeKeys.MESSAGE, outcome.message)
     }
     popBackStack()
+}
+
+/** Hands [value] back to the screen below under [key], and goes back to it. */
+private fun NavHostController.finishWith(key: String, value: Any) {
+    previousBackStackEntry?.savedStateHandle?.set(key, value)
+    popBackStack()
+}
+
+/** What a camera screen left in this entry's saved state, and how to clear it once handled. */
+@Composable
+private fun <T> NavBackStackEntry.result(key: String): Pair<T?, () -> Unit> {
+    val handle = savedStateHandle
+    val value by handle.getStateFlow<T?>(key, null).collectAsStateWithLifecycle()
+    return value to { handle.remove<T>(key) }
+}
+
+/** Whether the phone has any camera; without one, the scan buttons stay hidden and photos come from the gallery. */
+@Composable
+private fun hasCamera(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return remember { context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY) }
+}
+
+/** Where the camera screens leave their results (M18). */
+private object CameraKeys {
+    const val BARCODE = "camera_barcode"
+    const val LABEL = "camera_label"
+    const val MEAL_PHOTO = "camera_meal_photo"
 }
 
 /** Where Describe it leaves its outcome in the previous screen's saved state. */

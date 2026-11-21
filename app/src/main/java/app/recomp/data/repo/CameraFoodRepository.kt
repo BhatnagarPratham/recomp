@@ -132,11 +132,11 @@ class CameraFoodRepository @Inject constructor(
      * ([image], at AI size) and that text go to your provider, whose values replace the phone's where it found
      * them. With AI off, or when the request fails, the phone's reading stands, and the note says so.
      */
-    suspend fun scanLabel(ocr: Bitmap, image: AiImage, name: String): LabelScan {
+    suspend fun scanLabel(ocr: Bitmap, image: AiImage, name: String, useAi: Boolean = true): LabelScan {
         val text = reader.read(ocr)
         val local = LabelParser.parse(text)
         val base = FoodPrefill(name.trim(), null, local, null, FoodSource.LABEL_OCR, null)
-        if (ai.gate.first().state == AiState.OFF) return LabelScan(base.withNote(local), aiUsed = false)
+        if (!useAi || ai.gate.first().state == AiState.OFF) return LabelScan(base.withNote(local), aiUsed = false)
         return when (val read = ai.readLabel(image, text)) {
             is LabelRead.Read -> {
                 val e = read.estimate
@@ -158,6 +158,15 @@ class CameraFoodRepository @Inject constructor(
             is LabelRead.Failed -> LabelScan(base.withNote(local, aiFailed = true), aiUsed = false)
         }
     }
+
+    /** A label scan's result, waiting for New food to open with it (the screens hand over through here). */
+    private var pending: FoodPrefill? = null
+
+    fun hold(prefill: FoodPrefill) {
+        pending = prefill
+    }
+
+    fun take(): FoodPrefill? = pending.also { pending = null }
 
     /** Deletes kept meal photos that no draft points at any more (NU-20). */
     suspend fun sweepPhotos() = photos.sweep(aiDao.draftPhotos().toSet())

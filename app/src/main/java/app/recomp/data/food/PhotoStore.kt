@@ -42,6 +42,12 @@ class PhotoStore @Inject constructor(@ApplicationContext private val context: Co
     }
 
     /** The photo as an AI request carries it. */
+    /** [bitmap] at most [maxEdge] on its long edge (itself when it's already that small). */
+    fun downscale(bitmap: Bitmap, maxEdge: Int = PhotoScale.MAX_EDGE): Bitmap {
+        val (w, h) = PhotoScale.size(bitmap.width, bitmap.height, maxEdge)
+        return if (w == bitmap.width && h == bitmap.height) bitmap else Bitmap.createScaledBitmap(bitmap, w, h, true)
+    }
+
     fun image(bitmap: Bitmap): AiImage = AiImage(MEDIA_TYPE, jpeg(bitmap))
 
     fun image(path: String): AiImage? = File(path).takeIf { it.isFile && it.parentFile == dir }?.let { AiImage(MEDIA_TYPE, it.readBytes()) }
