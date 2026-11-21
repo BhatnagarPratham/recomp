@@ -139,7 +139,7 @@ fun AutoBackupSettings(viewModel: AutoBackupViewModel = hiltViewModel()) {
 
 /** The words of Settings' automatic backup row (PRD §12.12). */
 object AutoBackupText {
-    const val PHOTOS = "Progress photos go in each weekly backup too. Off, they stay only on this phone."
+    const val PHOTOS = "Progress photos and InBody screenshots go in each weekly backup too. Off, they stay only on this phone."
 
     const val EXPLAIN =
         "Every Sunday night, when the battery isn't low, Recomp saves a full backup. In a folder on this phone it keeps the newest " +

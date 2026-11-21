@@ -69,6 +69,9 @@ class ScanImages(private val dir: File, private val isImage: (File) -> Boolean =
         )
         private val NAME = Regex("[0-9a-f-]{36}\\.(jpg|png|webp|heic)")
 
+        /** Whether [name] is one this store makes: a backup may only bring back names like these (no path in them). */
+        fun valid(name: String): Boolean = NAME.matches(name)
+
         /** Whether [file] decodes as an image with a size: its bounds, without decoding the pixels. */
         fun decodes(file: File): Boolean {
             val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
