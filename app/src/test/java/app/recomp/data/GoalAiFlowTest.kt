@@ -1,5 +1,6 @@
 package app.recomp.data
 
+import app.recomp.data.ai.ProviderSender
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.ai.GoalSchema
@@ -86,7 +87,7 @@ class GoalAiFlowTest {
         server = MockWebServer().apply { start(java.net.InetAddress.getByName("127.0.0.1"), 0) }
         app.openAi.baseUrl = "http://127.0.0.1:${server.port}/v1"
         app.openAi.timeout = Duration.ofSeconds(2)
-        app.sender.through = app.recomp.data.ai.ProviderSender(app.providers)
+        app.sender.through = ProviderSender(app.providers)
         runBlocking {
             app.ai.setProvider(AiProviderId.OPENAI)
             app.ai.setEnabled(true)

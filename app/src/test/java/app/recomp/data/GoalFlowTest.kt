@@ -511,20 +511,18 @@ class GoalFlowTest {
             assertNull("week of ${week.weekStart}", week.flag)
             assertNull("week of ${week.weekStart}", week.proposedKcal)
         }
-        // The estimate reads the gain as stored energy and falls well under the formula's TDEE...
-        val estimate = checkinDao.latest()!!.tdeeNew
-        assertTrue("$estimate vs $formulaTdee", estimate < formulaTdee - 150)
-        // ...but neither Settings nor a save uses it: the targets stay at the formula's maintenance.
+        // The gain would read as stored energy, but no week's estimate falls below the formula's TDEE while it's on...
+        assertTrue(checkinDao.all().all { it.tdeeNew >= formulaTdee })
+        // ...so Settings and a save stay at the formula's maintenance or above.
         val preview = app.personas.preview(profile = woman.copy(heightCm = 165.5))
         assertTrue("${preview.after.kcal}", preview.after.kcal >= start.kcal)
-        assertFalse(preview.after.adaptiveTdee)
         app.personas.save(profile = woman.copy(heightCm = 165.5))
         assertTrue(targets.all().all { it.kcal >= start.kcal })
         assertTrue(targets.all().none { it.reason == TargetReason.CHECKIN })
 
-        // Switched off, the estimate counts again.
-        app.personas.save(profile = woman.copy(heightCm = 165.5, pregnant = false))
-        assertTrue(app.personas.preview().after.adaptiveTdee)
+        // Switched off (R1), nothing the pregnancy dragged down comes back: the targets don't drop.
+        val off = app.personas.preview(profile = woman.copy(heightCm = 165.5, pregnant = false))
+        assertTrue("${off.after.kcal} vs ${start.kcal}", off.after.kcal >= start.kcal)
     }
 
     @Test
@@ -546,6 +544,41 @@ class GoalFlowTest {
         // The resume already used the latest maintenance estimate, so the newest week has nothing over 50 kcal to propose.
         assertEquals(CheckinFlag.LOSS_SLOW, checkinDao.latest()!!.flag)
         assertTrue(targets.targetOn(date(133))!!.kcal < targets.targetOn(date(84))!!.kcal)
+    }
+
+    @Test
+    fun `a change saved during a break is still the break's, in the review too (R2)`() = runBlocking {
+        onboard()
+        (0..100).forEach { weigh(it, 80.0 - 0.02 * it); eat(it, 2100.0) }
+        assertTrue(goals.startBreak(2, at(84)))
+        app.personas.save(profile = profile.copy(heightCm = 176.0), now = at(86))
+        val saved = targets.targetOn(date(86))!!
+        assertEquals(TargetReason.BREAK, saved.reason)
+        assertEquals(Goal.MAINTAIN, saved.goal)
+        val week = app.reviews.week(date(84), today = date(88))
+        assertTrue(week.body.atMaintenance)
+        assertNull(week.body.pace)
+        assertNull(week.outlook)
+        // Back on the goal, a save is an ordinary one again.
+        goals.refresh(at(98))
+        app.personas.save(profile = profile.copy(heightCm = 175.0), now = at(99))
+        assertEquals(TargetReason.MANUAL, targets.targetOn(date(99))!!.reason)
+    }
+
+    @Test
+    fun `a goal refresh that fails doesn't stop the check-ins (R3)`() = runBlocking {
+        onboard()
+        (0..100).forEach { weigh(it, 80.0); eat(it, 2100.0) }
+        assertTrue(goals.startBreak(1, at(84)))
+        // The resume is due, but settings can't be written (a full disk).
+        app.store.failWrites = true
+        app.checkins.catchUp(date(98), at(98))
+        assertEquals(date(91), checkinDao.latest()!!.weekStart)
+        app.store.failWrites = false
+        // Next time it goes through.
+        app.checkins.catchUp(date(98), at(98, 13))
+        assertNull(plan().breakUntil)
+        assertEquals(TargetReason.RESUME, targets.targetOn(date(98))!!.reason)
     }
 
     @Test

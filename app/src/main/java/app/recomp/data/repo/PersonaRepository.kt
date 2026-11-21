@@ -225,7 +225,9 @@ class PersonaRepository @Inject constructor(
     ) {
         val p = preview(plan, profile, overrides, now)
         val today = days.of(now)
-        if (p.changes) writeTarget(p.after, p.plan, today, reason, now)
+        // A change saved during a break (body data, your own numbers) is still the break's version (GL-06, M19 R2).
+        val written = if (reason == TargetReason.MANUAL && p.plan.onBreak) TargetReason.BREAK else reason
+        if (p.changes) writeTarget(p.after, p.plan, today, written, now)
         prefs.edit {
             persona = this.persona.copy(goal = StoredGoal.of(p.plan))
             if (profile != null || p.changes) setProfile(p.profile)

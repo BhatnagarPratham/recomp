@@ -22,6 +22,7 @@ import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
 import app.recomp.domain.checkin.EstimateGap
 import app.recomp.domain.checkin.WaistReading
+import app.recomp.domain.nutrition.NutritionCalculator
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
@@ -136,7 +137,14 @@ class CheckinRepository @Inject constructor(
 
     private suspend fun catchUpLocked(day: LocalDate, now: Long) {
         // A break that ended while the app was closed resumes first, so the weeks after it are judged on the goal (GL-06).
-        goals.refresh(now)
+        // A failure there (a settings write that throws) mustn't stop the check-ins from opening.
+        try {
+            goals.refresh(now)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Retried at the next catch-up or launch.
+        }
         val first = nutritionDao.first() ?: return
         val thisWeek = mondayOf(day)
         // A week lapses when the next one is ready. If that next one was a clock-ahead week just dropped, it's open again.
@@ -305,7 +313,10 @@ class CheckinRepository @Inject constructor(
             incomplete = checkinDao.incompleteDays(from, end).toSet(),
             previous = previous.toDouble(),
         )
-        val tdeeNew = estimate.new.roundToInt()
+        // GL-09: pregnancy gain isn't stored energy, so while it's on the estimate never falls below the formula's TDEE.
+        // Nothing biased is carried into the chain for when it's switched off (M19 review R1).
+        val formulaTdee = NutritionCalculator.startingTargets(basis.inputs).tdeeKcal
+        val tdeeNew = (if (basis.profile.pregnant) maxOf(estimate.new, formulaTdee) else estimate.new).roundToInt()
         // During a break, and until the flag's window is back on the goal, the estimate updates but nothing is flagged.
         // While pregnant or breastfeeding the scale isn't judged either (GL-09): a gain would read as drift, and the
         // estimate as a lower maintenance.
