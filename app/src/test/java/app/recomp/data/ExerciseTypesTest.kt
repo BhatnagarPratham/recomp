@@ -54,4 +54,20 @@ class ExerciseTypesTest {
         // A type added by a later Health Connect is left out until this table says what it is.
         assertNull(ExerciseTypes.kind(9_999))
     }
+
+    @Test
+    fun `an extra written to Health Connect takes the activity its style names, else other workout`() {
+        val E = androidx.health.connect.client.records.ExerciseSessionRecord
+        assertEquals(E.EXERCISE_TYPE_WALKING, ExerciseTypes.typeFor("Walk"))
+        assertEquals(E.EXERCISE_TYPE_BADMINTON, ExerciseTypes.typeFor(" badminton "))
+        org.junit.Assert.assertNull(ExerciseTypes.typeFor("Evening stroll"))
+        val write = app.recomp.healthconnect.HealthConnectWriter.Companion
+        assertEquals(E.EXERCISE_TYPE_WALKING, write.exerciseType(app.recomp.domain.model.SessionKind.CARDIO, "Walk"))
+        assertEquals(E.EXERCISE_TYPE_BADMINTON, write.exerciseType(app.recomp.domain.model.SessionKind.SPORT, "Badminton"))
+        assertEquals(E.EXERCISE_TYPE_OTHER_WORKOUT, write.exerciseType(app.recomp.domain.model.SessionKind.CARDIO, "Evening stroll"))
+        // A style that names another kind's activity doesn't change the kind's type.
+        assertEquals(E.EXERCISE_TYPE_OTHER_WORKOUT, write.exerciseType(app.recomp.domain.model.SessionKind.CARDIO, "Badminton"))
+        assertEquals(E.EXERCISE_TYPE_STRENGTH_TRAINING, write.exerciseType(app.recomp.domain.model.SessionKind.STRENGTH, "Walk"))
+        assertEquals(E.EXERCISE_TYPE_YOGA, write.exerciseType(app.recomp.domain.model.SessionKind.YOGA, "Hatha"))
+    }
 }

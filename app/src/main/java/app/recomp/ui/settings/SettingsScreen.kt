@@ -32,6 +32,7 @@ import app.recomp.data.prefs.StoredPersona
 import app.recomp.data.prefs.TrainingSettings
 import app.recomp.data.health.HealthFeature
 import app.recomp.data.repo.BodyRepository
+import app.recomp.data.repo.GoalRepository
 import app.recomp.data.repo.HealthRepository
 import app.recomp.domain.health.Steps
 import app.recomp.ui.health.HealthText
@@ -49,7 +50,9 @@ import app.recomp.domain.persona.ActivityLevel
 import app.recomp.domain.persona.Diet
 import app.recomp.domain.persona.FinishLine
 import app.recomp.domain.persona.FoodRegion
+import app.recomp.domain.persona.GoalChange
 import app.recomp.domain.persona.GoalPlan
+import app.recomp.domain.persona.GoalStatus
 import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
@@ -65,6 +68,7 @@ import app.recomp.ui.components.SectionTitle
 import app.recomp.ui.food.FoodDataDialog
 import app.recomp.ui.food.FoodSettingsViewModel
 import app.recomp.ui.components.formatDayStart
+import app.recomp.ui.goal.GoalCardText
 import app.recomp.ui.onboarding.GoalText
 import app.recomp.ui.onboarding.SwitchRow
 import app.recomp.ui.onboarding.TargetList
@@ -103,6 +107,8 @@ data class SettingsUi(
     /** The version in force today, and whether a check-in proposal waits: Settings says so when its number differs. */
     val inForceKcal: Int? = null,
     val checkinWaiting: Boolean = false,
+    /** GL-06: the goal's finish line is reached, or a maintenance break is running. */
+    val goalStatus: GoalStatus = GoalStatus.None,
 )
 
 /** A change that moves the targets, waiting for you to confirm the before and after (PRD §7.1). */
@@ -114,6 +120,7 @@ class SettingsViewModel @Inject constructor(
     private val personas: PersonaRepository,
     training: TrainingRepository,
     private val body: BodyRepository,
+    goals: GoalRepository,
     private val health: HealthRepository,
 ) : ViewModel() {
     /** M13 (PRD §12.9): what's turned on in Health Connect, the step goal and *Track sleep*. */
@@ -131,25 +138,31 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { today.value = personas.today() }
     }
 
-    private val about = combine(personas.stored, personas.profile, personas.overrides, today, personas.maintenance) { stored, profile, overrides, day, maintenance ->
+    /** The check-in's estimate and a recent scan's lean mass (IB-05), which the targets shown use. */
+    private val basis = combine(personas.maintenance, personas.leanMass, ::Pair)
+
+    private val about = combine(personas.stored, personas.profile, personas.overrides, today, basis) { stored, profile, overrides, day, basis ->
         val plan = stored.goal?.toPlan()
-        Triple(stored, profile, Triple(plan, overrides, day to maintenance))
+        Triple(stored, profile, Triple(plan, overrides, day to basis))
     }
 
-    private val inForce = combine(today.flatMapLatest { personas.observeTargetOn(it) }, personas.checkinWaiting) { target, waiting -> target?.kcal to waiting }
+    private val inForce = combine(today.flatMapLatest { personas.observeTargetOn(it) }, personas.checkinWaiting, goals.status) { target, waiting, status ->
+        Triple(target?.kcal, waiting, status)
+    }
 
     private val bodyData = combine(body.observeTrend(), body.scanSlot, inForce) { trend, slot, inForce -> Triple(trend.trendKg, slot, inForce) }
 
     val ui: StateFlow<SettingsUi> = combine(about, personas.dayStart, training.settings, training.observeExtras(), bodyData) { (stored, profile, rest), dayStart, settings, extras, (trendKg, slot, inForce) ->
         val (plan, overrides, dayAndEstimate) = rest
-        val (day, maintenance) = dayAndEstimate
+        val (day, basis) = dayAndEstimate
+        val (maintenance, leanMassKg) = basis
         SettingsUi(
             loaded = true,
             today = day,
             stored = stored,
             plan = plan,
             profile = profile,
-            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day, maintenance) else null,
+            targets = if (plan != null && profile != null) personas.targetsFor(profile, plan, overrides, day, maintenance, leanMassKg) else null,
             dayStart = dayStart,
             training = settings,
             extraNames = extras.map { it.name },
@@ -158,6 +171,7 @@ class SettingsViewModel @Inject constructor(
             maintenance = maintenance,
             inForceKcal = inForce.first,
             checkinWaiting = inForce.second,
+            goalStatus = inForce.third,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUi())
 
@@ -233,6 +247,7 @@ fun SettingsScreen(
     onOpenMeals: () -> Unit,
     onOpenPortions: () -> Unit,
     onOpenHidden: () -> Unit,
+    onOpenSnack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -259,6 +274,7 @@ fun SettingsScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(GoalText.goalSummary(plan.goal, plan.policy, Labels.pace(plan.pace), plan.goalWeightKg), style = MaterialTheme.typography.titleMedium)
                     Text(finishLineText(plan), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    GoalCardText.settingsLine(ui.goalStatus)?.let { Text(it, color = MaterialTheme.colorScheme.secondary) }
                     Text("Change goal, pace or finish line", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 }
             }
@@ -275,6 +291,7 @@ fun SettingsScreen(
                 estimateWeek = ui.maintenance?.weekStart,
                 kcalNote = GoalText.inForceNote(targets.kcal, ui.inForceKcal, ui.checkinWaiting),
             )
+            if (plan.onBreak) Text(GoalText.BREAK_TARGETS, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LatestCheckinRow()
         }
 
@@ -298,6 +315,9 @@ fun SettingsScreen(
                 )
             }
             SettingRow("Activity", Labels.activity(profile.activity)) { editing = Editing.Activity }
+            // GL-09: shown to everyone. Turning it on with an active deficit previews the move to Maintain first.
+            SwitchRow(GoalText.PREGNANT_TITLE, GoalText.PREGNANT_BODY, profile.pregnant) { on -> viewModel.changeProfile(profile.copy(pregnant = on)) }
+            if (profile.pregnant) Text(GoalText.PREGNANT_ON, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
         }
 
         SectionTitle("Training")
@@ -325,6 +345,7 @@ fun SettingsScreen(
             onChange = viewModel::setRamp,
         )
         SettingRow("Meals", "Breakfast, lunch…", onClick = onOpenMeals)
+        SettingRow("Snack allowance", "Off, or 100–300 kcal", onClick = onOpenSnack)
         SettingRow("Portion sizes", "Katori, glass, cup…", onClick = onOpenPortions)
         SettingRow("Hidden foods", "Restore", onClick = onOpenHidden)
         SettingRow("Food data", "Sources", onClick = { foodData = true })
@@ -495,7 +516,11 @@ private fun PreviewDialog(preview: TargetPreview, onConfirm: () -> Unit, onDismi
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 preview.notes.forEach { Text(GoalText.guardrail(it), color = MaterialTheme.colorScheme.secondary) }
-                if (before != null && before.goal != preview.plan.goal) Text("Goal: ${Labels.goal(before.goal)} → ${Labels.goal(preview.plan.goal)}")
+                if (before != null && before.goal != preview.targetGoal) {
+                    Text("Goal: ${Labels.goal(before.goal)} → ${Labels.goal(preview.targetGoal)}")
+                    // PS-04: a guardrail moving the goal is a change of goal too, so it says what the scale will do.
+                    GoalChange.expect(before.goal, preview.targetGoal)?.let { Text(GoalText.expect(it), style = MaterialTheme.typography.bodySmall) }
+                }
                 ChangeLine("Protein", before?.proteinG, after.proteinG, "g")
                 ChangeLine("Calories", before?.kcal, after.kcal, "kcal")
                 ChangeLine("Fat", before?.fatG, after.fatG, "g")

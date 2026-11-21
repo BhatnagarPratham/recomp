@@ -24,6 +24,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- M18, camera food: barcode, label and meal photos, all read on the phone. Phones without a camera still install. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!--
       Health Connect reads (TRD §6.3), one feature each, asked for only when you turn that feature on: steps;
@@ -37,6 +40,14 @@
     <uses-permission android:name="android.permission.health.READ_BASAL_METABOLIC_RATE" />
     <!-- The daily sync while the app is closed, where Health Connect offers it. Without it, sync runs at launch only. -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+
+    <!--
+      M16 (DA-04): Settings → Health Connect → Share with other apps, off by default, asked for only when you turn it
+      on: your workouts, a nutrition record per meal and the weigh-ins you log.
+    -->
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
+    <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
+    <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
 
     <!-- The names of the apps that wrote a workout ("from Google Fit"): apps that work with Health Connect. -->
     <queries>
@@ -65,6 +76,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Share to Recomp (IB-03, TRD §6.7): an image, such as an InBody screenshot, opens "What is this?". -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
 

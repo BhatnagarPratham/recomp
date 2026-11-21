@@ -269,8 +269,29 @@ object Migrations {
         }
     }
 
-    /** M17: progress photos (BM-04). The images are files; the table only points at them. */
+    /**
+     * M14, recipes (NU-22): how much a recipe makes, and its ingredients. A recipe is a `food` row whose `source`
+     * is the new `RECIPE` name, so `food` itself doesn't change. SQL from schemas/13.json.
+     */
     val MIGRATION_12_13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `recipe` (`food_id` INTEGER NOT NULL, `servings` REAL, `cooked_weight_g` REAL, PRIMARY KEY(`food_id`), " +
+                    "FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `recipe_ingredient` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recipe_id` INTEGER NOT NULL, " +
+                    "`position` INTEGER NOT NULL, `food_id` INTEGER NOT NULL, `grams` REAL NOT NULL, " +
+                    "FOREIGN KEY(`recipe_id`) REFERENCES `recipe`(`food_id`) ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                    "FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_recipe_id` ON `recipe_ingredient` (`recipe_id`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_food_id` ON `recipe_ingredient` (`food_id`)")
+        }
+    }
+
+    /** M17: progress photos (BM-04). The images are files; the table only points at them. */
+    val MIGRATION_13_14 = object : Migration(13, 14) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS `progress_photo` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, " +

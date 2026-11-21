@@ -7,6 +7,7 @@ import app.recomp.data.db.MeasurementType
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.ReviewDao
 import app.recomp.data.db.RoutineDao
+import app.recomp.data.db.TargetReason
 import app.recomp.data.db.WeekRecordRow
 import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.SettingsPrefs
@@ -80,6 +81,8 @@ data class BodyWeek(
     /** The goal's pace, for "goal −0.5% a week"; null before there's a goal, or for a week before the plan. */
     val pace: WeightPace? = null,
     val waistSince: LocalDate? = null,
+    /** The week ended at maintenance during a break (GL-06, M19): no pace and no finish line, just the trend. */
+    val atMaintenance: Boolean = false,
 )
 
 /** Steps and sleep (AR-01, AR-02), once M13 fills `daily_activity`; each part shows only when it has days. */
@@ -135,14 +138,16 @@ class ReviewRepository @Inject constructor(
         val asOf = minOf(end, day)
         val plan = plan(day)
         val weekPlan = plan?.let { weekPlan(weekStart, end, it) }
-        val current = plan?.takeIf { weekPlan == WeekPlan.Current }
+        // A week that ends inside a maintenance break isn't judged against the goal's pace or finish line (GL-06).
+        val atMaintenance = nutritionDao.targetOn(asOf)?.reason == TargetReason.BREAK
+        val current = plan?.takeIf { weekPlan == WeekPlan.Current && !atMaintenance }
         return WeekReview(
             weekStart = weekStart,
             inProgress = inProgress,
             food = food(weekStart, end, day, inProgress),
             // This week and the one just finished count against today's plan.
             training = training(weekStart, end, againstPlan = !weekStart.isBefore(WeeklyPlan.weekStart(day).minusWeeks(1))),
-            body = body(weekStart, asOf, current),
+            body = body(weekStart, asOf, current).copy(atMaintenance = atMaintenance),
             activity = activity(weekStart, end),
             plan = weekPlan,
             outlook = current?.let { outlook(weekStart, asOf, it) },
@@ -169,7 +174,9 @@ class ReviewRepository @Inject constructor(
      */
     private suspend fun weekPlan(start: LocalDate, end: LocalDate, plan: GoalPlan): WeekPlan {
         if (!end.isBefore(plan.startedOn)) return WeekPlan.Current
-        val goal = nutritionDao.targetOn(end)?.goal ?: checkinDao.week(start)?.flag?.goal
+        // A break's version says Maintain; the week's goal is the one underneath it, from the version before the break.
+        val goal = nutritionDao.all().lastOrNull { !it.effectiveFrom.isAfter(end) && it.reason != TargetReason.BREAK }?.goal
+            ?: checkinDao.week(start)?.flag?.goal
         return if (goal != null && goal != plan.goal) WeekPlan.EarlierGoal(goal, plan.startedOn) else WeekPlan.EarlierPlan(plan.startedOn)
     }
 

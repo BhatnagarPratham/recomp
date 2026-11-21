@@ -337,6 +337,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
             item {
                 Column {
                     SectionTitle("Scans")
+                    ScanTargetsCard()
                     if (scans.isNotEmpty()) {
                         val weeks by viewModel.compositionRange.collectAsStateWithLifecycle()
                         Card(Modifier.fillMaxWidth()) {

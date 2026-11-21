@@ -14,8 +14,12 @@ import java.time.LocalDate
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 
-/** Why a target version was written (TRD §4). MANUAL is any change you made in onboarding's review or Settings. */
-enum class TargetReason { INITIAL, CHECKIN, MANUAL, REVIEW }
+/**
+ * Why a target version was written (TRD §4). MANUAL is any change you made in onboarding's review or Settings.
+ * REVIEW is a programme review's suggestion (M11). BREAK starts a maintenance break, and marks a change saved during
+ * one; RESUME ends it (GL-06, M19). Stored as the name, so new values need no migration.
+ */
+enum class TargetReason { INITIAL, CHECKIN, MANUAL, REVIEW, BREAK, RESUME }
 
 /**
  * A version of the daily targets (PS-02), in force from [effectiveFrom] until the next one. One per day:

@@ -24,6 +24,8 @@ import app.recomp.data.backup.BackupException
 import app.recomp.data.backup.BackupManager
 import app.recomp.ui.onboarding.SwitchRow
 import app.recomp.data.backup.BackupManifest
+import app.recomp.data.backup.CsvExport
+import app.recomp.data.backup.CsvSummary
 import app.recomp.data.backup.PreparedBackup
 import app.recomp.data.repo.CheckinRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -55,6 +57,7 @@ sealed interface DataState {
 class DataViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val backups: BackupManager,
+    private val csv: CsvExport,
     private val checkins: CheckinRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow<DataState>(DataState.Idle)
@@ -108,6 +111,21 @@ class DataViewModel @Inject constructor(
         _state.value = DataState.Done("Exported", "Saved ${summary(manifest)}, and your settings.")
     }
 
+    /** DA-03: the tables as spreadsheets, in one zip. A failed export leaves no half-written file behind. */
+    fun exportCsv(uri: Uri) = run("Exporting…", "Not exported") {
+        val resolver = context.contentResolver
+        val summary = try {
+            withContext(Dispatchers.IO) {
+                val out = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull() ?: resolver.openOutputStream(uri) ?: throw IOException("no file")
+                csv.export(out)
+            }
+        } catch (e: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) { runCatching { DocumentsContract.deleteDocument(resolver, uri) } }
+            throw e
+        }
+        _state.value = DataState.Done("Exported as CSV", csvSummary(summary))
+    }
+
     fun open(uri: Uri) = run("Checking the backup…", "Can't import this file") {
         val prepared = withContext(Dispatchers.IO) {
             val input = context.contentResolver.openInputStream(uri) ?: throw IOException("no file")
@@ -156,6 +174,12 @@ class DataViewModel @Inject constructor(
             ).joinToString(", ")
         }
 
+        fun csvSummary(s: CsvSummary): String {
+            fun n(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"
+            return "Saved ${n(s.sessions, "workout", "workouts")} (${n(s.sets, "set", "sets")}), ${n(s.foods, "food entry", "food entries")}, " +
+                "${n(s.weighIns, "weigh-in", "weigh-ins")} and ${n(s.scans, "scan", "scans")} as spreadsheets. They're for reading: to move your data, use Export all data."
+        }
+
         fun dateTime(epochMs: Long): String =
             Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
     }
@@ -169,6 +193,7 @@ fun DataSettings(viewModel: DataViewModel = hiltViewModel()) {
     val includePhotos by viewModel.includePhotos.collectAsStateWithLifecycle()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(viewModel::export) }
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::open) }
+    val saveCsv = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(viewModel::exportCsv) }
 
     SettingRow("Export all data", "Save a file") { save.launch(BackupManager.fileName(LocalDate.now())) }
     SwitchRow(
@@ -178,6 +203,8 @@ fun DataSettings(viewModel: DataViewModel = hiltViewModel()) {
         onChange = viewModel::setIncludePhotos,
     )
     SettingRow("Import a backup", "Replace") { open.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
+    SettingRow("Export as CSV", "For spreadsheets") { saveCsv.launch(CsvExport.fileName(LocalDate.now())) }
+    AutoBackupSettings()
     safetyCopy?.let { at ->
         SettingRow("Restore the data from before the import", DataViewModel.dateTime(at), onClick = viewModel::openSafetyCopy)
     }

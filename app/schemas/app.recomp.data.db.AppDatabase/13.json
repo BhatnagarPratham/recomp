@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 13,
-    "identityHash": "27bf45df1ee0245fed46f49761eb7884",
+    "identityHash": "086505c4414bc6e492f8023c52a45fbd",
     "entities": [
       {
         "tableName": "exercise",
@@ -2098,8 +2098,49 @@
         }
       },
       {
-        "tableName": "progress_photo",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `log_date` TEXT NOT NULL, `taken_at` INTEGER NOT NULL, `pose` TEXT NOT NULL, `file_path` TEXT NOT NULL)",
+        "tableName": "recipe",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`food_id` INTEGER NOT NULL, `servings` REAL, `cooked_weight_g` REAL, PRIMARY KEY(`food_id`), FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "foodId",
+            "columnName": "food_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "servings",
+            "columnName": "servings",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "cookedWeightG",
+            "columnName": "cooked_weight_g",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "food_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "food",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "food_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "recipe_ingredient",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recipe_id` INTEGER NOT NULL, `position` INTEGER NOT NULL, `food_id` INTEGER NOT NULL, `grams` REAL NOT NULL, FOREIGN KEY(`recipe_id`) REFERENCES `recipe`(`food_id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
         "fields": [
           {
             "fieldPath": "id",
@@ -2108,27 +2149,27 @@
             "notNull": true
           },
           {
-            "fieldPath": "logDate",
-            "columnName": "log_date",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "takenAt",
-            "columnName": "taken_at",
+            "fieldPath": "recipeId",
+            "columnName": "recipe_id",
             "affinity": "INTEGER",
             "notNull": true
           },
           {
-            "fieldPath": "pose",
-            "columnName": "pose",
-            "affinity": "TEXT",
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
             "notNull": true
           },
           {
-            "fieldPath": "filePath",
-            "columnName": "file_path",
-            "affinity": "TEXT",
+            "fieldPath": "foodId",
+            "columnName": "food_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "grams",
+            "columnName": "grams",
+            "affinity": "REAL",
             "notNull": true
           }
         ],
@@ -2140,20 +2181,53 @@
         },
         "indices": [
           {
-            "name": "index_progress_photo_log_date",
+            "name": "index_recipe_ingredient_recipe_id",
             "unique": false,
             "columnNames": [
-              "log_date"
+              "recipe_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_progress_photo_log_date` ON `${TABLE_NAME}` (`log_date`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_recipe_id` ON `${TABLE_NAME}` (`recipe_id`)"
+          },
+          {
+            "name": "index_recipe_ingredient_food_id",
+            "unique": false,
+            "columnNames": [
+              "food_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_food_id` ON `${TABLE_NAME}` (`food_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "recipe",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "recipe_id"
+            ],
+            "referencedColumns": [
+              "food_id"
+            ]
+          },
+          {
+            "table": "food",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "food_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
           }
         ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '27bf45df1ee0245fed46f49761eb7884')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '086505c4414bc6e492f8023c52a45fbd')"
     ]
   }
 }

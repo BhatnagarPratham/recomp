@@ -350,6 +350,9 @@ class BackupManager @Inject constructor(
     internal fun readPending(): PendingRestore? =
         pendingFile.takeIf { it.isFile }?.let { runCatching { json.decodeFromString<PendingRestore>(it.readText()) }.getOrNull() ?: run { it.delete(); null } }
 
+    /** Where the automatic backup (M16) builds its file before copying it out: app-private cache, deleted after. */
+    val autoBackupScratch: File get() = File(context.cacheDir, "backups/automatic.zip")
+
     /** Whether an import is between its database commit and its photos and settings, so photos must be left alone. */
     fun importInProgress(): Boolean = pendingFile.isFile || incomingPhotos.exists()
 

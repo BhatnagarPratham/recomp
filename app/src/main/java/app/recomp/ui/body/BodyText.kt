@@ -141,6 +141,22 @@ object BodyText {
     fun slopeFrom(scans: Int, weeks: Long?): String =
         if (weeks == null) "from all $scans on-protocol scans" else "from $scans on-protocol scans in the last $weeks weeks"
 
+    /** IB-05's offer: the scan's day and the two BMRs. */
+    fun scanOffer(o: app.recomp.data.repo.ScanOffer): String =
+        "Your scan of ${shortDate(o.date)} puts your resting calories at ${GoalText.kcal(o.scanBmrKcal)}; your targets use ${GoalText.kcal(o.targetBmrKcal)}. " +
+            "Lean mass is more accurate than height and weight. Nothing changes until you save."
+
+    /** The before and after of saving targets with the scan. */
+    fun scanPreview(p: app.recomp.data.repo.TargetPreview): String = buildString {
+        val before = p.before
+        append("Resting calories ${before?.bmrKcal?.let(GoalText::kcal) ?: "–"} → ${GoalText.kcal(Math.round(p.after.bmrKcal).toInt())}\n")
+        append("Calories ${before?.kcal?.let(GoalText::kcal) ?: "–"} → ${GoalText.kcal(p.after.kcal)}\n")
+        append("Protein ${before?.proteinG ?: "–"} g → ${p.after.proteinG} g\n")
+        append("Fat ${before?.fatG ?: "–"} g → ${p.after.fatG} g · carbs ${before?.carbsG ?: "–"} g → ${p.after.carbsG} g")
+        if (p.maintenance != null) append("\nCalories still follow your check-in's maintenance estimate; the scan sets the floor.")
+        if (!p.changes) append("\nYour targets already match.")
+    }
+
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
 

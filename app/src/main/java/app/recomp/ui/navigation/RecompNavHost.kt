@@ -24,6 +24,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import app.recomp.ui.food.LabelScanScreen
+import app.recomp.ui.camera.BarcodeScanScreen
 import app.recomp.data.backup.PendingOutcome
 import app.recomp.ui.AppNav
 import app.recomp.ui.MainViewModel
@@ -32,20 +34,26 @@ import app.recomp.ui.components.formatDuration
 import app.recomp.ui.body.BodyScreen
 import app.recomp.ui.body.PhotosScreen
 import app.recomp.ui.body.ScanScreen
+import app.recomp.ui.body.ShareScreen
 import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.checkin.LocalOpenProgrammeReview
 import app.recomp.ui.checkin.ProgrammeReviewScreen
+import app.recomp.ui.goal.LocalOpenGoal
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
 import app.recomp.ui.exercises.LibraryScreen
 import app.recomp.ui.food.AddFoodScreen
 import app.recomp.ui.food.DescribeOutcome
 import app.recomp.ui.food.DescribeScreen
+import app.recomp.ui.food.FitScreen
+import app.recomp.ui.food.SnackAllowanceScreen
 import app.recomp.ui.food.FoodScreen
 import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
 import app.recomp.ui.food.PortionSizesScreen
+import app.recomp.ui.food.RecipeOutcome
+import app.recomp.ui.food.RecipeScreen
 import app.recomp.ui.onboarding.OnboardingScreen
 import app.recomp.ui.reminders.LocalOpenReminders
 import app.recomp.ui.reminders.RemindersScreen
@@ -73,8 +81,14 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object BodyRoute
 
-/** A scan's form (IB-01); 0 is a new scan. */
-@Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0)
+/**
+ * A scan's form (IB-01); 0 is a new scan. [draftId] is an InBody draft from Health Connect it completes (IB-07), and
+ * [image] a shared InBody screenshot pinned above it (IB-03).
+ */
+@Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0, val image: String = "")
+
+/** "What is this?" for a shared image (IB-03, TRD §6.7); [image] is its kept copy, empty when it couldn't be read. */
+@Serializable data class ShareRoute(val image: String, val setup: Boolean = false)
 
 /** Body → Photos (BM-04). */
 @Serializable data object PhotosRoute
@@ -115,10 +129,24 @@ import kotlinx.serialization.Serializable
 @Serializable data class ExerciseHistoryRoute(val exerciseId: Long)
 
 /** Adding food to one meal of one day (J3). [date] is an ISO log date. */
-@Serializable data class AddFoodRoute(val date: String, val slot: String)
+@Serializable data class AddFoodRoute(val date: String, val slot: String, val labelScanned: Boolean = false)
+
+/** The recipe editor (NU-22): [id] is the recipe's food, or 0 for a new one starting with [name]. */
+@Serializable data class RecipeRoute(val id: Long = 0, val name: String = "")
 
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
-@Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
+@Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0, val sharedImage: String = "")
+
+/** *Will it fit?* (NU-18). [slot] is the meal it was opened from, or empty for the meal for the time of day. */
+@Serializable data class FitRoute(val slot: String = "")
+
+@Serializable data object SnackAllowanceRoute
+
+/** M18's camera food: a pack's barcode, and a nutrition label for New food (named [name] so far). */
+@Serializable data object ScanBarcodeRoute
+
+/** [sharedImage] a label shared to Recomp (M15's picker), read instead of the camera, for [date]'s [slot]. */
+@Serializable data class LabelScanRoute(val name: String = "", val sharedImage: String = "", val date: String = "", val slot: String = "")
 
 @Serializable data object MealSlotsRoute
 
@@ -162,6 +190,7 @@ fun RecompNavHost(main: MainViewModel) {
                     nav.openTopLevel(TodayRoute)
                     nav.openCheckin(event.weekStart)
                 }
+                is AppNav.Shared -> nav.navigate(ShareRoute(event.image, event.setup))
             }
         }
     }
@@ -196,7 +225,7 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<TodayRoute> {
-                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenGoal provides nav::openGoal) {
                     TodayScreen(
                         onOpenWorkout = nav::openWorkout,
                         onOpenSummary = { nav.navigate(SummaryRoute(it, fromHistory = true)) },
@@ -206,7 +235,7 @@ fun RecompNavHost(main: MainViewModel) {
                 }
             }
             composable<CheckinRoute> {
-                CompositionLocalProvider(LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
+                CompositionLocalProvider(LocalOpenGoal provides nav::openGoal, LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
                     CheckinScreen(onBack = { nav.popBackStack() })
                 }
             }
@@ -216,27 +245,77 @@ fun RecompNavHost(main: MainViewModel) {
             }
             composable<PhotosRoute> { PhotosScreen(onBack = { nav.popBackStack() }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
+            composable<ShareRoute> {
+                ShareScreen(
+                    onInBody = { image -> nav.navigate(ScanRoute(image = image)) { popUpTo<ShareRoute> { inclusive = true } } },
+                    onLabel = { image, date, slot ->
+                        nav.navigate(LabelScanRoute(sharedImage = image, date = date.toString(), slot = slot)) { popUpTo<ShareRoute> { inclusive = true } }
+                    },
+                    onMealPhoto = { image, date, slot ->
+                        nav.navigate(DescribeRoute(date.toString(), slot, sharedImage = image)) { popUpTo<ShareRoute> { inclusive = true } }
+                    },
+                    onDone = { nav.popBackStack() },
+                )
+            }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
                 FoodScreen(
                     onAdd = { date, slot -> nav.navigate(AddFoodRoute(date.toString(), slot)) },
                     onEstimateDraft = { draft -> nav.navigate(DescribeRoute(draft.logDate.toString(), draft.mealSlot, draft.id)) },
+                    onFit = { nav.navigate(FitRoute()) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
                 )
             }
             composable<AddFoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
+                val camera = hasCamera()
+                val (barcode, barcodeShown) = entry.result<String>(CameraKeys.BARCODE)
+                val (label, labelShown) = entry.result<Boolean>(CameraKeys.LABEL)
+                val (recipe, recipeShown) = entry.recipeOutcome()
                 AddFoodScreen(
                     onDone = { nav.popBackStack() },
                     onDescribe = { date, slot -> nav.navigate(DescribeRoute(date.toString(), slot)) },
+                    onFit = { slot -> nav.navigate(FitRoute(slot)) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
+                    onRecipe = { id, name -> nav.navigate(RecipeRoute(id ?: 0, if (id == null) name else "")) },
+                    recipeOutcome = recipe,
+                    onRecipeOutcomeShown = recipeShown,
+                    onScanBarcode = if (camera) { { nav.navigate(ScanBarcodeRoute) } } else null,
+                    onScanLabel = { name -> nav.navigate(LabelScanRoute(name)) },
+                    scannedBarcode = barcode,
+                    labelScanned = label == true || entry.toRoute<AddFoodRoute>().labelScanned,
+                    onCameraResultShown = {
+                        barcodeShown()
+                        labelShown()
+                    },
+                )
+            }
+            composable<RecipeRoute> {
+                RecipeScreen(onBack = { nav.popBackStack() }, onSaved = { outcome -> nav.finishRecipe(outcome) })
+            }
+            composable<ScanBarcodeRoute> {
+                BarcodeScanScreen(onBack = { nav.popBackStack() }, onCode = { code -> nav.finishWith(CameraKeys.BARCODE, code) })
+            }
+            composable<LabelScanRoute> { entry ->
+                val route = entry.toRoute<LabelScanRoute>()
+                LabelScanScreen(
+                    onBack = { nav.popBackStack() },
+                    onScanned = {
+                        // From the share picker there's no New food waiting below: open Add food with it.
+                        if (route.sharedImage.isEmpty()) nav.finishWith(CameraKeys.LABEL, true)
+                        else nav.navigate(AddFoodRoute(route.date, route.slot, labelScanned = true)) { popUpTo<LabelScanRoute> { inclusive = true } }
+                    },
                 )
             }
             composable<DescribeRoute> {
                 DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
             }
+            composable<FitRoute> {
+                FitScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
+            }
+            composable<SnackAllowanceRoute> { SnackAllowanceScreen(onBack = { nav.popBackStack() }) }
             composable<MealSlotsRoute> { MealSlotsScreen(onBack = { nav.popBackStack() }) }
             composable<PortionSizesRoute> { PortionSizesScreen(onBack = { nav.popBackStack() }) }
             composable<HiddenFoodsRoute> { HiddenFoodsScreen(onBack = { nav.popBackStack() }) }
@@ -251,12 +330,13 @@ fun RecompNavHost(main: MainViewModel) {
             composable<SettingsRoute> {
                 CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenReminders provides { nav.navigate(RemindersRoute) }) {
                     SettingsScreen(
-                        onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
+                        onOpenGoal = nav::openGoal,
                         onOpenTraining = { nav.navigate(SetupRoute) },
                         onOpenHealth = { nav.navigate(HealthConnectRoute) },
                         onOpenMeals = { nav.navigate(MealSlotsRoute) },
                         onOpenPortions = { nav.navigate(PortionSizesRoute) },
                         onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
+                        onOpenSnack = { nav.navigate(SnackAllowanceRoute) },
                     )
                 }
             }
@@ -375,6 +455,32 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
     )
 }
 
+/** The recipe editor ends back on add food, which opens a new recipe's portion sheet. */
+private fun NavHostController.finishRecipe(outcome: RecipeOutcome) {
+    previousBackStackEntry?.savedStateHandle?.apply {
+        set(RecipeOutcomeKeys.CREATED, outcome.created)
+        set(RecipeOutcomeKeys.FOOD, outcome.foodId)
+    }
+    popBackStack()
+}
+
+private object RecipeOutcomeKeys {
+    const val FOOD = "recipe_food"
+    const val CREATED = "recipe_created"
+}
+
+/** The saved recipe waiting in this entry's saved state, and how to clear it once handled (as for Describe it). */
+@Composable
+private fun NavBackStackEntry.recipeOutcome(): Pair<RecipeOutcome?, () -> Unit> {
+    val handle = savedStateHandle
+    val food by handle.getStateFlow<Long?>(RecipeOutcomeKeys.FOOD, null).collectAsStateWithLifecycle()
+    val outcome = food?.let { RecipeOutcome(it, handle.get<Boolean>(RecipeOutcomeKeys.CREATED) == true) }
+    return outcome to {
+        handle.remove<Long>(RecipeOutcomeKeys.FOOD)
+        handle.remove<Boolean>(RecipeOutcomeKeys.CREATED)
+    }
+}
+
 /** Describe it ends back where it started (add food, or the Food tab's draft), which shows its message. */
 private fun NavHostController.finishDescribe(outcome: DescribeOutcome) {
     previousBackStackEntry?.savedStateHandle?.apply {
@@ -382,6 +488,33 @@ private fun NavHostController.finishDescribe(outcome: DescribeOutcome) {
         set(DescribeOutcomeKeys.MESSAGE, outcome.message)
     }
     popBackStack()
+}
+
+/** Hands [value] back to the screen below under [key], and goes back to it. */
+private fun NavHostController.finishWith(key: String, value: Any) {
+    previousBackStackEntry?.savedStateHandle?.set(key, value)
+    popBackStack()
+}
+
+/** What a camera screen left in this entry's saved state, and how to clear it once handled. */
+@Composable
+private fun <T> NavBackStackEntry.result(key: String): Pair<T?, () -> Unit> {
+    val handle = savedStateHandle
+    val value by handle.getStateFlow<T?>(key, null).collectAsStateWithLifecycle()
+    return value to { handle.remove<T>(key) }
+}
+
+/** Whether the phone has any camera; without one, the scan buttons stay hidden and photos come from the gallery. */
+@Composable
+private fun hasCamera(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return remember { context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY) }
+}
+
+/** Where the camera screens leave their results (M18). */
+private object CameraKeys {
+    const val BARCODE = "camera_barcode"
+    const val LABEL = "camera_label"
 }
 
 /** Where Describe it leaves its outcome in the previous screen's saved state. */
@@ -419,6 +552,9 @@ private fun NavHostController.openTopLevel(route: Any) = navigate(route) {
 }
 
 /** A week's check-in (PRD §12.1), from Today's card or Settings. */
+/** Settings → Goal: the goal flow, also reached from the Goal reached card (GL-06). */
+private fun NavHostController.openGoal() = navigate(OnboardingRoute(goalOnly = true)) { launchSingleTop = true }
+
 private fun NavHostController.openCheckin(weekStart: LocalDate) = navigate(CheckinRoute(weekStart.toString())) { launchSingleTop = true }
 
 /** Back to Today, or to onboarding when a workout was resumed before onboarding finished. */

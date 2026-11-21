@@ -37,9 +37,11 @@ import kotlinx.serialization.json.Json
         DailyActivityEntity::class,
         ProgrammeReviewEntity::class,
         ScanDraftEntity::class,
+        RecipeEntity::class,
+        RecipeIngredientEntity::class,
         ProgressPhotoEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -57,6 +59,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun reviewDao(): ReviewDao
     abstract fun programmeReviewDao(): ProgrammeReviewDao
     abstract fun healthDao(): HealthDao
+    abstract fun recipeDao(): RecipeDao
     abstract fun backupCheckDao(): BackupCheckDao
     abstract fun nudgeDao(): NudgeDao
     abstract fun historyDao(): HistoryDao
@@ -77,6 +80,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_10_11,
             Migrations.MIGRATION_11_12,
             Migrations.MIGRATION_12_13,
+            Migrations.MIGRATION_13_14,
         )
     }
 }

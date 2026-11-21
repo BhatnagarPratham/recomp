@@ -432,8 +432,8 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 **Food logging in the app (M3b):**
 - **Food tab.** The bottom bar is Today · Food · Train · Body · Settings (Body from M4). Food is the daily view (NU-16), and Today's nutrition card has *Log food*, which opens it. ‹ and › move between days. You can log on past days, not future ones.
 - **Daily view (NU-16).** Calories and protein remaining against that day's targets, protein first. Protein follows the ramp (NU-03) and has no target during the baseline week. A macro split shows grams eaten against the protein, carbs and fat targets; fibre is shown without a target. Being over is a plain number, never failure styling. Each meal shows its calories and protein.
-- **Meals (NU-10).** Breakfast, Lunch, Snacks and Dinner. Settings → Food → Meals renames, adds, removes and reorders them. A removed meal keeps its past entries.
-- **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. With AI on, *Describe it* sits beside them (M3c, below).
+- **Meals (NU-10).** Breakfast, Lunch, Snacks and Dinner. Settings → Food → Meals renames, adds, removes and reorders them. A removed meal keeps its past entries. From M9 each meal also has a usual time (§12.5).
+- **Adding food (J3).** A meal's + opens one screen: a search box, *My meals*, then the results, plus *Quick add* and *New food*. An empty search lists your recent foods; before you've logged anything, it lists the protein-rich basics for your diet. *Describe it* sits beside them (M3c, below; from M9 with AI off too), with *Will it fit?* when you're adding to today (M9, §12.5).
 - **Portion.** Tapping a food opens a portion sheet prefilled with what you logged for it last time (amount, unit and origin), otherwise one of the food's own servings, otherwise 100 g. Amounts step by ½ (10 for grams) and can be typed. *Save* logs it, so a repeat food is search, tap, Save.
 - **Units (NU-12).** Every food offers grams, its own units (INDB's serving, e.g. "bowl ≈ 258 g", or a custom food's) and the region's household measures: katori 150 g, glass 250 ml and tbsp 15 g for Indian; cup 240 ml and tbsp 15 g for International. Settings → Food → Portion sizes calibrates the household measures to your utensils, and the portion sheet can recalibrate any unit for one food. Roti, piece, slice and plate belong to particular foods, not to every food. Liquids count 1 ml as 1 g.
 - **Custom foods (NU-12).** Name, optional brand, values per 100 g or per serving (a unit and its weight; the weight is prefilled for household measures), calories, protein, carbs, fat, optional fibre, and a diet tag that defaults to your diet. Editing one changes future logs only.
@@ -447,9 +447,9 @@ Each configured extra session has a kind (yoga, mobility, cardio or sport), a na
 - **Fried INDB recipes.** INDB counts all the oil used for deep frying as eaten, so about 120 fried recipes read two to three times too high. They stay searchable with a warning that quick add or a custom food may be closer, and rank below other matches.
 
 **Describe it in the app (M3c, NU-17).** Text only; meal photos (NU-20) stay P1.
-- **Where.** *Describe it* is a button on the add-food screen, beside *Quick add* and *New food*. With AI off it isn't there (AI-01) until M9, which keeps it for the local parser (AI-04). It opens its own screen for that meal and day.
+- **Where.** *Describe it* is a button on the add-food screen, beside *Quick add* and *New food*. Before M9 it wasn't there with AI off (AI-01); from M9 it always is, and the local parser answers when AI is off or can't be reached (AI-04, §12.5). It opens its own screen for that meal and day.
 - **Describe.** A text box ("2 phulka, 1 katori rajma, cucumber salad, 1 glass chaas") and the origin chips (Home, Ordered, Packaged; Home by default). *Estimate* sends it. While it runs the screen says so, and *Cancel* goes back to the text, unchanged.
-- **Not ready (AI-02).** With AI on but no key yet, offline, or this month's cap reached, the button still opens the screen. A line says why ("You're offline", "AI is paused until 1 November: this month's $5.00 cap is reached", or "Add your Claude API key", with *Add key*), and the main action is *Save draft*. Search, *My meals* and *Quick add* stay one tap away.
+- **Not ready (AI-02).** With AI on but no key yet, offline, or this month's cap reached, the button still opens the screen. A line says why ("You're offline", "AI is paused until 1 November: this month's $5.00 cap is reached", or "Add your Claude API key", with *Add key*), and the main action is *Save draft*. Search, *My meals* and *Quick add* stay one tap away. From M9 the main action is *Estimate*, answered by the local parser, with *Save draft* under it (§12.5).
 - **Review.** The estimate lists each item with its amount and grams, calories, protein, carbs and fat, a confidence (high, medium or low) and Claude's assumptions ("medium size, no ghee"). The meal's total sits on top, recomputed from the items. An item whose calories don't match its macros (more than 15% from 4 × protein + 4 × carbs + 9 × fat) is flagged. Items Claude gave no usable weight or amount are left out, with a note naming them.
   - Tap an item to edit its name, amount in grams (its macros scale with it) or its numbers, or to remove it.
   - **A clarifying question** ("Was the dal tempered with ghee?") shows above the items with a one-line answer box. *Re-estimate* sends the meal again with your answer; it's a new request, counted in the spend. If it fails or you cancel it, the earlier estimate comes back, with the reason. Ignoring the question is fine.
@@ -803,6 +803,21 @@ These rules hold for every block:
   - It's part of the calorie target, not extra. The day view says "includes a 150 kcal snack allowance", and the snack meal shows "60 of 150 kcal".
   - ◆ **Decided:** build it. (Moving NU-06 to P2 was the alternative.)
 
+**As built (M9).** Where the points above left a gap, this is what the app does:
+- **AI on but not ready** (no key, offline, the cap reached): *Estimate* still works, from the local parser, and the review says it was matched without AI. *Save draft* stays as the second button, so the description can still wait for the AI.
+- **If the AI fails after the parser matched something,** the review opens with the matched items, the rest under "Couldn't find", and the reason. No draft is kept then, because saving those items and later estimating a draft of the whole text would count them twice. With nothing matched, the description is kept as a draft, as before.
+- **"Couldn't find" parts:** *Search* picks a food and its amount, *Quick add* takes calories and protein, and *Leave out* drops the part. They join the review; nothing is logged until *Save*.
+- **Changing items.** A food the parser matched, or one you picked, changes its amount only: its numbers are the food's own, edited from search. An AI item edits as in M3c and becomes one of your foods.
+- **What the parser understands:** amounts as digits, fractions ("1/2", "½", "1 1/2"), ranges ("2-3") and words ("half a", "one and a half", "a couple of"); weights ("150 g", "200 ml"); the amount before or after the name ("roti x2"); foods separated by commas, new lines, "+", "and" or "with". Every word you type has to be in the food's name, so "dal makhani" never becomes plain dal, and a name that says the food is *without* it doesn't count ("Mayonnaise without eggs" is never eggs). An exact name among your own foods wins, then an exact name in the database, then the food you log most.
+- **Not sure means not matched.** A match the parser isn't sure of (a dish that merely contains the word, like banana raita for "2 bananas", or a serving it can't place) is never counted. With AI on, that part goes to the AI with the rest. With AI off it's shown as "Not sure about: 2 bananas · Best guess: Banana raita", with *Use it* beside *Search* and *Quick add*.
+- **Nothing counted twice.** When the AI returns something the parser already counted under another name ("Roti (2 pcs)", "Butter roti" for "2 roti"), it's set aside as "Already counted: Roti (2 pcs)" with *Add anyway*.
+- **If a save can't go through** (say a backup import replaced your foods while the review was open), the review stays, says why, and nothing is logged.
+- **Will it fit? is about today,** so its button shows on the Food tab when it's on today, and on the add-food screen when you're adding to today. From a meal's add-food screen, *Log it* starts on that meal.
+- **Will it fit? with AI on:** an *Ordered* dish is one request. A *Home* or *Packaged* dish goes through the parser first, like Describe it, so a dish made of your own foods costs nothing. If the request fails, the parser's answer is shown with the reason. It never keeps a draft.
+- **Its numbers by goal:** recomp leads with protein ("Protein left 62 g → 30 g"), fat loss with calories left, maintain with calories against the range ("Calories 1,850 → 2,230 (range 2,090–2,310)") and lean bulk with calories still to eat. The other number follows. In the protein ramp's baseline week, protein shows without a target.
+- **Meal times.** Breakfast starts at 05:00, Lunch at 12:00, Snacks at 16:00 and Dinner at 19:00 until you change them (Settings → Food → Meals → a meal's menu → *Usual time*); each meal runs to the next one's start. A time before the day's first start belongs to the last meal, so 01:30 is a late dinner. A meal you add has no usual time until you set one.
+- **Snack allowance.** The line shows on any day you view, at the current setting. If you remove its meal, it moves to Snacks (or your first meal). The chosen meal shows "60 of 150 kcal" in place of its calories; over is a plain "210 of 150 kcal". The target and what's left are exactly what they'd be with it off.
+
 ### 12.6 M10: Training history (WL-10, PO-09, PO-10)
 
 - **History** on the Train tab: every workout and extra session, newest first.
@@ -958,6 +973,10 @@ These rules hold for every block:
   - Targets don't change on their own. After a scan that moves BMR by 20 kcal or more, Body offers *Preview targets with your scan*, before and after.
   - The **body-fat finish line** becomes available. Its goal weight is lean mass ÷ (1 − target %), and the suggested goal weight uses the scan (§4.2).
   - Once the weekly check-in has a maintenance estimate (M5), that sets the calories. The scan's BMR still sets the floor.
+- ◆ **Built (M15):**
+  - *Preview targets with your scan* is a card on Body, above the scans. *Not now* hides it until a newer scan.
+  - Typing a target body fat % fills the goal weight. With a recent scan, the suggested goal weight aims at 15% body fat for men and 23% for women. <!-- pii-ok: the suggestion rule's defaults, not anyone's data -->
+  - A shared image you back out of is removed a day later.
 
 ### 12.12 M16: Data out (DA-02, DA-03, DA-04)
 
@@ -969,6 +988,12 @@ These rules hold for every block:
   - It writes your workouts, one nutrition record per meal, and the weigh-ins you log. Scan weights aren't written, since the InBody app already writes them, and nor are workouts read from other apps (AR-04).
   - Turning it on writes the last 30 days. After that, your edits and deletes follow.
   - Apps you let read it, such as Google Fit, may upload it to their own cloud; the switch says so.
+- *As built (M16):*
+  - Google Drive shows in the folder picker on the reference phone, but can't be chosen as a folder there (its *Use this folder* is disabled), so Settings offers *A folder on this phone* or *One file, e.g. on Google Drive*. A first backup runs as soon as you choose, and *Back up now* runs one any time.
+  - In a folder, a new backup replaces the day's file only once it's fully written. The single Drive file is overwritten in place: if that write fails, Settings says so and the next run writes it again, but until then that file is damaged, so a folder on the phone is the safer choice.
+  - *Share with other apps* belongs to this phone: importing a backup never turns it on.
+  - The CSV zip is named `recomp-csv-YYYY-MM-DD.zip`. A class or another app's walk is one row in `workouts.csv`. Spreadsheet formulas in names stay text.
+  - Health Connect gets each meal as one record at the meal's usual time on its log date. Edits and deletes older than 30 days are followed with *Resync everything*. Turning sharing off stops writing; what was written stays in Health Connect, where you can delete it.
 
 ### 12.13 M17: Body extras (BM-03, BM-04, YG-03, YG-04)
 
@@ -1036,6 +1061,13 @@ These rules hold for every block:
   - It's body data: kept with the profile, never sent to AI and never shared in a persona (PS-06).
   - ◆ **Decided:** shown to everyone.
 - **Presets as data files (PS-05).** The five presets move to `assets/presets/*.json`. Nothing changes on screen.
+- ◆ **Settled in M19 (2026-11-21):**
+  - Only a change of goal is a fresh start. Editing the pace, goal weight or finish line keeps the goal's start, so the 12 weeks and "since you started" carry on.
+  - The 2 weeks at maintenance after a reached goal end with a choice: the targets stay at maintenance until you pick a new goal or *Keep going*.
+  - During a break your own calorie target waits and comes back with the goal. The check-in stays quiet for its weeks and until the flag's window is back on the goal (2 weeks for fat loss and a lean bulk, 4 for a recomp and Maintain).
+  - *Describe your goal* appears only while AI is ready. With the pregnancy switch on, a calorie target of your own below maintenance isn't used.
+  - With the pregnancy switch on, the weekly check-in doesn't judge the scale: pregnancy weight gain isn't stored energy, so there's no flag and no proposal, and the check-in's maintenance estimate never lowers a target below the formula's. The same holds for the first weeks after it's switched off, until the check-in's 4-week window no longer includes the pregnancy. Suggestions never name fat loss or a recomp.
+  - The goal resumes after a break from the first time the app opens on or after the end date; days in between keep maintenance.
 
 ### 12.16 M20: lb and in (PR-05)
 

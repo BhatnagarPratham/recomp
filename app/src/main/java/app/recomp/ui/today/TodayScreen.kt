@@ -1,5 +1,6 @@
 package app.recomp.ui.today
 
+import app.recomp.ui.goal.GoalStatusCard
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -292,6 +293,7 @@ fun TodayScreen(
         if (!ui.loaded) return@Column
 
         food?.let { NutritionCard(it, onOpenFood) }
+        GoalStatusCard() // M19: Goal reached and the maintenance break's line (GL-06), kept in ui/goal
         app.recomp.ui.nudge.EveningNudgeCard() // M12: tonight's nudge, from the evening reminder's time
         app.recomp.ui.checkin.WeeklyCheckinCard() // M5: the card lives in ui/checkin, so M8 and M11 change it there
 

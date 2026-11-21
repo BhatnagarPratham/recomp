@@ -1,0 +1,9 @@
+{
+  "key": "fat_loss_starter",
+  "order": 2,
+  "name": "Fat loss starter",
+  "summary": "Lose fat while keeping your strength. Two full-body days, A and B.",
+  "goal": "FAT_LOSS",
+  "experience": "BEGINNER",
+  "split": "FULL_BODY_AB"
+}

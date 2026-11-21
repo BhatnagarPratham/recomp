@@ -1,6 +1,9 @@
 package app.recomp.data
 
 import androidx.lifecycle.SavedStateHandle
+import app.recomp.domain.ai.AiKind
+import androidx.test.core.app.ApplicationProvider
+import app.recomp.data.food.PhotoStore
 import app.recomp.domain.ai.AiStatus
 import app.recomp.domain.ai.Confidence
 import app.recomp.domain.ai.EstimatedItem
@@ -21,6 +24,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -64,16 +68,28 @@ class DescribeFlowTest {
 
     @After
     fun tearDown() {
+        // An estimate a test cancelled or let go of can still be finishing on another thread, and it ends on the main
+        // dispatcher. Resetting Main under it fails (CI saw it), so every view model's work is stopped and waited for first.
+        runBlocking {
+            withTimeout(5_000) {
+                viewModels.forEach { vm -> vm.viewModelScope.coroutineContext.job.run { cancel(); join() } }
+            }
+        }
         app.close()
         Dispatchers.resetMain()
     }
+
+    private val viewModels = mutableListOf<DescribeViewModel>()
 
     private fun viewModel(draftId: Long = 0) = DescribeViewModel(
         SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to draftId)),
         app.ai,
         app.foodLog,
         app.foods,
-    )
+        PhotoStore(ApplicationProvider.getApplicationContext()),
+        app.describer,
+        app.scanImages,
+    ).also(viewModels::add)
 
     private val phulka = EstimatedItem("Phulka", 2.0, "piece", 70.0, 210.0, 6.5, 42.0, 1.5, 4.0, Confidence.HIGH, "no ghee")
 
@@ -143,8 +159,12 @@ class DescribeFlowTest {
         app.connectivity.online.value = false
         val vm = viewModel()
         vm.setText("chai and biscuits")
+        // From M9 Estimate still answers, from the local parser (AI-04): here it finds nothing, and says so.
         vm.estimate()
-        eventually { if (vm.phase.value == DescribePhase.Input) true else null }
+        val review = eventually { vm.phase.value as? DescribePhase.Review }
+        assertTrue(review.items.isEmpty())
+        assertEquals(listOf("chai", "biscuits"), review.unmatched.map { it.typed })
+        vm.backToText()
         vm.saveDraft()
         val outcome = eventually { vm.outcome.value }
         assertTrue(outcome.message.contains("Kept as a draft"))
@@ -164,7 +184,7 @@ class DescribeFlowTest {
         val review = eventually { vm.phase.value as? DescribePhase.Review }
         assertEquals(listOf("Phulka"), review.items.map { it.current.name })
 
-        vm.update(0, review.items[0].current.scaledTo(80.0))
+        vm.update(0, review.items[0].copy(current = review.items[0].current.scaledTo(80.0)))
         assertTrue((vm.phase.value as DescribePhase.Review).items[0].edited)
         vm.save(null)
         val outcome = eventually { vm.outcome.value }
@@ -261,5 +281,52 @@ class DescribeFlowTest {
         val draft = eventually { drafts().singleOrNull() }
         assertEquals("paneer wrap", draft.text)
         assertEquals(AiStatus.TIMEOUT, draft.reason)
+    }
+
+    @Test
+    fun `a photo alone can be estimated, a failure keeps it with the draft, and saving deletes it`() = runBlocking {
+        val store = PhotoStore(ApplicationProvider.getApplicationContext())
+        val path = store.keep(android.graphics.Bitmap.createBitmap(20, 10, android.graphics.Bitmap.Config.ARGB_8888))
+        app.estimator.next = { FakeEstimator.reply(AiStatus.TIMEOUT, attempts = emptyList()) }
+        val first = viewModel()
+        first.setText("")
+        first.removePhoto()
+        assertEquals(AiKind.MEAL_TEXT, first.kind())
+        // Invented photo, invented meal: the test's own bitmap, never a real one.
+        val handle = SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L, "photo" to path))
+        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, store, app.describer, app.scanImages).also(viewModels::add)
+        assertEquals(AiKind.MEAL_PHOTO, vm.kind())
+        vm.estimate()
+        eventually { vm.outcome.value }
+        val draft = drafts().single()
+        assertEquals("", draft.text)
+        assertEquals(path, draft.photoPath)
+        assertTrue(app.estimator.requests.single().images.isNotEmpty())
+
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, MealEstimate(listOf(phulka), null)) }
+        val again = viewModel(draft.id)
+        eventually { again.photo.value }
+        again.estimate()
+        eventually { again.phase.value as? DescribePhase.Review }
+        again.save(null)
+        eventually { again.outcome.value }
+        assertTrue(drafts().isEmpty())
+        assertTrue(!java.io.File(path).exists())
+    }
+
+    @Test
+    fun `a meal photo shared to Recomp is taken as the meal photo, and its shared copy goes`() = runBlocking {
+        // An invented image, staged the way M15's share target keeps it.
+        val bytes = java.io.ByteArrayOutputStream().also {
+            android.graphics.Bitmap.createBitmap(40, 30, android.graphics.Bitmap.Config.ARGB_8888).compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it)
+        }.toByteArray()
+        val name = app.scanImages.stage(bytes.inputStream(), "image/jpeg")!!
+        val handle = SavedStateHandle(mapOf("date" to date.toString(), "slot" to "lunch", "draftId" to 0L, "sharedImage" to name))
+        val vm = DescribeViewModel(handle, app.ai, app.foodLog, app.foods, PhotoStore(ApplicationProvider.getApplicationContext()), app.describer, app.scanImages)
+            .also(viewModels::add)
+        // Robolectric has no ImageDecoder, so the decode itself is checked on the phone; here, that it was attempted
+        // with the shared file (a photo, or the "couldn't use that photo" line) and that the shared copy is gone.
+        assertTrue(eventually { if (vm.photo.value != null || vm.photoProblem.value) true else null })
+        assertTrue(eventually { if (app.scanImages.file(name) == null) true else null })
     }
 }

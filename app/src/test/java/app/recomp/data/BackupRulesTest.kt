@@ -58,5 +58,12 @@ class BackupRulesTest {
         val photo = "file" to "${app.recomp.data.repo.PhotoRepository.PHOTO_DIR}/front-1.jpg"
         listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $photo", leftOut(section, photo)) }
     }
+
+    @Test
+    fun `shared InBody images are left out of cloud backup and device transfer`() {
+        // IB-03: an image kept with a scan, in app-private files (TRD §10 M15's risks).
+        val image = "file" to "${app.recomp.data.body.ScanImages.DIR}/0f8fad5b-d9cb-469f-a165-70867728950e.jpg"
+        listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $image", leftOut(section, image)) }
+    }
 }
 

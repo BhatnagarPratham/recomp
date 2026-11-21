@@ -30,21 +30,33 @@ object CheckinProposal {
 
     /**
      * The proposal for a week whose [flag] fired, or null when none fired or it would move [currentKcal] (the
-     * target in force) by less than 50 kcal.
+     * target in force) by less than 50 kcal. Without [deficitAllowed] (PRD §4.9: a BMI below 18.5, or pregnant or
+     * breastfeeding) a proposal below maintenance is never made, whatever the policy says.
      */
-    fun of(flag: CheckinFlag?, inputs: TargetInputs, maintenanceKcal: Double, overrides: TargetOverrides, currentKcal: Int): NutritionTargets? {
+    fun of(
+        flag: CheckinFlag?,
+        inputs: TargetInputs,
+        maintenanceKcal: Double,
+        overrides: TargetOverrides,
+        currentKcal: Int,
+        deficitAllowed: Boolean = true,
+    ): NutritionTargets? {
         if (flag == null) return null
-        return targets(inputs, maintenanceKcal, overrides).takeIf { abs(it.kcal - currentKcal) >= MIN_CHANGE_KCAL }
+        val proposal = targets(inputs, maintenanceKcal, overrides)
+        if (!deficitAllowed && proposal.kcal < KcalRounding.nearest(maintenanceKcal)) return null
+        return proposal.takeIf { abs(it.kcal - currentKcal) >= MIN_CHANGE_KCAL }
     }
 
     /**
      * What *Adjust* can reach (PRD §4.9): never below the floor or a 25% deficit, never above a 15% surplus,
      * on the 10 kcal grid. The caps round inwards but the proposal rounds to the nearest 10, so the range always
-     * widens to take in the proposal itself: *Save* without a step saves exactly what was proposed.
+     * widens to take in the proposal itself: *Save* without a step saves exactly what was proposed. Without
+     * [deficitAllowed] it never reaches below maintenance.
      */
-    fun adjustRange(inputs: TargetInputs, maintenanceKcal: Double): IntRange {
+    fun adjustRange(inputs: TargetInputs, maintenanceKcal: Double, deficitAllowed: Boolean = true): IntRange {
         val proposal = targets(inputs, maintenanceKcal, TargetOverrides())
-        val low = max(KcalRounding.up(NutritionCalculator.floor(inputs.sex, proposal.bmrKcal)), KcalRounding.up(maintenanceKcal * (1 - MAX_DEFICIT_FRACTION)))
+        val deepest = if (deficitAllowed) KcalRounding.up(maintenanceKcal * (1 - MAX_DEFICIT_FRACTION)) else KcalRounding.nearest(maintenanceKcal)
+        val low = max(KcalRounding.up(NutritionCalculator.floor(inputs.sex, proposal.bmrKcal)), deepest)
         val high = KcalRounding.down(maintenanceKcal * (1 + MAX_SURPLUS_FRACTION))
         return min(low, proposal.kcal)..max(max(low, high), proposal.kcal)
     }

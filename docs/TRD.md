@@ -116,13 +116,18 @@ body_composition    id, measured_at, log_date, source(MANUAL|SHARE_AI|HEALTH_CON
 measurement         id, log_date, measured_at, type(WAIST|CHEST|ARM|THIGH|HIP|SIT_AND_REACH|SQUAT_HOLD|TOE_TOUCH), value   -- cm; squat hold in s; toe touch 1/0 (M17)
                                           -- the units differ by type, so anything listing this table (M16's CSV) labels each row's unit
 progress_photo      id, log_date, taken_at, pose(FRONT|SIDE|BACK), file_path   -- file_path relative to files/, always photos/<name>.jpg (M17)
-food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR), barcode?,
+food                id, name, brand?, source(SEED|INDB|CUSTOM|AI|OFF|LABEL_OCR|RECIPE), barcode?,
                     source_key?           -- unique: "seed:paneer", "indb:ASC001"; ties a row to its bundled file
                     diet(VEGAN|VEGETARIAN|EGG|FISH|MEAT), region(INDIAN|INTERNATIONAL)?   -- null = every region
                     kcal_100g, protein_100g, carbs_100g, fat_100g, fiber_100g,
                     caveat(FRYING_OIL)?, use_count, last_used_at?, archived, created_at
 food_fts            FTS4 over food.name, external content: Room's triggers keep it in sync with food
 food_unit           id, food_id, label("roti","katori","bowl"…), grams, calibrated   -- unique (food_id, label)
+recipe              food_id (PK, → food, deleted with it), servings?, cooked_weight_g?
+                                          -- NU-22 (M14, v13): the food row holds the name, diet tag and values per 100 g,
+                                          -- recomputed from the ingredients on each save; null cooked weight = the ingredients'
+                                          -- own weight; null servings = no serving unit
+recipe_ingredient   id, recipe_id (→ recipe, deleted with it), position, food_id (→ food), grams   -- grams as weighed, raw
 food_log            id, log_date, meal_slot (a slot key, §6.4), food_id?, name, quantity, unit_label, grams?,
                     kcal, protein_g, carbs_g?, fat_g?, fiber_g?, origin(HOME|ORDERED|PACKAGED),
                     source(MANUAL|SAVED_MEAL|QUICK_ADD|AI_TEXT|AI_PHOTO|LOCAL_PARSE|LABEL|BARCODE),
@@ -169,9 +174,9 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
 
 **Settings** live in DataStore, one key each:
 - `persona`: the persona (§5.0) as JSON, including the goal plan, the training part (split, experience, strength days, extra-session schedules by routine id) and `onboarded_on`. Never body data, so PS-06 can export it as is.
-- `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level).
+- `profile`: body data from onboarding (sex, date of birth, height, current weight, activity level, and from M19 whether you're pregnant or breastfeeding).
 - `day_start_minutes` (PR-03), `keep_screen_on`, `target_overrides` (PR-02) and `protein_ramp` (§5.3).
-- `meal_slots` (NU-10), `portion_sizes` (household measures, NU-12) and `food_data_version` (§6.4).
+- `meal_slots` (NU-10; from M9 each slot may carry `start`, its usual start in minutes after midnight), `portion_sizes` (household measures, NU-12), `snack_allowance` (NU-06, M9: `{kcal, slot}`, absent = off) and `food_data_version` (§6.4).
 - `ai_mode` (`OFF|ON`), `ai_monthly_cap_usd` (absent = no cap), and from M7 (AI-05, §6.2):
   - `ai_provider` (an `AiProviderId` name; absent = Anthropic);
   - a model per provider: `ai_model` (Anthropic's; the name predates M7), `ai_model_openai`, `ai_model_gemini`, and `ai_model_compatible` (the typed name);
@@ -186,17 +191,23 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
   - `hc_database_stamp`: the database the tokens were issued against (`PRAGMA application_id`, which every import changes, §6.5). When it differs, the tokens are dropped and the last 30 days are read again;
   - `hc_inbody_handled`: the record ids of InBody measurements already saved as a scan or dismissed;
   - `hc_last_sync_at` and `hc_last_sync_error`, for Settings → Health Connect.
+- M16's keys there:
+  - `hc_written`: the records written to Health Connect in the 30-day window, as `clientRecordId → date|hash` JSON (§6.3), so unchanged ones aren't written again and deleted ones are found;
+  - `hc_last_write_at` and `hc_write_error`, for Settings → Health Connect;
+  - `backup_uri`, `backup_is_folder`, `backup_label`: where the automatic backup goes (a folder's tree address or one file's address; its permission is the phone's, §6.5);
+  - `backup_last_at` and `backup_error`, for Settings → Data.
+- M16's `hc_share`: Settings → Health Connect → *Share with other apps* (absent = off). It's device state on purpose, not a setting: an import or the safety copy can never turn sharing back on, so it only ever starts with a tap on this phone.
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
 A stored JSON value that no longer decodes (for example one saved by a newer build) reads as its default, so onboarding opens. It is never written over: before any write, it's copied untouched to `<key>_unreadable`, and the app says so once at launch. The API key is stored separately and encrypted (§6.2). `nutrition_target` rows also record the goal they were computed for, so history survives goal switches (PS-02, PS-04).
 
-**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
+**Indexes:** `set_entry(session_exercise_id)`, `session_exercise(exercise_id)`, `workout_session(status, started_at)`, `food_log(log_date)`, `food_log(food_id)`, `food_unit(food_id, label)` (unique), `saved_meal_item(saved_meal_id)`, `meal_draft(log_date)`, `ai_request_log(created_at)`, `measurement(type, log_date)`, `body_composition(measured_at)`, `body_weight(log_date)`, `body_weight(scan_id)`, `recipe_ingredient(recipe_id)`, `recipe_ingredient(food_id)`. Food search uses an `@Fts4` table over `food.name`, filtered by `diet` and `region` (§6.4).
 
 **v1.1 additions,** each landing with its milestone (§10), which updates this section when it merges:
-- New tables: `programme_review` (M11), `recipe` and `recipe_ingredient` (M14), `progress_photo` (M17, as above plus `taken_at`).
+- New tables: `programme_review` (M11), `progress_photo` (M17, as above plus `taken_at`). (`recipe` and `recipe_ingredient` landed with M14, above.)
 - New columns: `exercise.deload_pending` (M11). (`ai_request_log.provider` landed with M7, and `scan_draft` and `daily_activity.sleep_source` with M13, above.)
-- New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); `FoodSource.RECIPE` (M14); the mobility `MeasurementType`s (M17).
+- New enum values (stored as their names, so no migration): `TargetReason` `REVIEW` (M11), `BREAK` and `RESUME` (M19); `AiKind.GOAL` (M19); the mobility `MeasurementType`s (M17). (`FoodSource.RECIPE` landed with M14, above.)
 
 **Hot query.** The query that runs most is "last N completed exposures of exercise X". It goes `session_exercise` → `workout_session WHERE status = COMPLETED ORDER BY started_at DESC LIMIT N`, skipping exposures with no completed sets (a skipped exercise), then pulls the sets for each.
 
@@ -223,13 +234,18 @@ data class GoalPlan(
     val pace: Pace?,                   // GENTLE | STANDARD | AGGRESSIVE; null for Maintain or custom values under Advanced
     val goalWeightKg: Double?,         // the one goal weight: protein's reference weight whatever the finish line
     val finishLine: FinishLine?,       // GoalWeight | BodyFat(pct) | ByDate(date); null = none
-    val startedOn: LocalDate,
+    val startedOn: LocalDate,          // a change of goal resets it; a pace, goal-weight or finish-line edit keeps it (M19)
     val aggressiveAcknowledged: Boolean,
+    val reachedOn: LocalDate?,         // GL-06 (M19): the day the finish line was first seen reached
+    val breakUntil: LocalDate?,        // at maintenance until this day: a maintenance break, or the 2 weeks after reaching
+    val lastBreakEndedOn: LocalDate?,  // the 12 weeks in a deficit count again from here
+    val breakSnoozedUntil: LocalDate?, // *Not now*: no suggestion before this day
 )
 
 data class Profile(                    // body data (PR-01); kept apart from the persona so PS-06 never exports it
     val sex: Sex, val birthDate: LocalDate, val heightCm: Double, val weightKg: Double,
     val activity: ActivityLevel,       // SEDENTARY ×1.2 | MODERATE ×1.375 (default) | ACTIVE ×1.55
+    val pregnant: Boolean,             // GL-09 (M19): pregnant or breastfeeding; body data, never sent to AI or in a persona
 )
 
 data class ExperiencePolicy(
@@ -250,7 +266,7 @@ data class ExperiencePolicy(
 | Intermediate | 6–10 / 10–15 / 12–20 | 4 | No | Every 6–8 weeks |
 | Advanced | 5–8 / 8–12 / 10–15 | 5 | No | Every 4–6 weeks |
 
-- **Presets** bundle a `PersonaDraft` (PRD §4.4). They're Kotlin objects (`Presets`) in the MVP and JSON files under `app/src/main/assets/presets/` from v1.1 (PS-05), so a fork can add one without code. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
+- **Presets** bundle a `PersonaDraft` (PRD §4.4). Since M19 (PS-05) each is a JSON file under `app/src/main/assets/presets/`, read by `PresetSource` (`data/seed/PresetData.kt`), so a fork adds one by adding a file. A file holds `key`, `name`, `summary`, an optional `order` (the list is sorted by it, then by name) and any of `goal`, `experience`, `diet`, `region`, `split`, `strengthDaysPerWeek`, `extras` (`name`, `kind`, ISO `days`), `weightSource` and `proteinRamp`; a value left out is *Asked*. Enum values are the Kotlin names. Decoding is strict, so a misspelt field fails `PresetsTest` rather than being ignored. Every preset weighs in on a home scale, BM-01's default; the reference preset's scans are for body composition.
 - **Who reads the persona:**
   - Calorie and protein targets read `goal` (§5.3).
   - The progression engine reads `experience` (§5.1).
@@ -319,7 +335,7 @@ if (history.size > window && history.take(window).maxOf { it.bestE1rm } <= histo
   - A PR depends only on earlier sets, so `from` is the earlier of the session's old and new start, and rows before it are never rewritten. `HistoryRepository.rebuildPrs` deletes the affected exercises' rows from there on and inserts the rebuilt ones, inside the edit's transaction. The affected exercises are every one the session had before the edit.
   - A rebuild with no `from` recomputes everything. Tests compare the two after each kind of edit, and compare a full rebuild of untouched history with what finishing wrote.
   - An assisted lift's sessions are each rebuilt at the trend weight as it stood when that session finished (`BodyRepository.trendKgAt`, from the weigh-ins measured by then), which is what finishing it used. So a rebuild gives back the records finishing wrote, however the trend has moved since, and a session finished before the first weigh-in keeps its least-assistance record in assistance grams. The "today's trend weight" rule above is for targets, stall detection and displayed e1RMs, not stored PRs. Finishing reads at most 500 earlier exposures of an exercise and a rebuild reads all of them, which differs only past 500 sessions of one lift.
-- **Editing a session (WL-10, M10).** `HistoryRepository.saveEdit` is one transaction over a draft the screen holds; only a COMPLETED strength session is accepted.
+- **Editing a session (WL-10, M10).** `HistoryRepository.saveEdit` is one transaction over a draft the screen holds; only a COMPLETED strength session is accepted. Sessions imported from other apps (`hc_record_id` set, AR-04) are read-only in History: they don't open, `saveExtra` and `deleteSession` refuse them, and their row says which app they came from.
   - `log_date` is recomputed from the new start, and every set's `completed_at` moves by the change in start. An added set takes the tick time of the set before it, or the session's end.
   - `recommendation_json`, `target_sets`, the rep range and rest are never written: they're the plan as shown that day. `user_overrode` is recomputed with the same rule as in a live workout (`Targets.overrode`).
   - Removing an exercise renormalizes the session's superset groups.
@@ -502,6 +518,7 @@ MAINTAIN      → MAINTAIN
 - **Body fat** comes from a scan in the last 60 days (M4), or from a number typed in the third question. A typed number is used for this suggestion only and never stored. Otherwise BMI decides.
 - **Training age** is the experience level: under a year is `BEGINNER`. The answer also pre-fills the persona's experience.
 - **With AI on (GL-03):** Claude maps the free text to `{intent, follow_up_question?}` with a hand-written JSON schema (§6.2). The rules above then decide. AI never picks the goal directly, so the outcome is testable and identical offline.
+  - Built in M19 as `AiKind.GOAL` over whichever provider is in use: `GoalPrompt` (`:domain`) and `GoalSchema` (`goal_intent`: `intent` is one of `lose_fat | build_muscle | both | maintain | unclear`, `follow_up_question` is `""` when there's none). Only the typed text, and the answer to the one question, is sent. An intent outside the five is `INVALID`; a second question is dropped. Any failure falls back to the three questions.
 - **Thresholds** live in one table in `:domain`, so they're easy to tune.
 
 ### 5.8 Finish line, projection and guardrails (PRD §4.7, §4.9)
@@ -531,7 +548,16 @@ maintenance_break_due  = deficit goal ∧ weeks_since_start ≥ 12 ∧ ¬reached
 - An Aggressive pace needs one acknowledgement of a warning, stored on the goal plan.
 - The intake floor (§5.3) always applies, overrides included.
 
-Each rejected or clamped choice carries a `GuardrailNote` for the UI. A profile change in Settings that makes a deficit goal unavailable (e.g. a lower weight) switches the plan to Maintain, and the before-and-after preview says why.
+- **Pregnant or breastfeeding** (GL-09, M19, `Profile.pregnant`): deficit goals are rejected and the plan becomes Maintain (`PREGNANT_MAINTAIN`, named before a low BMI since it's the one you can switch). `Guardrails.deficitAllowed(profile)` is the one test every deficit asks: the goal cards, the check-in's proposal and *Adjust* (§5.4: never below maintenance while it's false), and M11's suggestions. A calorie target of your own below maintenance isn't used and isn't kept (`PREGNANT_KCAL_AT_MAINTENANCE`). The check-in stores no flag and makes no proposal (pregnancy gain isn't stored energy, so §5.4's estimate would read it as a lower maintenance and Maintain's drift would fire), a proposal made before the switch can't be answered, and `targetsFor` ignores an estimate below the formula's TDEE. `GoalRecommender` turns a deficit suggestion into Maintain (`NO_DEFICIT`). While it's on, and afterwards until the estimate's 28-day window starts on or after the day it went off (`Profile.pregnantUntil`, `Guardrails.pregnancyQuiet`), a week's estimate never falls below the formula's TDEE and the check-in stays quiet, so switching it off brings back nothing the pregnancy dragged down and proposes no cut from its gain, and M11's programme review treats maintenance the same way in its report and in `SuggestionCheck`'s calorie range, so no suggestion can be a deficit. Switching it off doesn't bring a deficit back: you choose a goal again.
+
+Each rejected or clamped choice carries a `GuardrailNote` for the UI. A profile change in Settings that makes a deficit goal unavailable (e.g. a lower weight) switches the plan to Maintain, and the before-and-after preview says why. A goal the guardrails move is a change of goal like any other: it starts that day.
+
+**Goal reached, the maintenance break and the goal switch** (GL-06, PS-04, M19; `domain/persona/GoalProgress.kt`, `data/repo/GoalRepository.kt`):
+- **Reached** (`FinishLines.reached`) on the trend weight, never one weigh-in: at or under the goal weight for fat loss and recomp, at or over it for a lean bulk; a body-fat line at or under the target on a scan; a date on the day itself and after. Maintain only finishes by date. It's checked (`GoalRepository.refresh`) at launch, on each new log day, and at the start of every check-in catch-up, never during a break, and marked once (`reachedOn`): a bounce back over the line doesn't unmark it.
+- **The Goal reached card** offers *Start 2 weeks at maintenance* (not for Maintain), *Choose a new goal* (the goal flow) and *Keep going*, which clears the finish line. The 2 weeks are a break that ends with a choice, not an automatic resume: when they're over the targets stay at maintenance and the card asks again.
+- **The break** is due at 12 weeks in a deficit from `startedOn` or `lastBreakEndedOn`, and not once reached. It's suggested in the latest check-in only; *Not now* sets `breakSnoozedUntil` 4 weeks out. Accepting writes a `BREAK` version from that day at maintenance with the goal's own protein (`GoalPlan.targetPlan`); a calorie target of your own waits and comes back with the goal. The first launch on or after `breakUntil` writes a `RESUME` version from that day, however late (the days in between keep maintenance), and before the check-ins are caught up, so the weeks after the break are judged on the goal, and sets `lastBreakEndedOn` to the end date. *End early* does the same today. Settings and the check-in recompute at maintenance during a break, so nothing there reads it as a change.
+- **Quiet weeks:** during a break, and until the flag's window is back on the goal (2 weeks for fat loss and a lean bulk, 4 for a recomp and Maintain), the check-in still updates the estimate but stores no flag and makes no proposal (`MaintenanceBreak.flagsQuiet`). A proposal made before a break was accepted can't be answered afterwards.
+- **The goal switch** (`GoalChange.settle`): only a change of goal resets `startedOn` (and the break history and the reached mark), so the 12 weeks, M8's "current plan" and every "since you started" restart then. A pace, goal-weight or finish-line edit keeps `startedOn`, clears the reached mark so the new line is judged afresh, and ends a running break. Before M19 any goal save set `startedOn` to that day. *What to expect* (`GoalChange.expect`) is one line per change of energy balance in the goal flow's targets step and in Settings' preview.
 
 ### 5.9 Today's numbers (GL-07, GL-10, PRD §4.8)
 
@@ -736,7 +762,7 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   | OpenAI and compatible | `prompt_tokens` − `cached_tokens` − `cache_write_tokens` | `prompt_tokens_details.cached_tokens` (writes: `cache_write_tokens`, at 1.25 × input) | `completion_tokens` (reasoning is already inside) |
   | Gemini | `promptTokenCount` − `cachedContentTokenCount` | `cachedContentTokenCount` | `candidatesTokenCount` + `thoughtsTokenCount` |
 
-  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers.
+  OpenAI's prompt-caching guide gives ordinary input as the prompt less cached reads and cache writes, and says a write isn't an additive fee, so writes are charged once, at 1.25 × input. A reply with no usage (some local servers) is costed at the request's upper bound, and so is a usage with no input and no output: an empty object, zeros from a proxy, or counts that aren't numbers. A usage with only one of the two counts keeps the count it has and takes the upper bound for the missing one, so half a usage never makes the other half free (M9).
 - **Upper bound.** The reservation is the same shape for each provider: the prompt at 3 characters a token, 1,500 tokens of overhead, 5,000 tokens a photo, and the provider's whole output limit (`AiProviderId.outputBound`, 8,000 for each, since each limit includes reasoning or thinking), at the model's own rates or the typed ones.
 - **Statuses.** Each provider's replies map onto the table above:
 
@@ -763,21 +789,52 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
   - A key is never sent over `http`: such a server needs none, and the gate doesn't ask for one.
   - No user name, password, query or fragment, so nothing secret is stored or exported with the settings.
   - `network_security_config.xml` allows cleartext in its base config, because it can't name a LAN range. Anthropic, OpenAI and Gemini are fixed `https` addresses.
-- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
+- **Local network.** `ACCESS_LOCAL_NETWORK` is declared, and asked for when a local-network URL is saved. Without it Android 17 makes the connection time out, so the gate checks first: `NO_LOCAL_NETWORK` says the app isn't allowed to reach devices on your network, with *Allow*. A server reached by a name the text can't place (a Tailscale name, a home reverse proxy over https) is looked up while the permission is missing, at save and before each send; if any of its addresses is local, it's treated the same way. The lookup gives up after 3 s: `InetAddress.getAllByName` ignores a thread interrupt, so it runs on its own and the caller just stops waiting. It's done before the send lock is taken, for meal requests and M11's programme review alike, so a network whose DNS hangs holds up that one request and nothing queues behind it (M9). *Allow* asks for the permission; once Android has stopped showing the prompt, it opens the app's page in system settings, and the permission is read again on return. This phone itself (loopback) needs no permission, and a local server needs no internet, so the `OFFLINE` check doesn't apply to it. Before Android 17 the permission doesn't exist and the local network comes with `INTERNET`, so an older phone always counts as allowed.
 - **Gate.** `OFF` → `NO_URL` (the compatible provider without a usable URL and model) → `NO_KEY` → `OVER_CAP` → `OFFLINE` → `NO_LOCAL_NETWORK` → `READY`.
 - **Privacy notice.** Shown before a kind's first send to each provider, naming it, and again for another compatible server (by host). Gemini's adds that Google may use free-tier prompts to improve its products and that reviewers may read them; OpenAI's API and Gemini's paid tier don't train on them.
 
-**Local describe parser (AI-04, P1).** This is plain rules, not AI. The same component powers offline *Will it fit?*.
+**Local describe parser (AI-04, M9).** This is plain rules, not AI: `DescribeParser` in `:domain`, over a `FoodIndex` the repository supplies. The same parser answers *Will it fit?* without AI.
 
 ```
 "2 roti, 1 katori dal makhani and salad"
-→ split on  ,  "and"  +  newline
-→ per chunk: quantity (2, ½, "half", "one"…) + unit (food_unit labels + synonyms: bowl→katori, chapati→roti)
-             + name
-→ FTS-match name against the foods the persona's diet and region allow, ranked by use_count;
-  unit → grams via food_unit, else the food's default serving
-→ unmatched chunks listed as "Couldn't find: search or quick add"
+→ split on  ,  ;  +  newline; then on "and", "with", "&" unless a food's own name carries them
+→ per chunk: amount + unit + name, or the amount after the name ("roti x2", "rajma 1 katori")
+→ whole-word match of the name against the foods the persona's diet and region allow
+→ grams from the typed weight, the food's own unit, a household measure, or the food's usual serving
+→ unmatched chunks listed as "Couldn't find: salad", with Search and Quick add;
+  a low-confidence match is a guess: offered as "Best guess" there, never counted as matched
 ```
+
+- **Limits:** the first 500 characters and 20 chunks. A comma between two digits is a decimal point ("1,5 roti" is 1.5), not a break.
+- **Amounts** (`Quantities`): digits and decimals; fractions (`1/2`, `1 1/2`, `½`, `2½`); ranges (`2-3` is 2.5); words (a, an, one to twelve, half, half a, quarter, a couple of, one and a half). An "and" inside an amount ("one and a half", "2 and a half") never splits the chunk. A weight (`150 g`, `150g`, `200 ml`, `0.5 kg`, `1 l`) is grams directly; 1 ml counts as 1 g. No amount means one.
+- **Units:** the first word after the amount is a unit when it's a household measure or serving unit, a common unit (bowl, plate, piece, slice, cup, scoop, handful, egg, tsp, serving), one of the foods' own single-word unit labels, or another spelling of one (tablespoon → tbsp, pcs → piece, vati → katori, plurals). A unit that is also a food (roti, egg) reads as a unit only after an amount.
+- **Name words:** filler words are dropped (of, a, the, some, my, small, medium, large, big, fresh, homemade). Each word is also tried in the singular and as each of its synonyms (roti/chapati/phulka, curd/dahi/yogurt, tea/chai, rice/chawal, potato/aloo, egg/anda, paratha/parantha, chana/channa/chickpea, moong/mung, khichdi/khichri, chaas/buttermilk). What's shown is always the matched food's own name.
+- **Matching.** `FoodIndex.lookup(words)` is `food_fts MATCH` with whole words (no prefixes, so "pan" never finds paneer), on the same filter and order as search (§6.4), with no filter on source, 20 candidates per variant. Every typed word must be in the food's name: "dal makhani" with no such food is unmatched, never plain dal. A word the name gives only after "without", "no" or "eggless" doesn't count ("Mayonnaise without eggs" is never eggs). Among the candidates, the first rule that separates them wins:
+  1. an exact name among your own foods (every source but the bundled basics, INDB and Open Food Facts, so a kind of food added later, such as M14's recipes, counts as yours);
+  2. an exact name among the rest. A food's names are its whole name, the name without its brackets ("Milk, toned (3% fat)" is toned milk), and each part between brackets and commas, so "Pea paneer curry (Matar paneer)" is exactly "matar paneer". A slash between single words, or after one word, separates names ("Chapati/Roti" is exactly "roti"); after a longer name, a single word is another spelling of its last word, so "Quinoa khichdi/khichri" is quinoa khichri but never a bare khichri, and "Bhindi sabzi/sabji/subji" never a bare subji;
+  3. foods you've logged, most often first; then your own; then foods without a caveat; then the name with the fewest extra words, where everyday words (plain, boiled, steamed, cooked, whole) count for less, so "rice" is boiled rice before lemon rice.
+- **A unit word that's part of the name.** When the picked food has no such unit and no household measure has that label, the chunk is tried again with the unit word in the name ("egg curry", "2 egg whites").
+- **Grams:** a typed weight; else the typed unit as the food's own unit (so a food's own "bowl" beats bowl → katori), a unit whose label ends with it ("tea cup" for cup), the synonym's unit, the household measure at your calibrated weight, or a generic weight (cup 240 g, tsp 5 g). With no unit typed: the food's unit named in the text ("2 roti"), else the unit you logged it in last, else its first own serving if believable (`Portions.plausible`), else 100 g each. A unit named after a food that only comes as small pieces (egg, gulab jamun, rasgulla, idli, laddoo, modak, biscuit, cookie, date, almond) must weigh like one piece (`SMALL_PIECES`: 70 g for an egg, 60 g for the sweets and idli, less for the rest), unless it's your own food's: INDB's units for these are often a whole recipe's serving. Dishes that can be big on their own (a masala dosa, a paratha, a samosa) have no cap. A plain "piece" unit on one of those small foods is capped the same way (INDB's rasgulla "piece" is a whole serving), and a refused unit counts one piece at the cap, not 100 g, as a guess. A typed unit that fits nothing uses the same fallback.
+- **Confidence and note.** High: an exact name and a sure amount. Medium: an exact name with a default serving, a name that differs only by everyday words ("rice" for boiled rice, "tea" for hot tea), or a non-exact pick you've logged before. Low: any other non-exact pick, a unit fallback, or 100 g each for a food whose servings were all refused. The note says what was matched and where the grams came from, and shows in the review like the AI's assumptions.
+- **Guesses** (PR #15's review). A low-confidence match is never an item. `ParsedMeal.guesses` holds it, and `unsure` lists it with the unmatched chunks, in the order typed. With AI on it goes to the AI like an unmatched chunk and is never sent as already counted. With AI off, or when the AI fails, it's shown with the unmatched parts as "Not sure about: 2 bananas · Best guess: Banana raita · 2 bowl · 180 kcal", with *Use it*, *Search*, *Quick add* and *Leave out*. A dish with "with" in its name keeps a chunk whole only on a sure match.
+
+**Describe it and Will it fit? with the parser (M9, PRD §12.5).** `MealDescriber` (`data/repo`) runs both, in this order:
+
+| Gate and origin | What runs |
+|-----------------|-----------|
+| AI off | The parser alone. |
+| AI on, not ready (no key, no URL, offline, over the cap, no local-network permission) | The parser alone. The review says it was matched without AI, and *Save draft* stays as the second action. |
+| Ready, *Ordered* | Straight to the AI, as in M3c. |
+| Ready, *Home* or *Packaged* | The parser first. Everything matched: no request and no spend. Nothing matched: M3c's plain request. Otherwise one request. |
+
+- **The one request** carries the whole description, then "Already counted, do not return these:" with a line per matched item ("2 roti = Chapati/Roti, 80 g"). One fixed sentence in the system prompt says such items are never returned, so the system prompt stays the same between calls and cacheable. With a counted list, a reply with no items is `OK` ("nothing else"), not `INVALID`.
+- **Merge** (`DescribeMerge`): parser items first, then the AI's. An AI item is already counted when its name has every word of a counted item's typed name ("Roti (2 pcs)", "Whole wheat roti", "Butter roti" for "2 roti"), is exactly one of the counted food's names, or has every word of its whole name; amounts, unit words and filler words in the AI's name are ignored, and plurals and synonyms are one word. An item that names a chunk sent to the AI at least as fully is that chunk's answer and is kept: "Dal makhani" when "dal" was counted and "dal makhani" sent, and, on a tie, "Coffee with milk" when the milk was counted and the coffee sent. Items set aside are listed in the review as "Already counted: Roti (2 pcs) · 210 kcal" with *Add anyway*, never dropped silently. Totals are recomputed from what's kept.
+- **Failures.** If the request fails after the parser matched something, the review opens with the matched items, the rest under "Couldn't find", and the reason. No draft is kept then: saving the matched items and later estimating a draft of the whole text would count them twice. With nothing matched it's M3c's behaviour: a draft with the reason. A fit check never keeps a draft, so any failure falls back to what the parser found.
+- **Cancellation.** Describing runs to completion like the request (`NonCancellable`), so a screen left the moment *Estimate* is tapped still sends once and keeps its draft.
+- **Review.** Each item says where its numbers came from: *Your food*, *Database*, *AI* or *Quick add*. A "Couldn't find" chunk offers *Search* (a food picker, then the portion sheet), *Quick add* and *Leave out*; nothing is logged until *Save*. A matched or picked food changes its weight only, since its numbers are the food's own; AI items edit as before, with the learning loop.
+- **A save that can't go through** (a food removed by a backup import mid-review, nothing left to log) keeps the review or the fit result and says why; nothing is logged and the screen can try again.
+- **Saving** (`FoodLogRepository.saveDescribedMeal`, one transaction with the saved meal and the draft): a matched food logs from the food's numbers, linked to it, as `LOCAL_PARSE` (a food you picked: `MANUAL`), and bumps its use count; AI items are `AI_TEXT` with the request id; quick adds are `QUICK_ADD`.
+- **Will it fit?** is `AiKind.FIT_CHECK`, so it has its own notice per provider. `FitCheck` (`:domain`) gives the goal's main number before and after (`TodayNumbers.main` on today's intake with and without the dish), with calories and protein for every goal; `FitText` words it. *Log it* saves through the same call, into `MealTimes.slotAt(now)` or the meal it was opened from, with the request id when the AI estimated it.
 
 ### 6.3 Health Connect (P1)
 
@@ -824,7 +881,17 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
   - `hc_inbody_handled` holds Health Connect's record ids, which change when Health Connect restores onto a new phone. Saved scans are still matched within 10 minutes there, so only a dismissed draft can come back once, to be dismissed again.
   - Lean mass for Katch-McArdle is derived as weight × (1 − body fat %).
   - The InBody app's Health Connect access was off on the reference phone; turn it on in the InBody app.
-- **Write (DA-04, M16):** `ExerciseSessionRecord` (strength training, yoga), a `NutritionRecord` per meal, and `WeightRecord` for manual weigh-ins, so they show up in Google Fit. Each record carries a `clientRecordId` (e.g. `meal:2026-10-18:lunch`), so a re-sync updates it in place and a delete can follow.
+- **Write (DA-04, M16, as built).** Settings → Health Connect → *Share with other apps*, off by default, asks for `WRITE_EXERCISE`, `WRITE_NUTRITION` and `WRITE_WEIGHT` together. `HealthWrites` (`:domain`) builds the records, `HealthWriter`/`HealthConnectWriter` writes them, `HealthWriteRepository` syncs, `HealthWriteSync` decides when.
+  - **What's written:**
+    - your finished workouts as `ExerciseSessionRecord`s: strength training, yoga, stretching for mobility, and for cardio and sport the activity the class's style names when M13's `ExerciseTypes` knows it ("Walk", "Badminton"), else "other workout". The title is the routine's name or the class's style; the notes list each exercise's sets ("Bench press: 40 kg × 10, 42.5 kg × 8"), so an edit (M10) changes them;
+    - one `NutritionRecord` per meal of each log date, summing its entries, quick adds included. Carbs, fat and fibre add up only the entries that have them, and stay unknown when none does. `mealType` maps Breakfast, Lunch, Dinner and Snacks; a meal you added is `MEAL_TYPE_UNKNOWN`. It spans 30 minutes from the meal's usual start on its log date (a start before "day starts at" falls on the next calendar morning). The starts are M9's (`MealTimes.start`: the time you set, else the default meal's; a meal with neither an hour after the one before it);
+    - the weigh-ins you log as `WeightRecord`s.
+  - **Never written:** sessions read from other apps (`hc_record_id` set, M13), and scan weights (`source = SCAN` or linked to a scan), which the scale's app writes itself.
+  - **Ids and versions.** `clientRecordId` is `recomp-workout-<session id>`, `recomp-meal-<log date>-<slot key>` or `recomp-weight-<row id>`, stable across edits. `clientRecordVersion` is the write time in epoch ms, so a later write always replaces an earlier one, even after a reinstall or restore. Records are manual entries, written in chunks of at most 1,000.
+  - **The sync reads the tables, not the save paths.** Each run builds the records of the last 30 log dates from what's there now and compares them with `hc_written` (§4): new or changed ones are written, ones written before and no longer there are deleted by `clientRecordId` (one Health Connect no longer has isn't an error). Entries older than the window are forgotten, not deleted. An edit or delete older than 30 days waits for *Resync everything*, which deletes all of Recomp's records of the three types (a delete by time range only removes the calling app's) and writes every record again.
+  - **When.** At launch (after a pending restore finishes), daily (`HealthWriteWorker`, while sharing is on; writing needs no background permission), and 20 seconds after the last change to the tables it reads (`workout_session`, `session_exercise`, `set_entry`, `yoga_detail`, `routine`, `exercise`, `food_log`, `body_weight`), found through Room's invalidation tracker. Turning sharing on writes the last 30 days; turning it off stops writing and forgets `hc_written` (what was written stays in Health Connect, where you can delete it).
+  - **Failures** never escape: without the permissions nothing is written and Settings says why; any other error is shown with the last good write's time, and the next run writes it all.
+  - Reads (M13) leave out Recomp's own records, so nothing written comes back as an import.
 - **The app works fully without Health Connect.** When it's missing or needs an update, Settings → Health Connect says so and nothing else changes.
 
 ### 6.4 Food data (database P0, scanning P1)
@@ -847,22 +914,26 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
 - **Import.** On launch, `FoodSeeder` upserts the basics and, when the build has it, INDB by `source_key`, but only when a file's version differs from `food_data_version`. Updates keep use counts, hidden foods and calibrated units. A food that disappears from a file is archived, never deleted, because log rows may point at it. Without INDB in the build, INDB rows already on the phone stay.
 - **Search (NU-11).** `food_fts MATCH` with each typed word as a prefix (`pan* tik*`), joined to `food` and filtered to unarchived rows whose diet the persona allows and whose region is null or the persona's. Order: foods you've logged first (most often, then most recently), then custom, AI-learned, the basics and INDB, with caveat foods last among those; then names that start with the query, then shorter names. An empty query lists recently used foods, or the basics for the diet when nothing has been logged yet. Hiding a food archives it.
 - **Units and portions (NU-12).** A food offers `g`, its own `food_unit` rows and the region's household measures (`portion_sizes`; Indian: katori 150 g, glass 250 g, tbsp 15 g; International: cup 240 g, tbsp 15 g; 1 ml counts as 1 g). Recalibrating a unit for one food writes a `calibrated` `food_unit` row, which beats the household default. A log row snapshots grams and macros: `kcal = kcal_100g × grams / 100`, and so on.
-- **Meal slots (NU-10)** are `{key, name, removed}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
-- **Saved meals and copy (NU-13).** Logging a saved meal inserts one row per item in a transaction (`source = SAVED_MEAL`); an item with a food recomputes from the food's current values. Copying a day or a meal re-inserts its rows on the target date with a new `logged_at`, keeping their macros, origin and source. Both bump the foods' `use_count` and `last_used_at`, and return the new ids for *Undo*.
+- **Meal slots (NU-10)** are `{key, name, removed, start}` in `meal_slots`. `food_log.meal_slot` stores the key, so renaming keeps history. A removed slot still shows on days that have entries in it.
+  - **Slot times (M9, PRD §12.5).** `start` is the meal's usual start in minutes after midnight. Slots stored before M9 have none; the four default meals then use their defaults (Breakfast 05:00, Lunch 12:00, Snacks 16:00, Dinner 19:00), and a meal you add has no usual time until you set one. `MealTimes.slotAt(slots, time)` (`:domain`) gives "the meal for the time of day": among the meals you can log to, the one with the latest start at or before the time. Before the day's first start it's the last meal (01:30 is a late dinner); equal starts go to the meal later in your list; with no starts at all it's your first meal. A slot's range is its start to the next start. The log date still comes from the day boundary (PR-03); only the slot uses the wall-clock time. M12's reminders use the same function.
+- **Snack allowance (NU-06, M9).** `snack_allowance` holds `{kcal, slot}`: 100 to 300 kcal in steps of 50, counted against one meal (Snacks, or your first meal when there's no Snacks). It's inside the calorie target: the target, "left" and every average are computed exactly as without it. `DayLog.allowance` and `MealGroup.allowanceKcal` carry it to the day view, which adds "includes a 150 kcal snack allowance" under the target and shows the meal as "60 of 150 kcal". It's a current setting, not a versioned target, so it shows on any day you view. If its meal is removed, it counts against the default meal instead (`SnackAllowance.slotIn`), so the line always has a meal showing it. A value that isn't one of the offered amounts reads as off, and an import with one is refused (`problems()`).
+- **Saved meals and copy (NU-13).** Logging a saved meal inserts one row per item in a transaction (`source = SAVED_MEAL`); an item with a food recomputes from the food's current values, and an amount in one of the food's own units takes that unit's current weight (M14: a recipe's serving follows its latest cooked weight). Copying a day or a meal re-inserts its rows on the target date with a new `logged_at`, keeping their macros, origin and source. Both bump the foods' `use_count` and `last_used_at`, and return the new ids for *Undo*.
 - **Label scan (P1, NU-19):**
-  1. CameraX captures the label.
-  2. An open-source on-device text recogniser reads it (M18's choice; not ML Kit, see §7).
-  3. Tolerant regexes parse the per-100 g column of the FSSAI nutrition table: `Energy (kcal)`, `Protein (g)`, `Carbohydrate (g)`, `Total Fat (g)`.
-  4. An editable form is pre-filled.
+  1. CameraX captures the label, or the photo picker supplies one (no storage permission).
+  2. Tesseract (Tesseract4Android, `tessdata_fast` English) reads it on the phone, from a greyscale copy at most 2,000 px on its long edge (not ML Kit, see §7).
+  3. `LabelParser` (`:domain`) finds the layout from the header (per 100 g and per-serving columns in either order, or a US *Nutrition Facts* panel per serving with its weight) and reads energy (kcal, else kJ ÷ 4.184), protein, carbs, fat, fibre and the serving weight. It mends common OCR slips inside numbers (O→0, l→1, comma decimals) and leaves blank any value that can't be right (over 950 kcal or 100 g per 100 g; per serving, more than the serving weighs).
+  4. New food opens pre-filled, with every filled field marked *Check this* until edited, and keeps `source = LABEL_OCR`.
 
-  With AI on, the photo and OCR text also go to your AI provider (`LABEL`) for a cleaner result.
-- **Barcode (P1, NU-21):** Open Food Facts API, with a custom User-Agent as its terms require. A result is cached as a `food` row. Coverage of Indian brands is patchy, so a miss goes straight to label scan.
+  With AI on (and after the `LABEL` privacy notice, which offers *Phone only*), the photo at about 1,500 px and the OCR text also go to your AI provider with the `nutrition_label` schema (no persona). Its values replace the phone's where it found one; if it fails, the phone's reading stands and New food says so. The label photo isn't kept.
+- **Barcode (P1, NU-21):** ZXing reads EAN-13, EAN-8, UPC-A and UPC-E from CameraX frames on the phone, and only codes with a valid GS1 check digit are used. Your own foods are checked first (`food.barcode`); otherwise Open Food Facts' product API is asked (`Recomp/<version> (<contact>)`, at most 15 reads a minute, backing off on 429 with `Retry-After`). A product opens New food pre-filled; saving it makes a `food(source = OFF, source_key = "off:<code>")` row, and saving the same product again updates that row. Coverage of Indian brands is patchy, so a miss offers *Scan label*, and that food keeps the barcode.
+- **Open Food Facts search (NU-11, International region):** under your own results, only after a 600 ms pause with 3+ characters and fewer than 5 own matches, or on the keyboard's search key; each search is cached for the session (50 entries) and at most 10 are sent a minute. Results show apart from your foods with the ODbL credit.
+- **Meal photos (P1, NU-20):** Describe it takes a photo (camera or gallery), scaled to about 1,500 px, upright and without its metadata, kept in app-private `files/meal_photos`. The photo and any words go as one `MEAL_PHOTO` request. A photo stays only while its meal is a draft (`meal_draft.photo_path`): saving the meal deletes it, and at launch any photo no draft points at is deleted after a day's grace.
 - **Search ranking:** recent and frequent foods first (`use_count`, `last_used_at`), then custom foods, then AI-learned items, then the bundled database.
 
 ### 6.5 Backup and restore (DA-01, DA-02)
 
 - **Export:** a versioned (`schemaVersion`) JSON of every table plus settings, without the API key, zipped with photos optionally included. Every table includes M3c's `meal_draft` and `ai_request_log`; the `secrets` DataStore is never read. Written through the system "create document" picker, so Google Drive works as a target.
-- **Auto-backup (P1):** pick a folder once (the permission persists). A weekly WorkManager job writes `recomp-backup-YYYY-MM-DD.zip` and keeps the last 8.
+- **Automatic backup (DA-02, M16):** Settings → Data → *Automatic backup*, see below.
 - **Restore:** validate `schemaVersion`, migrate if the file is older, then replace the data in a single transaction after explicit confirmation.
 - **Safety net:** Android Auto Backup is enabled for the database file, with the key store excluded (`data_extraction_rules.xml`, below).
 - **Round-trip test:** export, then import, must give identical data. It's a required test (§8).
@@ -902,6 +973,21 @@ Reading is built (M13); writing comes with M16. `HealthSource` is what the sync 
     - when it doesn't, nothing was replaced, and the file is dropped ("The last import didn't happen").
   - **A failed settings write** keeps the file for the next launch. The message says the data was replaced, and points to the safety copy, which is always there from step 4.
 - Import is refused while a workout is ACTIVE on the phone. A backup taken during a workout restores it as active, and the resume prompt picks it up.
+**Automatic backup (M16, `data/backup/AutoBackup.kt`).**
+- **Where:** chosen once, with its permission kept (`takePersistableUriPermission`):
+  - *A folder on this phone* (`ACTION_OPEN_DOCUMENT_TREE`). Each run writes `recomp-backup-YYYY-MM-DD.zip` there (replacing that day's file if it exists) and deletes the oldest of Recomp's backups beyond 8. Only names of that form (and a folder's copies, `… (1).zip`) are counted; nothing else in the folder is touched.
+  - *One file, e.g. on Google Drive* (`ACTION_CREATE_DOCUMENT`, suggested name `recomp-backup-latest.zip`), overwritten each week. On the reference phone (2026-11-21) Drive shows in the folder picker, but its *Use this folder* button is disabled at Drive's top level, so Drive can't be a backup folder.
+- **When:** a WorkManager job every 7 days, first on the coming Sunday at 22:00, when the battery isn't low. A first backup runs as soon as you choose, and *Back up now* runs one.
+- **How:** `BackupManager`'s full export is built in memory first, so an export that fails never leaves a half-written file. In a folder it's written to `<name>.part`, its size checked, and only then renamed over the day's file, so a write that fails or is cut short never destroys the backup already there (a provider that can't rename gets the file written in place). The single file can't be renamed: it's overwritten in place and its size checked, so a cut-short write is reported and rewritten by the next run, but until then that one file is damaged; a folder on the phone is the safer choice. Building in memory is fine under the 16 MB import budget; M17's photos will need streaming to a part file instead.
+- **Failures** never crash and are shown in Settings with the last success. A folder or file you deleted, or whose access was taken back, says so ("Recomp can't reach the folder … any more. Choose where to back up again") and isn't retried. Any other write error (a slow or offline Drive) is retried with exponential backoff from 30 minutes, up to 4 tries.
+- The target and its outcome are device state (§4), so a restored phone asks you to choose again.
+
+**CSV export (DA-03, M16, `CsvExport`).** Settings → Data → *Export as CSV* saves `recomp-csv-YYYY-MM-DD.zip` with four files, for spreadsheets; it can't be imported back:
+- `workouts.csv`: one row per ticked set of each finished session (date, start, end, kind, routine, notes, exercise, load type, set, set type, load in kg, reps, RIR, when the set was done), and one row with the set columns empty for a session without sets (a class, another app's walk), with its style and minutes. `load_kg` is the weight, the added weight for bodyweight-plus, or the assistance for assisted lifts.
+- `food.csv`: one row per entry, with the meal's name, amounts, macros (empty when unknown), origin and how it was logged.
+- `weigh-ins.csv` and `scans.csv`: weights in kg, the scan's composition and its protocol.
+- RFC 4180: comma-separated, CRLF, quoted when needed with quotes doubled, and a UTF-8 byte order mark so Excel reads any script. Text a spreadsheet would run as a formula (starting `=`, `+`, `-`, `@`, a tab or a carriage return) gets a leading apostrophe. Times are local, dates are log dates.
+
 - **Android Auto Backup** (`res/xml/data_extraction_rules.xml`) lists only `recomp.db` (and its WAL) and `datastore/settings.preferences_pb`, for cloud backup and for device transfer. Everything else, including the key store (the `secrets` DataStore and Tink's keyset file), is left out by omission. Lint rejects an `<exclude>` outside an included path, so the key files can't also be excluded by name.
 
 ### 6.6 Notifications
@@ -938,7 +1024,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 
 | Layer | What | How |
 |-------|------|-----|
-| Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against a corpus of your real meal phrasings. | Table-driven JUnit on the JVM |
+| Domain (highest value) | Every branch of `ProgressionEngine`: baseline, add reps, increase, big-jump guard, repeat, deload, stall (with and without a deficit), bodyweight, bodyweight plus load, assisted. `NutritionCalculator`, `GoalPolicy` and pace mapping (golden vectors A–E in §5.3, both caps, the BMR floor), goal recommendation rules (every branch of §5.7, scan and BMI fallbacks), guardrails and projection (§5.8), `ExperiencePolicy` wiring into the stall window, protein ramp, `TrendCalculator` (daily, weekly and mixed spacing, seeding, primary-source filter), InBody noise and protocol rules (§5.6), `AdaptiveTdee` (synthetic data with a known TDEE). The local describe parser, against an invented corpus of meal phrasings (TRD §10: test data is invented). | Table-driven JUnit on the JVM |
 | Data | DAOs and repositories (setup, rotation, logging, resume after a simulated process death, finish, save-back), onboarding and Settings saves (target versions, overrides, same-day replace), the `training` → `persona` DataStore migration, migrations, seed data, backup round-trip, food DB import (vegetarian-only filter holds), food search ranking and FTS sync, food logging, saved meals, copy, and Today's intake. The INDB converter and diet tags are domain tests over a synthetic workbook, so no test needs the real file. | Robolectric with a file-backed Room database. Migration tests build each old version from its exported schema JSON and let Room migrate and validate it; `MigrationTestHelper` can't read schemas under Robolectric because unit tests don't merge test assets. |
 | AI | `AiGate` states and every fallback path (off, no key, over cap, offline, timeout, 429). `MealEstimator` contract via a fake. The Claude client's request shape, error mapping, retry and timeout against a local mock server. Prompt building, schema parsing, validation, pricing, drafts, saving and the learning loop. An **eval set of ~20 of your typical meals**, home and ordered, with reference values, used to compare models and prompts. | Fakes in JUnit; OkHttp's `MockWebServer` for the SDK client. The eval runs manually before changing the model or prompt. |
 | UI | Set logging (prefill, tick, edit, rest timer), meal review screen, logging a meal in airplane mode with AI on | Compose UI tests |
@@ -964,13 +1050,13 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M6: In the gym** | Supersets, warm-up suggestions, assisted exercises, RIR-aware jumps, substitutes (Room v9) | RT-05, WL-11, WL-09 (assisted), PO-08, EX-04 |
 | **M7: AI providers** | Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint, each with its own key (Room v10) | AI-05 |
 | **M8: Weekly review** ✅ | The full review, consistency calendar, body-composition chart with noise labels | HM-03, HM-04, IB-04 |
-| **M9: Faster food logging** | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
+| **M9: Faster food logging** ✅ | Local describe parser, Will it fit?, snack allowance | AI-04, NU-18, NU-06 |
 | **M10: Training history** | Edit or delete past workouts, per-exercise charts, weekly sets per muscle | WL-10, PO-09, PO-10 |
 | **M11: Programme review** ✅ | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
 | **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
 | **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
 | **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
-| **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
+| **M15: InBody share, scan targets** ✅ | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
 | **M16: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
 | **M17: Body extras** | Tape measurements, progress photos, focus areas, mobility markers (Room v14) | BM-03, BM-04, YG-03, YG-04 |
 | **M18: Camera food** | Barcode with Open Food Facts, label scan, AI meal photos, Open Food Facts search for the International region | NU-21, NU-19, NU-20, NU-11 (search) |
@@ -1392,6 +1478,8 @@ Tests cover (no real API call and no real key anywhere; every adapter runs again
 - **Risks:** the review runs many queries. Each covers one week and uses the `log_date` indexes, so it should open well inside a second; the phone check measures it.
 - **Parallel:** with M7.
 
+**M19 results** are below, after M19's block.
+
 **M8 results (2026-11-13, reference phone on Android 15, release build over the real data).** No Room change. Where §12.4 left room, M8 took the obvious reading, now written into PRD §12.4 and §5.8 here:
 - The current week shows only the sections, with food up to yesterday.
 - Incomplete days are left out of the whole Food section.
@@ -1477,6 +1565,52 @@ Tests cover:
   - the allowance inside the target.
 - **Risks:** the parser can pick the wrong dish ("dal" for "dal makhani"). It prefers your own foods and exact names, and shows its pick for review.
 - **Parallel:** with M10.
+
+**M9 results (2026-11-21; no Room change, on main with M7 and M8).** Built to PRD §12.5 and the block above; §6.2's **Local describe parser** and **Describe it and Will it fit? with the parser**, and §6.4's slot times and snack allowance, describe what was built. Where the spec was silent, PRD §12.5's **As built** lists the readings: the parser answers when AI is on but not ready, with *Save draft* kept; a failed request after a partial match reviews the matched items and keeps no draft; matched foods change their amount only; Will it fit? is about today and goes parser-first unless *Ordered*; the default meal times; and the allowance at the current setting on any day.
+
+Also in M9, the two nits from M7's review re-check (pr12-review.md, R1 and R2): a usage with only one of its two counts takes the upper bound for the other, and the name lookup keeps its 3 s limit and runs outside the send lock.
+
+Tests cover (every food and phrase invented; the AI is a fake):
+- `:domain`:
+  - the parser's corpus (`DescribeParserTest`): fractions in every form, numbers in words, "and" inside and between amounts, "with" in a dish's own name, weights, the amount after the name, units and their spellings, synonyms and plurals, exact and own names first, no dropped words ("dal makhani" never becomes dal), a unit word that is part of the name, unit fallbacks, the last-logged unit, confidence, the diet filter, unknown and empty chunks, separators, and the length limits;
+  - amounts alone (`QuantitiesTest`), including junk;
+  - merging without counting anything twice (`DescribeMergeTest`), by any of a food's names;
+  - slot times (`MealTimesTest`): defaults, a time before the first start, starts you set, removed meals, ties, ranges;
+  - Will it fit's before and after for each goal's main number, the ramp and the baseline week (`FitCheckTest`);
+  - the allowance inside the target (`SnackAllowanceTest`);
+  - the already-counted block in the prompt (`AiTest`).
+- Over the real database (`ParserFlowTest`):
+  - AI off: matched foods with their sources and food ids, nothing sent, and the review saved as `LOCAL_PARSE` rows linked to their foods, a quick add for an unknown part, and *Undo* taking back the use counts;
+  - an amount change on a matched food, and a picked food logged as `MANUAL`, with no AI-learned copy;
+  - the diet filter, whole words and a hidden food over the real FTS index; the last-logged unit and calibrated measures;
+  - AI on: everything matched sends nothing; otherwise one request with the whole meal and the counted items, the repeat dropped, and the rows `LOCAL_PARSE` and `AI_TEXT` with the request id, saved to My meals; an empty reply with counted items is `OK`; *Ordered* goes straight to the AI; a failure after a match reviews the match with no draft, and with no match keeps the draft; not ready answers from the parser with *Save draft* still there;
+  - Will it fit?: nothing logged by checking, `FIT_CHECK` logged, *Log it* into the meal for the time of day with the request id kept, the meal it was opened from, slot times you set, and with AI off or failing the parser's answer with no draft;
+  - the allowance on the day and its meal, with the same target and "left" as without it.
+- Screens (`DescribeFlowTest`): the M3c flows on the new pipeline, and *Save draft* after the parser's answer when AI isn't ready.
+- Wording (`FitTextTest`): Will it fit's lines for every goal, the baseline week and past the target; the allowance lines; meal ranges; provenance; the review's notices.
+- Settings (`SettingsPrefsTest`): meal slots stored before M9 read with no start, a start kept and one outside the day refused; the allowance off by default, only offered amounts kept, refused on import otherwise, and exported.
+- R1 (`HttpProvidersTest`): a prompt-only or reply-only usage takes the upper bound for the missing count, on OpenAI and Gemini; both present are not padded.
+- R2 (`AiFlowTest`): a hanging lookup holds up its own estimate while a second one completes; the resolver gives up at its limit on a lookup that ignores interrupts, and returns addresses or nothing otherwise.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M8 (release over the real data, 2026-11-21, reference phone on Android 15) | ✅ Installed over M8's release with no crash; no schema change, so no backup was needed. The Food tab shows *Will it fit?* on today; the add-food screen shows *Describe it* and *Will it fit?* side by side; Describe it (AI on, no key yet) says the parser still answers, with *Estimate* and *Save draft*; Settings → Food has *Snack allowance* (off), and Meals shows each meal's usual time (05:00–12:00 and so on). Nothing was typed, logged or changed in the real app. |
+| Parser, allowance and Will it fit? with invented data (dev install `app.recomp.m9dev`, AI off, with the real INDB build; uninstalled afterwards) | ✅ "2 phulka, 1 katori rajma masala and cucumber salad, zorple pie" matched Chapati/Roti (*Database*, high), an invented Rajma masala (*Your food*, high) and a cucumber salad (*Database*, low), and listed "Couldn't find: zorple pie" with *Search*, *Quick add* and *Leave out*. A quick add for it joined the review, and *Save* logged all four into Lunch. A 150 kcal allowance showed "includes a 150 kcal snack allowance" under the target and "0 of 150 kcal" on Snacks. Will it fit? "1 bowl dal makhani" showed "Protein left 80 g → 68 g" and "Calories 928 left → 666 left" without logging; *Log it* at 11:30 went to Breakfast, with *Undo*. |
+
+After a fresh-session review (pr15-review.md: 0 blockers, 3 should-fix, 6 nits, all fixed, each with a test that uses the reviewer's probes):
+- **Not sure means not matched (S1).** A low-confidence match is a guess. With AI on it goes to the AI with the rest, and is never sent as already counted; with AI off it's offered as a best guess with *Use it*. A word the name gives only after "without", "no" or "eggless" doesn't match.
+- **Slash spellings (S2).** After a longer name, a single word after a slash is another spelling of its last word, so "Quinoa khichdi/khichri" is never a bare khichri. The name without its brackets is also a name ("Milk, toned (3% fat)" is toned milk), and names that differ only by everyday words (boiled, plain, hot) are a near match, medium confidence.
+- **Renamed repeats (S3).** An AI item with every word of a counted one ("Roti (2 pcs)", "Black dal makhani") is set aside with *Add anyway*, unless it answers a part that was sent.
+- **Smaller ones:** a decimal comma (N1); a dish-named unit capped at one piece, 100 g (N2); a failed save keeps the review and says why (N3); lean bulk at exactly the target reads "0", not "0 over" (N4); an unused helper removed (N5); the allowance follows a removed meal to the default one (N6); §8's corpus line says invented.
+- **Sources.** The parser's index has no filter on source, and only the bundled sources count as database foods, so M14's recipes count as your own.
+
+The review's probes over the real INDB build, as a throwaway test (not committed; the phone wasn't connected for this round): lacto-vegetarian "2 eggs", "1 egg", "1 apple", "2 bananas", "2 slices bread", "2 gulab jamun", "khichdi" and "subji" are now guesses, never matches, and the coffee in "1 cup coffee with milk" too; "2 boiled eggs" is unmatched. Non-vegetarian "2 eggs" is Egg, whole (high). Sure matches stay sure: "paratha" is Plain parantha/paratha, "1 bowl khichdi" Plain khitchdi, "1 cup tea" Hot tea, "1 plate rice" Boiled rice (all medium), "1 katori curd" and "1,5 roti" high (1.5 roti).
+
+After the re-check (R1: on a tie the part that was sent wins, so "Coffee with milk" keeps its coffee; R2: the per-piece cap applies only to foods that come as small pieces, so a 209 g masala dosa stays a sure match), with main's M11 and M12 merged in: M12's stand-in for "the meal for the time of day" now uses `MealTimes.slotAt`, and M11's programme review looks up the server's name outside the send lock, like meals.
+
+| Check | Result |
+|-------|--------|
+| The review fixes on the phone (dev install `app.recomp.m9dev`, AI off, real INDB build, invented data; uninstalled afterwards) | ✅ "2 roti, 2 bananas, 1 cup coffee with milk, 1,5 roti" showed Chapati/Roti ×2 (high), Milk, whole (medium) and Chapati/Roti ×1½ (high), plus "Not sure about: 2 bananas · Best guess: Banana raita" and "Not sure about: 1 cup coffee · Best guess: Espreso coffee", each with *Use it*, *Search*, *Quick add* and *Leave out*. *Use it* moved the guess into the items, *Leave out* dropped the coffee, and *Save* logged the four items. No crash. |
 
 #### M10: Training history
 
@@ -1604,7 +1738,7 @@ Tests cover:
 - **Parallel:** with M11.
 
 **M12 results (2026-11-21, reference phone on Android 15).** No Room change. Built as above, with these readings where §12.8 left room (written into PRD §12.8): reminders are clock times on calendar weekdays, capped per log day; a ring more than 90 minutes late is dropped; a skipped or blocked reminder doesn't use up the cap; lean bulk nudges at more than 10% of the day's calories left; steps use the protein rule against 8,000 until M13 adds the step goal. The rest of the design is in §6.6 (*Reminders as built*) and §4 (`reminders`, `reminder_ledger`).
-- **M9's slot rule.** It hadn't merged, so "the meal for the time of day" is `MealClock.slotAt` in `:domain/nudge`: Lunch from 05:00 to 17:00, the last meal from then until the small hours. It's the only place to switch to `MealTimes.slotAt` once M9 is on `main`.
+- **M9's slot rule.** It hadn't merged, so "the meal for the time of day" was a stand-in in `MealClock.slotAt` (`:domain/nudge`): Lunch from 05:00 to 17:00, the last meal from then until the small hours. When M9 merged, `MealClock.slotAt` became `MealTimes.slotAt`, each slot's usual time range (§6.4).
 - **Steps.** The nudge reads `daily_activity.steps` and leaves the line out while it's null; a test fills a row the way M13 will and sees it appear.
 - **Tests:** 643 in the gate, 0 failures, lint 0 errors. New: `ReminderDayTest` (21: the cap and skip rules over a simulated day, the day boundary, time-zone and clock changes), `NudgesTest` (14: content per goal, ranking, portions, the slot stand-in), `ReminderFlowTest` (20: the skip rules over real rows, notification text, one-tap log and *Undo*, the check-in and scan reminders, the ledger kept out of exports and Android's backup) and `WidgetAndScheduleTest` (10: the widget's state after a food log, a workout, a target change and the day rolling over; the alarm after a restart, a clock change and a time-zone change).
 - **On the phone.** The release over the real data: Today and Settings → Reminders open, all off, and no alarm is set; nothing was turned on there. In a dev install with invented data, the first reminder turned on asked for notification permission, the over-two warning showed, and the evening notification came 3 minutes after its time (inexact, as expected) with three of the invented foods. Its button logged a portion into Lunch and *Undo* took it back, with the widget following both. The 4×1 widget's *Log food* opened Food and a tap on it opened Today, whose *Tonight* card logged and undid a suggestion. After the ring the alarm moved to the next day.
@@ -1673,6 +1807,27 @@ Tests cover:
 - **Risks:** raw and cooked weights are easy to mix up, so the editor says which one the totals assume.
 - **Parallel:** with M13.
 
+**M14 results (2026-11-21; Room v13, after M11's v11 and M13's v12).** Built to PRD §12.10 and the block above. `Recipes` (`:domain`) does the arithmetic, `RecipeRepository` saves, and `ui/food/RecipeScreen.kt` is the editor, opened from *New food* → *Recipe · build it from ingredients* and from a recipe's *Edit* in search. Where the spec was silent:
+- **Servings, cooked weight, or both.** At least one is needed. With no cooked weight, the dish is taken to weigh what its ingredients do. With no servings, the recipe has no *serving* unit and is logged by weight. One serving is the dish's weight ÷ servings, so a serving's numbers are the same whether or not the pot was weighed.
+- **Raw or cooked.** Ingredient amounts are always raw, as weighed going in, and the amount field says so. Under the totals the editor says which weight per 100 g uses: "Per 100 g is for the cooked dish, using the 920 g you weighed", or "No cooked weight, so per 100 g assumes the dish weighs what its ingredients do raw (310 g)…".
+- **Amounts** are typed in grams or in one of the ingredient's units (katori, piece…) and stored as grams.
+- **Values are fixed when the recipe is saved.** A later change to an ingredient's numbers (a corrected custom food, or a recipe inside this one) reaches the recipe the next time it's saved; the editor opens with the ingredients' current values, so opening and saving is enough. Numbers never recompute behind your back.
+- **The diet tag isn't a number, so it does follow.** When an ingredient's tag changes (a custom food edited, an AI-learned food re-tagged, a database food re-imported), every recipe that holds it, at any depth, is re-tagged in the same transaction (`RecipeTags`). Otherwise a recipe holding a mayo corrected to *Has egg* would still show to a lacto-vegetarian.
+- **The frying-oil caveat** passes to a recipe that holds a food with it, at any depth, and goes when that ingredient is taken out.
+- **Editing changes future logs only,** because log rows snapshot their macros (§4). A saved meal that holds the recipe recomputes from it when logged, like any food. An amount in one of the food's own units takes that unit's current weight, so "1 serving" of a recipe follows its latest cooked weight and servings, and a recalibrated unit is honoured for any food. Grams, and a unit the food no longer has, keep the weight the meal was saved with (§6.4's saved meals).
+- **A recipe inside a recipe** is allowed, and passes its diet tag up. A recipe is never offered as its own ingredient, nor is any recipe that contains it at any depth; `RecipeRepository.save` refuses one too, with nothing written.
+- **The *serving* unit** is the recipe's first unit, replaced on each save. Units you calibrated for the recipe stay. It prefills in the portion sheet however heavy it is (`Portions.MAX_UNIT_GRAMS` is for database units).
+- **Search** ranks a recipe with your custom foods and marks it "your recipe". It's among your own foods in *Describe it*'s prompt. The learning loop never overwrites one: an AI estimate named like a recipe becomes its own AI-learned food. M9's local parser finds recipes through the search index; its "your own food" checks (`IndexedFood.own`, `ReviewItem.picked`) must count `RECIPE` as yours, which whichever of M9 and M14 merges second adds.
+- **Hiding** a recipe archives its food, as for any food; the recipe and its ingredients stay for the logs that point at them. There's no delete.
+- **Leaving with unsaved changes** asks first. Amounts reopen as stored (up to three decimals), and an amount you don't touch is saved exactly as it was.
+- **Limits:** an ingredient or a pot up to 50 kg, up to 200 servings.
+
+| Check | Result |
+|-------|--------|
+| Tests | `RecipeTest` (`:domain`, 6): values with and without a cooked weight, the diet tag, bad amounts, a recipe inside itself at one, two and three levels. `RecipeFlowTest` (`:app`, 15): the food row, serving unit and search; no cooked weight; the diet tag following the ingredients and the diet filter; an edit leaving a past log and its name alone while a new log and a saved meal use the new values; an ingredient's change arriving on the next save; self-containment refused with nothing written; calibrated units kept; the editor's weight note; a saved meal's serving following the new serving weight (and any recalibrated unit); the frying-oil caveat inherited; the diet tag following a corrected custom food, a re-tagged AI-learned food and a re-imported database food, through nested recipes; amounts reopening exactly. `MigrationTest`: 12→13 from the exported schema with foods, units, logs, a saved meal, M11's review and deload mark and M13's scan draft and synced night kept, and the new foreign keys enforced; and 9→13 in one open. `BackupTest`: the round trip with two recipes (one inside the other), and v10, v11 and v12 backups imported into v13. |
+| Dev install `app.recomp.m14dev` (invented data, uninstalled afterwards) | ✅ *New food* → *Recipe* opened the editor. Three ingredients from search, one typed as 2 katori (300 g). Totals, per 100 g and per serving showed as they were added, with the raw-weight note, then the cooked-weight note once 520 g was typed, and "Has egg, from its strictest ingredient". Saving opened the portion sheet at 1 serving (130 g); it logged at 289 kcal. Search showed it as "your recipe" with *Edit*, and its own ingredient search didn't offer it. After removing the egg and saving, it read Vegetarian at 253 kcal a serving, and the entry already logged still read 289 kcal. The run found Back leaving without asking after an edit, and a field label that wrapped; both fixed. <!-- pii-ok: invented dev-install values --> |
+| Release build over the real data (2026-11-21, 12→13 over M13's v12, after a backup) | ✅ The migration ran with no crash. Today, Body and Train showed what they did before. *New food* showed *Recipe · build it from ingredients*, which opened the empty editor; it was left with Back, so no recipe was made and nothing was logged or changed in the real app. |
+
 #### M15: InBody share and scan-informed targets
 
 *IB-03, IB-05; PRD §12.11; no Room change.*
@@ -1688,6 +1843,45 @@ Tests cover:
   - a shared image with and without a matching draft, and the image deleted with its scan.
 - **Risks:** the image is sensitive: it stays in app-private storage, out of Android's own backup, and is never sent anywhere. Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
 - **Parallel:** with M16.
+
+**M15 results (2026-11-21; no Room change).** Built to PRD §12.11 and the block above. Where the spec was silent:
+- **Which scan counts** (`ScanTargets`, `:domain`, `body/`): the latest on-protocol scan dated within 60 days of today, never one dated later. Lean mass is the scan's weight minus its fat mass.
+- **Lean mass goes into every target computation**: Settings' targets and preview, onboarding and the goal flow, the check-in's basis (so its floor and *Adjust* range use the scan's BMR) and the programme review's range. Targets still change only when you save; the check-in's "the formula said …" line is the scan's BMR × activity.
+- ***Preview targets with your scan*** is a card on Body, above the scans. It shows while the counting scan's BMR is 20 kcal or more from the BMR of the target in force today. *Preview* opens Settings' own before-and-after, and *Save* saves a target version from today, as Settings does. *Not now* hides it until a newer scan (`scan_targets_dismissed` in the settings store, the scan's measured-at time).
+- **The body-fat finish line** in the goal flow is enabled with a counting scan. Typing the target % fills the goal weight with lean mass ÷ (1 − target %), to 0.1 kg, and protein then uses that goal weight. Targets of 5–50% are accepted.
+- **The suggested goal weight** with a counting scan aims at 15% body fat for men and 23% for women, rounded to the kg (PRD §4.2 leaves the target open). When you're already that lean, or have no recent scan, the BMI rule stands. <!-- pii-ok: the suggestion rule's defaults, not anyone's data -->
+- **Sharing:**
+  - The app takes `ACTION_SEND` for `image/*`. The image is copied into `files/scan_images` (JPEG, PNG or WebP, up to 20 MB) the moment it arrives, while the share's permission holds.
+  - "What is this?" offers *InBody result* and *Cancel*; nutrition labels and meal photos wait for M18.
+  - The scan form pins the image above the fields, and a tap makes it taller. Saving keeps its file name as `image_path`, and an edit keeps it.
+  - **With M13's InBody drafts:** a shared screenshot's form picks up the newest open draft measured in the 12 hours before the share, or up to 10 minutes after (`SharedScan`). Its time, weight, body fat % and BMR are filled in, and saving makes the scan `HEALTH_CONNECT` and closes the draft, as Body's draft row does. With no such draft, the form starts empty.
+  - Deleting the scan deletes the file. An image no scan keeps, such as a share you backed out of, is removed a day later at launch.
+  - Android's backup rules list only the database and the settings, so the images are left out by omission, which `BackupRulesTest` checks. The app's own export doesn't carry them either.
+
+**Fixed after PR #21's review (2026-11-21):**
+- *A stuck offer.* With a check-in estimate the scan's BMR can leave every macro unchanged. Settings' preview now counts a BMR difference as a change, so *Save* writes the scan's BMR and the offer clears.
+- *What a share may read.* Only a `content://` URI from another app is read. A `file://` path, or a URI of the app's own, could point at its private files (the database, the key store), so it's refused. A staged file is kept only if it decodes as an image.
+- *Smaller fixes:* a share before onboarding has finished says to finish setting up first, and keeps nothing. The shared stream is opened off the main thread. HEIC photos are accepted.
+- *As designed, now written down:*
+  - A body-fat finish line's goal weight is set when you type the target, and later scans don't move it until you edit the goal; "reached" is judged on the scans.
+  - Backups don't carry images. After an import, images the restored database doesn't name are removed a day later, so a rollback to the safety copy after that brings its scans back without images.
+
+Tests cover:
+- `:domain`: `ScanTargetsTest`: the 60-day and protocol rules, lean mass and Katch-McArdle, the 20 kcal threshold, the body-fat goal weight and the scan-based suggestion.
+- `ScanTargetsFlowTest`:
+  - golden vector B end to end: onboarding at Mifflin-St Jeor, a scan, the offer, the preview's numbers, and *Save*;
+  - an off-protocol, a 61-day and a 60-day scan;
+  - *Not now* until a newer scan;
+  - a check-in estimate setting calories with the scan's BMR as the floor;
+  - an image kept with its scan, kept through an edit and deleted with it;
+  - staging limits and the clean-up.
+- `BackupRulesTest`: shared images are left out of cloud backup and device transfer.
+- `SharedScanTest` and `ScanShareViewModelTest`: the draft from the same time as a share, a form prefilled from it whose save closes it, and one with no matching draft.
+
+| Check | Result |
+|-------|--------|
+| Dev install with invented data | ✅ `app.recomp.m15dev` (d97cb5d), uninstalled afterwards; the real app untouched.<br>- An invented screenshot, labelled as such, was shared from Google Photos through the system share sheet. "What is this?" showed it, and *InBody result* opened the scan form with it pinned above.<br>- The typed scan saved on protocol, with the image kept in app-private storage.<br>- Body then offered *Targets from your scan*; *Save* took the scan-based targets, the card went, and Today showed the new target.<br>- The goal flow's body-fat finish line was enabled, and a 20% target filled the goal weight.<br>- The saved scan reopened with its image, and deleting it deleted the file. |
+| Not run on the phone | The InBody draft prefill with a real InBody measurement in Health Connect; `ScanShareViewModelTest` covers it with and without a draft. A share sent from `adb` can't grant read access, so the app shows its "couldn't be read" screen, as designed; the real share sheet works. |
 
 #### M16: Data out
 
@@ -1708,6 +1902,14 @@ Tests cover:
 - **Risks:** a Drive folder can be slow or offline, so the worker retries with backoff and Settings shows the last success. Nutrition written to Health Connect is readable by every app you give access; it's off by default.
 - **Parallel:** with M15.
 
+**M16 results (2026-11-21; no Room change; on main 137632e with M10, M12 and M13).** Built to PRD §12.12; §6.3 (*Write*) and §6.5 (*Automatic backup*, *CSV export*) describe what was built. Where the spec left room:
+- **Drive** shows in the reference phone's folder picker, but its *Use this folder* is disabled at Drive's top level, so Drive gets the one rolling file and *the last 8* is for folders on the phone.
+- **A meal's time** is its usual start by M9's rule (`MealTimes.start`).
+- **Turning sharing off** stops writing and forgets what was written; the records stay in Health Connect.
+- **After PR #24's review:** the share switch is device state (`hc_share`), so an import or the safety copy can never turn sharing back on; a failed *Resync everything* forgets what was written before its deletes, so the next sync rewrites the window; folder backups go through a `.part` file and a rename, with the written size checked; Health Connect missing or out of date gets its own message; a class's style picks the activity type; changing the backup target reschedules the weekly run from Sunday night. Not changed: CSV's formula guard also marks text starting with `-` or `+` (OWASP's trade-off, noted in `Csv`).
+- **Tests:** 417 domain and 426 app tests in the gate, 0 failures, lint 0 errors. New: `CsvTest`, `CsvExportTest`, `HealthWritesTest`, `BackupRotationTest`, `HealthWriteFlowTest` (10, including M10's history edit and delete followed), `AutoBackupTest` (6).
+- **On the phone (2026-11-22, release over the real data, after a fresh export):** no crash. The user picked a backup folder themself (the picker wasn't read), and the first automatic backup matched the manual export exactly: schema 13, 25 tables, 2,132 rows; Settings showed its time. *Share with other apps* opened Health Connect's write prompt; the user refused it, sharing stayed off with Recomp's note, and no write permission was granted, so nothing was written to Health Connect. Not checked on the phone, by the user's choice: an actual write and that rewrites don't duplicate records; `HealthWriteFlowTest` covers both (stable `clientRecordId`s, a later version replacing the earlier record, unchanged records skipped).
+
 #### M17: Body extras
 
 *BM-03, BM-04, YG-03, YG-04; PRD §12.13; Room v14.*
@@ -1727,7 +1929,7 @@ Tests cover:
 - **Risks:** photos are the most sensitive data in the app. They stay in app-private storage, out of the gallery and out of Android's own backup.
 - **Parallel:** with M18.
 
-**M17 results (2026-11-21; Room v14 in the merge order. Until its turn the branch stays on main 137632e, with `progress_photo` at 12→13).** Built to PRD §12.13 and the block above. Where the spec was silent:
+**M17 results (2026-11-22; Room v14, 13→14 after M14's v13).** Built to PRD §12.13 and the block above. Where the spec was silent:
 - **Tape sites.** Settings → Body data → *Tape measurements* picks chest, arm, thigh and hip; waist is always measured. *Log measurements* (it replaces *Log waist* on Today and Body) asks for waist every time and for each other chosen site when its last reading is 28 days old or there is none, each with a one-line how-to and a ½ cm stepper prefilled from last time. Body shows waist as before and a card with each other site's latest reading and its change.
 - **Editing readings.** Tapping a tape site or a mobility test on Body lists its readings; each opens a sheet to change its value (in the logging sheet's range) and date, or delete it with *Undo*.
 - **Mobility markers.** The Settings → Training switch is on by default when you have an extra of kind yoga or mobility, and is stored only once you change it. The Body card shows each test's latest and the one before; it asks again every 28 days. Sit-and-reach is in cm past the toes (negative is short of them, −60 to 60), the squat hold in seconds (a stopwatch, or typed, up to 30 minutes), and the toe touch yes or not yet. A stopwatch left running stops at 30 minutes, and what's entered survives a rotation. Any test can be skipped; only the ones taken are saved.
@@ -1735,13 +1937,14 @@ Tests cover:
 - **Photos.** `files/photos/<pose>-<millis>.jpg`, taken with the phone's own camera app through `ACTION_IMAGE_CAPTURE` and a FileProvider (`${applicationId}.photos`) that reaches only that folder. CAMERA is asked first. After a *Don't allow*, the screen explains why the camera is needed; the next tap asks again until Android stops showing the prompt. A cancelled or empty capture leaves no file and no row, and the capture's pose and file are kept in the saved state, so a photo taken while Android recreated Recomp is still saved. With no camera app the screen says so. The camera's GPS tags are removed on save, and EXIF orientation is applied when a photo is shown. A retake of a pose on the same day asks first, then replaces the earlier one; every photo of a date gets its own tile. Delete asks first, then removes the file before the row, so a file that can't be removed keeps its row and can be deleted again. Files no row points at (none should be left, but older builds or an interrupted capture could) are removed when Photos opens, once a day old and never while an import is finishing. A row whose file is gone shows "Photo not on this phone". The 4-week suggestion is on the Body card and the Photos screen only, with no notification. Photos are never sent to AI.
 - **CameraX wasn't needed.** On the reference phone the camera app (Nothing Camera) saved no copy of its own: MediaStore's image count and newest id were unchanged after the capture and 7 minutes later, and DCIM and Pictures gained no file.
 - **Backups.** *Include photos* is off each time Settings opens. Without it the file stays format 1, so an older build still reads it; with it the file is format 2, with `photos/<name>.jpg` entries after the JSON. Photos are capped at 25 MB each and 2 GB in all, apart from the JSON's 16 MB. On import, photos unpack to `files/backups/incoming-photos` and replace the phone's only after the database restore commits (and after an interrupted restore finishes). An import without photos leaves the phone's files alone. The safety copy always holds the photos, so *Restore the data from before the import* brings them back. Entry names are checked against `[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.jpg`, and a count that disagrees with the manifest is refused.
-- **Left for later:** M16's automatic backup gets the same *Include photos* switch once M16 (#24) merges.
+- **Automatic backup.** Settings → Data → *Photos in the automatic backup* (shown once a target is chosen) puts the progress photos in each weekly backup; it's off by default and, like the target, kept only on this phone. The backup is now built in app-private cache and streamed to the folder or file, so a backup with photos is never held in memory; the cache file is deleted after each run. Restoring one goes through the same import, so the `file_path` check and the staged photo swap apply.
+- **Left for later:** M15's shared InBody images aren't in any backup yet; the M17 block's "scan images follow the same switch" is still to do.
 
 | Check | Result |
 |-------|--------|
-| Tests | `:domain`: `FocusAreasTest` (2), `TapeSitesTest` (3), `MobilityMarkersTest` (3). `:app`: `PhotoFlowTest` (10): a capture saved with its row and deleted with it, a cancelled capture, a missing file, the 4-week suggestion, compare's dates; a row whose path leaves the folder never reading or deleting another file; a file that can't be deleted keeping its row; a same-day retake replacing the earlier photo, and every photo of a date getting a tile; the orphan sweep; GPS tags removed and EXIF rotation read. `PhotosViewModelTest` (3): a capture finished after the activity was recreated, a cancelled capture and no camera app, a saved state naming a file outside the folder. `PhotoCaptureTest` (2): the permission asked before the intent, and a FileProvider limited to `photos/`. `BackupRulesTest`: photos left out of cloud backup and device transfer. `BackupTest` (+9): format 1 without photos and 2 with them; an import with photos replacing them only after the commit, with the safety copy bringing the old ones back; an import without photos leaving them in place; a discarded import; the JSON budget and the per-photo cap; an entry that could escape its folder, or a wrong count, refused; an export carrying only photos a row points at; a crafted `file_path` refused; a deleted photo gone from the safety copy. `BodyFlowTest`: tape sites due and logged, mobility on by default and logged, a tape or mobility reading changed in range, deleted and restored. `HistoryFlowTest`: focus areas stored and prefilled, and edited in History. `BodyExtrasTextTest` (5), including the stopwatch's 30-minute cap and an edited reading's steps. `MigrationTest`: the migration adding `progress_photo` with M13's scan draft kept (12→13 on this branch; 13→14 with M14's recipe too once main is merged). |
+| Tests | `:domain`: `FocusAreasTest` (2), `TapeSitesTest` (3), `MobilityMarkersTest` (3). `:app`: `PhotoFlowTest` (10): a capture saved with its row and deleted with it, a cancelled capture, a missing file, the 4-week suggestion, compare's dates; a row whose path leaves the folder never reading or deleting another file; a file that can't be deleted keeping its row; a same-day retake replacing the earlier photo, and every photo of a date getting a tile; the orphan sweep; GPS tags removed and EXIF rotation read. `PhotosViewModelTest` (3): a capture finished after the activity was recreated, a cancelled capture and no camera app, a saved state naming a file outside the folder. `PhotoCaptureTest` (2): the permission asked before the intent, and a FileProvider limited to `photos/`. `BackupRulesTest`: photos left out of cloud backup and device transfer. `BackupTest` (+9): format 1 without photos and 2 with them; an import with photos replacing them only after the commit, with the safety copy bringing the old ones back; an import without photos leaving them in place; a discarded import; the JSON budget and the per-photo cap; an entry that could escape its folder, or a wrong count, refused; an export carrying only photos a row points at; a crafted `file_path` refused; a deleted photo gone from the safety copy. `BodyFlowTest`: tape sites due and logged, mobility on by default and logged, a tape or mobility reading changed in range, deleted and restored. `HistoryFlowTest`: focus areas stored and prefilled, and edited in History. `BodyExtrasTextTest` (5), including the stopwatch's 30-minute cap and an edited reading's steps. `MigrationTest`: 13→14 from the exported v13 schema, keeping M14's recipe and ingredient, M13's scan draft, a waist reading and a session, then taking a photo row. `AutoBackupTest` (+2): photos in the automatic backup only when switched on, and restored from it; an automatic backup with a photo row pointing outside the folder refused on restore. |
 | Dev install `app.recomp.m17dev` (invented data and drawn images, uninstalled afterwards) | ✅ *Log measurements* asked waist, chest and arm, then waist only after a save; the tape card showed +1.0 and −0.5 cm. The mobility sheet's stopwatch and the card's "Before" lines worked. Photos showed the grid by date, the missing-file placeholder, the 4-week prompt and Compare. CAMERA was asked before the camera opened; a capture (lens on a surface, never viewed) landed only in `files/photos` and was deleted in the app; a cancelled one saved nothing. History's editor lacked the focus chips; fixed and checked. |
-| Release build over the real data | Not yet: it waits until M17 is next to merge. |
+| Release build over the real data | RELEASE_RESULT |
 
 #### M18: Camera food
 
@@ -1760,6 +1963,8 @@ Tests cover:
   - the request shapes against a mock server.
 - **Risks:** an open-source recogniser reads labels less well than ML Kit would; AI cleans up when it's on, and every field stays editable. Tesseract and its `tessdata_fast` models are Apache-2.0, so the English model (about 4 MB) can be committed. Tesseract4Android ships through JitPack, a third-party repository: pin its version and limit JitPack to that group in Gradle's content filter. ZXing is Apache-2.0 too. Open Food Facts covers Indian brands patchily, so label scan is the fallback. Camera permissions and lifecycle on the phone.
 - **Parallel:** with M17.
+- **Built (2026-11-21):** CameraX 1.6.2, ZXing core 3.5.4 and Tesseract4Android 4.9.0 (JitPack limited to `cz.adaptech.tesseract4android`); the `tessdata_fast` English model is committed (commit `8741641`, about 4 MB). No ML Kit or Google Play services. The Open Food Facts contact comes from `recomp.off.contact` in `local.properties`, into `BuildConfig`. Details in §6.4.
+- **Share picker (2026-11-22, after M15):** *Nutrition label* reads the shared image like a scan (phone, then AI after its notice) and opens New food in today's meal for the time of day; *Meal photo* opens Describe it there with the image as its photo. Either way the shared copy is deleted once read. A photo estimate goes straight to the AI through M9's `MealDescriber`: the parser can't see a photo.
 
 #### M19: Goals
 
@@ -1782,6 +1987,24 @@ Tests cover:
   - every bundled preset decoding and completing.
 - **Risks:** the automatic resume writes a target version while you're not looking. It's the one exception to "targets never change on their own", and accepting the break agrees to it.
 - **Parallel:** none; it runs before M20.
+
+**M19 results (2026-11-21; no Room change, on main with M8).** Built to PRD §12.15 and the block above; §4, §5.0 and §5.8 describe what was built. Where the spec was silent:
+- **`startedOn`** is reset only by a change of goal (including one the guardrails make). Before M19 every goal save, even a pace edit, set it to that day; that also restarted M8's "current plan". Tested in `GoalProgressTest` and `GoalFlowTest`.
+- **During a break** the goal stays the goal (Settings → Goal shows it, with "Maintenance break · back to your recomp on Mon 3 Nov"), while the targets follow `GoalPlan.targetPlan`: Maintain at the goal's protein. Your own calorie target is set aside, not lost.
+- **The 2 weeks after a reached goal** use the same mechanism but don't resume on their own: PRD §4.7 says "then choose a new goal", so the deficit never comes back by itself. *Keep going* after them writes a `RESUME` version.
+- **Quiet weeks** run past the break until the flag's window is back on the goal, so the first check-ins after a break don't read its flat weeks as a stall.
+- **M8's review** shows a week that ended inside a break with its trend and "at maintenance on a break", without a pace or finish line, and names the goal underneath a break (not Maintain) for an earlier week.
+- **Re-check 2 fix (R4):** the check-ins just after the switch goes off stay quiet, floored at the formula, until their window no longer holds the pregnancy; the profile keeps the day it went off (`pregnantUntil`, absent by default, so no migration).
+- **Re-check fixes (PR #17, after M11 merged):** M11's suggestions are held above maintenance while pregnant (S3); a pregnancy estimate never falls below the formula (R1); a change saved during a break is written as `BREAK`, so it stays part of the break in the review (R2); a failing goal refresh never stops a check-in catch-up (R3). The GOAL request goes through M11's `AiSender`.
+- **Review fixes (PR #17):** pregnancy no longer lets the check-in talk the target down (see §5.8's guardrails); a break resumes before catch-up; the review's break weeks; a bad preset file on the phone is skipped and logged instead of stopping onboarding (the bundled files stay strictly tested). Protein is unchanged while pregnant, beyond the note to ask a doctor or midwife, as PRD §4.9 has it.
+- **The break suggestion** shows in the latest check-in (not in older weeks); Today shows the running break with *End early*, and the Goal reached card on both.
+- **Describe your goal** shows only when AI is ready; otherwise the card stays *Not sure? Answer 3 quick questions*. From Settings the experience level is known, so an intent goes straight to the suggestion and *Back* shows the questions pre-filled; in onboarding the lifting question is still asked. Any failure, an `unclear` reply after the one question, or AI going unready lands on the three questions with a line saying why. Requests are logged as `GOAL` and count toward the cap. The adapters' own tests cover every provider; the GOAL tests run against a mock OpenAI server.
+- **Pregnancy** in About you (onboarding and Settings), shown to everyone. Turning it on previews the move to Maintain with the note; turning it off leaves Maintain until you choose.
+- **Presets** keep their keys, so a stored `presetKey` still matches. `:domain` no longer has a `Presets` object; tests use a test-only `Presets` that reads the files.
+- **Tests:** `GoalProgressTest` and `GoalPromptTest` (domain), `GoalFlowTest`, `GoalAiFlowTest`, `PresetsTest` and `GoalCardTextTest` (app).
+- **Suggestions follow the pregnancy guardrail:** while it's on, a deficit the rules (or an AI-read intent) would suggest becomes Maintain, with the reason (`AdviceReason.NO_DEFICIT`), so the suggestion is never a greyed-out card.
+- **On the phone (2026-11-21, real data):** with main 137632e merged in (Room v12, the phone's version), the release installed over the real data with no crash. Today showed the same calories and check-in card and no goal card (the recomp is about 5 weeks in: no break due, not reached); Settings → Goal was unchanged and the pregnancy switch off. Look only. Two earlier attempts had waited because M11, then M13, had moved the phone to a Room version main didn't have yet.
+- **Earlier on the phone:** the release was **not** installed over the real data. M11 had moved the phone to Room v11 that morning and main was still v10, so it would have been a downgrade; install it once rebased onto a main with v11. A dev install with invented data (a fat-loss goal 13 weeks old) went through the break (suggested in the check-in, 1 week accepted, Today at Maintain's range with "back to … on Sat 28 Nov", the proposal quiet, *End early*), Goal reached after a relaunch (*Start 2 weeks at maintenance*, then *Choose a new goal* → Lean bulk with *What to expect*), the pregnancy switch, and *Describe your goal* against a stand-in OpenAI-compatible server on the Mac: the notice, one follow-up question, and only the typed text and the answer in the requests. It found five things, all fixed with tests: "your lose fat" (now "your fat loss"), the reached card dropping its maintenance offer after a break that ended the same day, the break verdict's wording, a faint *End early*, and a recomp suggested while pregnant.
 
 #### M20: lb and in
 
