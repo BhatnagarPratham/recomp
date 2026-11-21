@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- M18, camera food: barcode, label and meal photos, all read on the phone. Phones without a camera still install. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Health Connect reads (TRD §6.3): steps from Google Fit, body records from the InBody app. -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />

@@ -31,6 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.recomp.data.repo.CustomFood
+import app.recomp.domain.food.FoodSource
+import app.recomp.domain.food.LabelField
+import app.recomp.domain.food.LabelBasis
+import app.recomp.data.repo.FoodPrefill
 import app.recomp.domain.food.FoodCaveat
 import app.recomp.domain.food.FoodDiet
 import app.recomp.domain.food.Macros
@@ -221,12 +225,18 @@ fun QuickAddSheet(
 }
 
 @Composable
-private fun NumberField(label: String, value: String, suffix: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+private fun NumberField(label: String, value: String, suffix: String, modifier: Modifier = Modifier, filled: Boolean = false, onChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         suffix = { Text(suffix) },
+        // NU-19: a value a scan filled in is marked until you've looked at it (any edit clears the mark).
+        supportingText = if (filled) {
+            { Text("Check this", color = MaterialTheme.colorScheme.tertiary) }
+        } else {
+            null
+        },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         isError = value.isNotBlank() && parseNumber(value)?.let { it < 0 } != false,
@@ -247,22 +257,33 @@ fun CustomFoodSheet(
     household: Map<String, Double>,
     defaultDiet: FoodDiet,
     onDismiss: () -> Unit,
+    /** What a label scan or Open Food Facts filled in (NU-19, NU-21), for a new food. */
+    prefill: FoodPrefill? = null,
+    /** *Scan label* on a new food (NU-19), carrying the name typed so far. */
+    onScanLabel: ((name: String) -> Unit)? = null,
     onSave: (CustomFood) -> Unit,
 ) {
-    fun num(d: Double?) = d?.let { if (it % 1.0 == 0.0) "${it.toLong()}" else "%.1f".format(it) }.orEmpty()
+    fun num(d: Double?) = d?.let { if (it % 1.0 == 0.0) "${it.toLong()}" else "%.1f".format(java.util.Locale.ROOT, it) }.orEmpty()
     val start = initial?.per100g
-    var name by remember { mutableStateOf(initial?.name ?: initialName) }
-    var brand by remember { mutableStateOf(initial?.brand.orEmpty()) }
+    val read = prefill?.values
+    var name by remember { mutableStateOf(initial?.name ?: prefill?.name?.takeIf { it.isNotBlank() } ?: initialName) }
+    var brand by remember { mutableStateOf(initial?.brand ?: prefill?.brand.orEmpty()) }
     val units = (listOf(SERVING) + servingUnits + listOfNotNull(initial?.serving?.first)).distinct()
-    var perServing by remember { mutableStateOf(false) }
+    // A label read per serving opens per serving, with its weight, so the numbers are as printed.
+    var perServing by remember { mutableStateOf(read?.basis == LabelBasis.PER_SERVING && read.servingG != null) }
     var servingUnit by remember { mutableStateOf(initial?.serving?.first ?: SERVING) }
-    var servingGrams by remember { mutableStateOf(num(initial?.serving?.second)) }
-    var kcal by remember { mutableStateOf(num(start?.kcal)) }
-    var protein by remember { mutableStateOf(num(start?.proteinG)) }
-    var carbs by remember { mutableStateOf(num(start?.carbsG)) }
-    var fat by remember { mutableStateOf(num(start?.fatG)) }
-    var fiber by remember { mutableStateOf(num(start?.fiberG?.takeIf { it > 0 })) }
-    var diet by remember { mutableStateOf(initial?.diet ?: defaultDiet) }
+    var servingGrams by remember { mutableStateOf(num(initial?.serving?.second ?: read?.servingG)) }
+    var kcal by remember { mutableStateOf(num(start?.kcal ?: read?.kcal)) }
+    var protein by remember { mutableStateOf(num(start?.proteinG ?: read?.proteinG)) }
+    var carbs by remember { mutableStateOf(num(start?.carbsG ?: read?.carbsG)) }
+    var fat by remember { mutableStateOf(num(start?.fatG ?: read?.fatG)) }
+    var fiber by remember { mutableStateOf(num(start?.fiberG?.takeIf { it > 0 } ?: read?.fiberG)) }
+    var diet by remember { mutableStateOf(initial?.diet ?: prefill?.diet ?: defaultDiet) }
+    /** The fields a scan filled that you haven't touched yet. */
+    var marked by remember { mutableStateOf(prefill?.filled.orEmpty()) }
+    fun touched(field: LabelField) {
+        marked = marked - field
+    }
 
     val grams = parseNumber(servingGrams)?.takeIf { it in 1.0..3000.0 }
     fun values() = listOf(kcal, protein, carbs, fat, fiber).map { if (it.isBlank()) 0.0 else parseNumber(it)?.takeIf { v -> v >= 0 } }
@@ -284,6 +305,12 @@ fun CustomFoodSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(if (initial == null) "New food" else "Edit food", style = MaterialTheme.typography.titleLarge)
+            if (onScanLabel != null && initial == null) {
+                OutlinedButton(onClick = { onScanLabel(name.trim()) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text(if (prefill == null) "Scan label" else "Scan the label again")
+                }
+            }
+            prefill?.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary) }
             OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = brand, onValueChange = { brand = it }, label = { Text("Brand (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Text("Serving", style = MaterialTheme.typography.labelLarge)
@@ -291,7 +318,10 @@ fun CustomFoodSheet(
                 servingUnit = unit
                 servingGrams = num(household[unit])
             })
-            NumberField(if (perServing) "Weight of 1 $servingUnit" else "Weight of 1 $servingUnit (optional)", servingGrams, "g", Modifier.fillMaxWidth()) { servingGrams = it }
+            NumberField(
+                if (perServing) "Weight of 1 $servingUnit" else "Weight of 1 $servingUnit (optional)", servingGrams, "g", Modifier.fillMaxWidth(),
+                filled = LabelField.SERVING in marked,
+            ) { servingGrams = it; touched(LabelField.SERVING) }
             Text("Values", style = MaterialTheme.typography.labelLarge)
             ChoiceChips(listOf(false, true), perServing, { if (it) "Per $servingUnit" else "Per 100 g" }, { picked ->
                 if (picked != perServing) {
@@ -300,14 +330,14 @@ fun CustomFoodSheet(
                 }
             })
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Calories", kcal, "kcal", Modifier.weight(1f)) { kcal = it }
-                NumberField("Protein", protein, "g", Modifier.weight(1f)) { protein = it }
+                NumberField("Calories", kcal, "kcal", Modifier.weight(1f), LabelField.KCAL in marked) { kcal = it; touched(LabelField.KCAL) }
+                NumberField("Protein", protein, "g", Modifier.weight(1f), LabelField.PROTEIN in marked) { protein = it; touched(LabelField.PROTEIN) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Carbs", carbs, "g", Modifier.weight(1f)) { carbs = it }
-                NumberField("Fat", fat, "g", Modifier.weight(1f)) { fat = it }
+                NumberField("Carbs", carbs, "g", Modifier.weight(1f), LabelField.CARBS in marked) { carbs = it; touched(LabelField.CARBS) }
+                NumberField("Fat", fat, "g", Modifier.weight(1f), LabelField.FAT in marked) { fat = it; touched(LabelField.FAT) }
             }
-            NumberField("Fibre (optional)", fiber, "g", Modifier.fillMaxWidth()) { fiber = it }
+            NumberField("Fibre (optional)", fiber, "g", Modifier.fillMaxWidth(), LabelField.FIBER in marked) { fiber = it; touched(LabelField.FIBER) }
             Text("Diet", style = MaterialTheme.typography.labelLarge)
             ChoiceChips(FoodDiet.entries, diet, FoodText::diet, { diet = it })
             Button(
@@ -315,7 +345,10 @@ fun CustomFoodSheet(
                     val v = values().map { it!! }
                     val m = Macros(v[0], v[1], v[2], v[3], v[4])
                     val per100 = if (perServing) Per100g.fromServing(grams!!, m) else Per100g(v[0], v[1], v[2], v[3], v[4])
-                    onSave(CustomFood(name.trim(), brand.trim().ifEmpty { null }, per100, diet, grams?.let { servingUnit to it }))
+                    // A label-read or Open Food Facts food keeps where it came from, and its barcode (M18).
+                    val source = initial?.source ?: prefill?.source ?: FoodSource.CUSTOM
+                    val barcode = initial?.barcode ?: prefill?.barcode
+                    onSave(CustomFood(name.trim(), brand.trim().ifEmpty { null }, per100, diet, grams?.let { servingUnit to it }, source, barcode))
                 },
                 enabled = valid,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
