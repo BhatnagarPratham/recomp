@@ -225,11 +225,6 @@ class FoodRepository @Inject constructor(
         foodDao.upsertUnits(listOfNotNull(first) + others.map { it.copy(id = 0) })
     }
 
-    private companion object {
-        /** How many foods the parser weighs for one name. */
-        const val PARSER_CANDIDATES = 20
-    }
-
     /** Hides a food from search, e.g. one tagged wrongly (PRD §7.7). Settings → Food → Hidden foods restores it. */
     suspend fun hide(id: Long) = foodDao.setArchived(id, true)
 
@@ -243,5 +238,8 @@ class FoodRepository @Inject constructor(
     private companion object {
         /** Foods whose serving you set yourself, so it prefills however big it is: custom foods and recipes (M14). */
         val YOUR_OWN = setOf(FoodSource.CUSTOM, FoodSource.RECIPE)
+
+        /** How many foods the parser weighs for one name. */
+        const val PARSER_CANDIDATES = 20
     }
 }
