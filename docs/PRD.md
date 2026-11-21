@@ -504,7 +504,7 @@ For personas with access to InBody or another bioimpedance (BIA) machine.
 |----|-----|-------------|
 | IB-01 | P0 | Log a scan: weight, skeletal muscle mass, body fat mass, body fat %, visceral fat level. Optional: the machine's BMR, segmental lean mass, ECW/TBW ratio, score. Saving a scan also records it as a weigh-in. |
 | IB-02 | P0 | ★ **Consistent conditions.** A fasted morning scan is ideal, but often unrealistic when the machine is at a gym or office, so consistency stands in for it. You pick a usual slot (e.g. Monday 10:00). A scan counts as on-protocol when it's within 90 minutes of your usual time, at least 2 hours after eating, and before any workout that day. Off-protocol scans are flagged. The protocol is shown before each scan. |
-| IB-03 | P1 | ★ **Share from the InBody app.** Share the result screen (or a photo of the paper sheet) to Recomp: the scan form opens with the image beside it, filled in from Health Connect where it can (IB-07). The image never leaves the phone. |
+| IB-03 | P1 | ★ **Share from the InBody app.** Share the result screen (or a photo of the paper sheet) to Recomp: the scan form opens with the image beside it, filled in from Health Connect where it can (IB-07). The image is never sent to AI or any server; it goes only into your own backups when you include photos (§7.14). |
 | IB-04 | P1 | ★ **Body-composition chart:** muscle mass and fat mass on one chart, alongside trend weight and waist. Changes smaller than measurement noise (roughly 1 kg of muscle or 1% body fat between scans) are labelled "within noise". |
 | IB-05 | P1 | ★ **Scan-informed targets.** With an on-protocol scan from the last 60 days, the app estimates BMR from your lean mass, which is more accurate than height-and-weight formulas. It can also suggest a goal weight for a target body-fat %: lean mass ÷ (1 − target %). |
 | IB-06 | P1 | ★ A reminder at your usual scan slot (weekly by default). |
@@ -1078,3 +1078,23 @@ These rules hold for every block:
 
   Food stays in grams and the region's household measures.
 - Switching asks whether to move your exercises' weight steps to the nearest lb plates (2.5 kg → 5 lb). Logged history stays exact, because storage is always metric.
+- ◆ **Decided (2026-11-21):**
+  - **Where you choose.** Onboarding asks for units at the top of *About you*, before height and weight (lb and in by default for a US, Liberia or Myanmar phone, kg and cm otherwise), and again on the review step. Stone isn't offered.
+  - **Steps and precision.**
+    - Body weight steps by 0.2 lb and is typed to 0.1 lb; it shows one decimal ("177.2 lb").
+    - Lift steps are 1, 2.5, 5 or 10 lb, or another step you type. The defaults are 5 lb for barbells, plate-loaded machines, dumbbells (per dumbbell), kettlebells and added load, and 10 lb for machines and cables.
+    - Loads show to 0.1 lb without trailing zeros ("225 lb", "93.7 lb"). Volume, estimated 1RM and chart axes are whole lb.
+    - Waist, other tape sites and sit-and-reach step by ¼ in. Height is feet and whole inches.
+  - **Targets in lb** land on your exercise's lb steps: a weight increase from 100 kg with a 5 lb step suggests 225 lb, not 225.5 lb. A deload rounds down to a step; a repeat keeps what you lifted. <!-- pii-ok: illustrative -->
+  - **Nothing you didn't change is rewritten.** Opening and saving a set, a past workout or a scan without changing a number keeps the stored value exactly, even though it shows rounded in lb.
+  - **The switch.** It lists each step it would move ("Bench press and 11 more: 2.5 kg → 5 lb"), with *Move steps*, *Keep my steps* (they then show converted, e.g. 5.51 lb) and *Cancel*. It changes only exercises' weight steps. A workout in progress keeps its targets, shown converted.
+  - **What stays metric:**
+    - protein (in g per kg of your goal weight, with that weight shown in lb);
+    - the app's internal thresholds (stall rules, noise bands, the waist flag, BMI guardrails);
+    - the CSV export (`weight_kg`) and what's written to Health Connect, so switching rewrites nothing outside the app.
+  - **What converts with you:**
+    - the programme review's report to the AI, which says "Weights in lb, lengths in inches" at the top;
+    - the scan form, which has its own kg/lb switch, because the InBody sheet's unit is the machine's;
+    - a suggested goal weight, which rounds to a whole lb.
+  - **Decimal marks** follow your phone's language everywhere ("80,4 kg" in German); typing accepts either mark.
+  - **Records across a switch** are compared on the stored weight, so a lb-era 226 lb (102,512 g) beats a kg-era 102.5 kg. <!-- pii-ok: illustrative -->

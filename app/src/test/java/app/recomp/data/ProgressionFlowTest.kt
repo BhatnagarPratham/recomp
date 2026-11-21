@@ -3,11 +3,20 @@ package app.recomp.data
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.TrainingSetup
 import app.recomp.domain.persona.Experience
+import app.recomp.domain.model.SetType
 import app.recomp.domain.persona.SplitTemplate
+import app.recomp.domain.persona.Units
 import app.recomp.domain.progression.Action
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.progression.Recommendation
+import app.recomp.domain.progression.Targets
+import app.recomp.domain.training.Loads
+import app.recomp.domain.training.LoggedSet
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
 import java.io.File
+import java.math.BigDecimal
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -151,9 +160,9 @@ class ProgressionFlowTest {
         benchSession(40_000, 12, 12, 12)
         val lines = app.progression.preview(push().id)
         assertEquals("Bench press", lines[0].name)
-        assertEquals("42.5 × 8", lines[0].target)
+        assertEquals("42.5 × 8", Targets.describe(lines[0].rec, UnitStyle.METRIC))
         assertTrue(lines[0].weightUp)
-        assertEquals("first time", lines[1].target)
+        assertEquals(Action.BASELINE, lines[1].rec.action)
         assertFalse(lines[1].weightUp)
     }
 
@@ -165,7 +174,7 @@ class ProgressionFlowTest {
         val history = app.progression.exerciseHistory(bench)
         assertEquals(2, history.size)
         assertEquals(second, history[0].sessionId)
-        assertEquals("42.5 × 10/9/9", history[0].sets)
+        assertEquals("42.5 × 10/9/9", Loads.describe(history[0].sets, UnitStyle.METRIC, history[0].loadType))
         assertTrue(PrType.MAX_LOAD in history[0].records)
         assertEquals(emptyList<PrType>(), history[1].records)
         assertNotNull(history[0].bestE1rmG)
@@ -182,5 +191,80 @@ class ProgressionFlowTest {
         assertEquals("Dumbbell bench press", after[0].exercise.name)
         assertEquals(rows.size, after.size)
         assertEquals(rows[0].entry.targetSets, after[0].entry.targetSets)
+    }
+
+    /** PR-05: a lb install, with bench on a 5 lb (2,268 g) step. */
+    private suspend fun inLb(benchId: Long) {
+        app.prefs.updatePersona { it.copy(units = Units.IMPERIAL) }
+        app.db.exerciseDao().update(app.db.exerciseDao().get(benchId)!!.copy(incrementG = 2_268))
+    }
+
+    @Test
+    fun `in lb an increase is frozen on the exercise's lb grid, so typing it hits the target`() = runBlocking {
+        val first = benchSession(100_000, 12, 12, 12) // a kg-era 100 kg, which is 220.46 lb
+        inLb(app.workouts.observeSessionExercises(first).first().first().exercise.id)
+        val id = app.workouts.startRoutine(push().id, now = clock + 86_400_000)
+        val rec = benchRecommendation(id)!!
+        // 220.46 + 5 lb goes to 225 lb (102,058 g), not 225.46 lb or the 102,268 g the engine adds in grams.
+        assertEquals(Action.INCREASE, rec.action)
+        assertEquals(102_058, rec.loadG)
+        assertEquals("225 × 8", Targets.describe(rec, UnitStyle.IMPERIAL))
+        val typed = LoadUnits.parse("225", Units.IMPERIAL)!!
+        assertEquals(rec.loadG, typed)
+        val sets = app.workouts.observeSessionExercises(id).first().first().sets.sortedBy { it.setIndex }
+        sets.forEach { app.workouts.completeSet(it.id, typed, 8, null) }
+        assertFalse(app.workouts.observeSessionExercises(id).first().first().entry.userOverrode)
+        assertTrue(Targets.hit(rec, sets.map { LoggedSet(SetType.WORKING, typed, 8) }))
+    }
+
+    @Test
+    fun `in lb a deload rounds down to the lb grid`() = runBlocking {
+        val last = (1..4).map { benchSession(100_000, 10, 10, 9) }.last()
+        inLb(app.workouts.observeSessionExercises(last).first().first().exercise.id)
+        val id = app.workouts.startRoutine(push().id, now = clock + 86_400_000)
+        assertTrue(benchRecommendation(id)!!.stalled)
+        app.progression.deloadToday(app.workouts.observeSessionExercises(id).first().first().entry.id)
+        // 90% of 220.46 lb is 198.4 lb; the engine's 39 steps of 2,268 g (195.0 lb) land on 195 lb exactly.
+        val deload = benchRecommendation(id)!!
+        assertEquals(Action.DELOAD, deload.action)
+        assertEquals(UnitMath.lbToG(BigDecimal(195)), deload.loadG)
+        assertEquals("195 × 8", Targets.describe(deload, UnitStyle.IMPERIAL))
+    }
+
+    @Test
+    fun `on the lb grid, increases stay past what you lifted and repeats keep it`() {
+        val five = 2_268
+        fun lb(n: Int) = UnitMath.lbToG(BigDecimal(n))
+        val up = ProgressionRepository.onGrid(Recommendation(Action.INCREASE, lb(225) + five, listOf(8)), lb(225), five, Units.IMPERIAL)
+        assertEquals(lb(230), up.loadG)
+        // Assistance comes off: 25 lb less 5 is 20 lb, and a deload adds it on the easier side.
+        val less = ProgressionRepository.onGrid(Recommendation(Action.INCREASE, 11_340 - five, listOf(8), assisted = true), 11_340, five, Units.IMPERIAL)
+        assertEquals(lb(20), less.loadG)
+        val more = ProgressionRepository.onGrid(Recommendation(Action.DELOAD, 12_000, listOf(8), assisted = true), 11_340, five, Units.IMPERIAL)
+        assertEquals(lb(30), more.loadG)
+        // A repeat and an add-a-rep keep exactly what you lifted, even when 0.01 lb would round it up; kg changes nothing.
+        assertEquals(100_000, ProgressionRepository.onGrid(Recommendation(Action.REPEAT, 100_000, listOf(8)), 100_000, five, Units.IMPERIAL).loadG)
+        assertEquals(42_500, ProgressionRepository.onGrid(Recommendation(Action.ADD_REPS, 42_500, listOf(9, 9, 8)), 42_500, five, Units.IMPERIAL).loadG)
+        val kg = Recommendation(Action.INCREASE, 102_500, listOf(8))
+        assertEquals(kg, ProgressionRepository.onGrid(kg, 100_000, 2_500, Units.METRIC))
+    }
+
+    @Test
+    fun `in lb, a kg-era repeat logged as shown is the same weight, not a heavier record`() = runBlocking {
+        val first = benchSession(42_500, 9, 8, 8)
+        benchSession(42_500, 9, 8, 8)
+        inLb(app.workouts.observeSessionExercises(first).first().first().exercise.id)
+        // 42,500 g shows as 93.7 lb, which is 42,502 g: logging the target as shown must stay 42,500 g.
+        clock += 86_400_000
+        val id = app.workouts.startRoutine(push().id, now = clock)
+        val target = benchRecommendation(id)!!
+        assertTrue(target.action == Action.ADD_REPS || target.action == Action.REPEAT)
+        assertEquals(42_500, target.loadG)
+        val bench = app.workouts.observeSessionExercises(id).first().first()
+        bench.sets.sortedBy { it.setIndex }.forEach { set -> app.workouts.completeSet(set.id, target.loadG, 9, null, now = clock + 60_000) }
+        app.workouts.finish(id, endedAt = clock + 3_600_000)
+        val types = app.progression.observeSessionRecords(id).first().map { it.type }.toSet()
+        assertTrue("no heavier-lift record: $types", PrType.MAX_LOAD !in types)
+        assertTrue(app.workouts.observeSessionExercises(id).first().first().sets.all { it.loadG == 42_500 })
     }
 }

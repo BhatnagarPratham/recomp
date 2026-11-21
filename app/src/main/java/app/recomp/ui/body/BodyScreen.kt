@@ -64,11 +64,11 @@ import app.recomp.data.repo.BodyTrend
 import app.recomp.data.repo.HealthRepository
 import app.recomp.ui.health.HealthText
 import app.recomp.ui.components.ChoiceChips
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.SectionTitle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
-import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -93,23 +93,23 @@ class BodyEntries(private val body: BodyRepository, private val health: HealthRe
         if (d.askSleep && d.sleepTouched) health.setTypedSleep(health.logDate(d.at), d.sleepHours)
     }
 
-    suspend fun newWaist(): WaistDraft = WaistDraft(null, ((body.lastWaistCm() ?: DEFAULT_WAIST_CM) * 10).roundToInt(), System.currentTimeMillis())
+    suspend fun newWaist(): WaistDraft = WaistDraft(null, body.lastWaistCm() ?: DEFAULT_WAIST_CM, System.currentTimeMillis())
 
-    fun edit(row: MeasurementEntity) = WaistDraft(row.id, (row.value * 10).roundToInt(), row.measuredAt)
+    fun edit(row: MeasurementEntity) = WaistDraft(row.id, row.value, row.measuredAt)
 
     /** BM-03: the sites due today, prefilled from each one's last reading. */
     suspend fun newMeasurements(): TapeDraft {
         val now = System.currentTimeMillis()
         val sites = body.dueTapeSites(health.logDate(now)).map { site ->
-            site to ((body.lastTapeCm(site) ?: defaultCm(site)) * 10).roundToInt()
+            site to (body.lastTapeCm(site) ?: defaultCm(site))
         }
         return TapeDraft(sites, now)
     }
 
-    suspend fun save(d: TapeDraft) = body.logTape(d.sites.associate { (site, tenths) -> site to tenths / 10.0 }, d.at)
+    suspend fun save(d: TapeDraft) = body.logTape(d.sites.toMap(), d.at)
 
     suspend fun save(d: WaistDraft) {
-        if (d.id == null) body.logWaist(d.tenthsCm / 10.0, d.at) else body.updateMeasurement(d.id, d.tenthsCm / 10.0, d.at)
+        if (d.id == null) body.logWaist(d.cm, d.at) else body.updateMeasurement(d.id, d.cm, d.at)
     }
 
     private companion object {
@@ -325,7 +325,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, onOpenP
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(HealthText.draft(draft), style = MaterialTheme.typography.titleMedium)
-                        Text(HealthText.draftDetail(draft) + " · from the InBody app")
+                        Text(HealthText.draftDetail(draft, LocalUnitStyle.current) + " · from the InBody app")
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onOpenDraft(draft.id) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add the rest") }
                             OutlinedButton(onClick = { viewModel.dismiss(draft) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Dismiss") }
@@ -421,6 +421,7 @@ private const val RECENT = 10
 /** Trend weight and the week's rate against the goal's pace; plain numbers, never failure styling. */
 @Composable
 fun TrendSummary(t: BodyTrend) {
+    val style = LocalUnitStyle.current
     val kg = t.trendKg
     if (kg == null) {
         Text("Weight", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -435,10 +436,10 @@ fun TrendSummary(t: BodyTrend) {
         return
     }
     Text("Trend weight", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Text(BodyText.kg(kg), style = MaterialTheme.typography.displaySmall)
+    Text(BodyText.weight(kg, style), style = MaterialTheme.typography.displaySmall)
     val rate = t.rate
     val pace = t.pace?.let { " · ${BodyText.pace(it)}" }.orEmpty()
-    Text(if (rate != null) BodyText.rate(rate) + pace else BodyText.RATE_PENDING, style = MaterialTheme.typography.bodyLarge)
+    Text(if (rate != null) BodyText.rate(rate, style) + pace else BodyText.RATE_PENDING, style = MaterialTheme.typography.bodyLarge)
 }
 
 @Composable
@@ -455,23 +456,24 @@ private fun WeighInRow(row: BodyWeightEntity, counted: Boolean, onClick: () -> U
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(BodyText.kg(row.weightG), style = MaterialTheme.typography.titleMedium, fontWeight = if (counted) FontWeight.SemiBold else FontWeight.Normal)
+        Text(BodyText.weight(row.weightG, LocalUnitStyle.current), style = MaterialTheme.typography.titleMedium, fontWeight = if (counted) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 
 /** The weekly waist (BM-02): the latest, its change over 4 weeks, and the history. */
 @Composable
 private fun WaistCard(rows: List<MeasurementEntity>, today: LocalDate, onLog: () -> Unit, onEdit: (MeasurementEntity) -> Unit) {
+    val style = LocalUnitStyle.current
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val latest = rows.lastOrNull()
             if (latest == null) {
                 Text("Measure your waist once a week. It often keeps moving while the scale stalls.")
             } else {
-                Text(BodyText.cm(latest.value), style = MaterialTheme.typography.headlineSmall)
+                Text(BodyText.length(latest.value, style), style = MaterialTheme.typography.headlineSmall)
                 val monthAgo = rows.lastOrNull { !it.logDate.isAfter(latest.logDate.minusDays(28)) }
                 Text(
-                    (monthAgo?.let { "${BodyText.signed(latest.value - it.value, "cm")} in 4 weeks · " } ?: "") + "last ${BodyText.date(latest.logDate)}",
+                    (monthAgo?.let { "${BodyText.signedLength(latest.value - it.value, style)} in 4 weeks · " } ?: "") + "last ${BodyText.date(latest.logDate)}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -485,7 +487,7 @@ private fun WaistCard(rows: List<MeasurementEntity>, today: LocalDate, onLog: ()
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(BodyText.date(row.logDate), Modifier.weight(1f))
-                    Text(BodyText.cm(row.value))
+                    Text(BodyText.length(row.value, style))
                 }
             }
         }
@@ -495,6 +497,7 @@ private fun WaistCard(rows: List<MeasurementEntity>, today: LocalDate, onLog: ()
 /** The scan table (HM-02), newest first, with off-protocol scans marked. Scrolls sideways at large font sizes. */
 @Composable
 private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit, onLog: () -> Unit) {
+    val style = LocalUnitStyle.current
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (scans.isEmpty()) {
@@ -513,9 +516,9 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
                         Column(Modifier.clickable(role = Role.Button, onClickLabel = "Edit scan") { onOpen(s.id) }.heightIn(min = 48.dp)) {
                             Row {
                                 Text(BodyText.shortDate(s.logDate), Modifier.width(DATE_W), style = MaterialTheme.typography.bodyMedium)
-                                Cell(BodyText.oneDecimal(s.weightG / 1000.0))
-                                Cell(BodyText.oneDecimal(s.skeletalMuscleG / 1000.0))
-                                Cell(BodyText.oneDecimal(s.bodyFatG / 1000.0))
+                                Cell(BodyText.weightNumber(s.weightG / 1000.0, style))
+                                Cell(BodyText.weightNumber(s.skeletalMuscleG / 1000.0, style))
+                                Cell(BodyText.weightNumber(s.bodyFatG / 1000.0, style))
                                 Cell(BodyText.oneDecimal(s.bodyFatPct))
                                 Cell(BodyText.oneDecimal(s.visceralFatLevel))
                             }
@@ -531,7 +534,7 @@ private fun ScanTable(scans: List<BodyCompositionEntity>, onOpen: (Long) -> Unit
                         }
                     }
                 }
-                Text("Weight, muscle and fat in kg. Off-protocol scans are marked ◌.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(BodyText.scanTableCaption(style), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedButton(onClick = onLog, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Log scan") }
         }
@@ -550,6 +553,7 @@ private val TABLE_W: Dp = DATE_W + NUM_W * 5
 @Composable
 private fun TapeCard(rows: List<TapeReading>, onOpen: (TapeSite) -> Unit) {
     if (rows.isEmpty()) return
+    val style = LocalUnitStyle.current
     Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             rows.forEach { r ->
@@ -558,7 +562,7 @@ private fun TapeCard(rows: List<TapeReading>, onOpen: (TapeSite) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(BodyText.site(r.site), Modifier.weight(1f))
-                    Text(BodyText.cm(r.cm) + (r.changeCm?.let { " (${BodyText.signed(it, "cm")})" } ?: ""))
+                    Text(BodyText.length(r.cm, style) + (r.changeCm?.let { " (${BodyText.signedLength(it, style)})" } ?: ""))
                 }
                 Text("Last ${BodyText.date(r.date)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

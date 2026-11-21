@@ -11,6 +11,8 @@ import app.recomp.data.TestApp
 import app.recomp.data.repo.TrainingSetup
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.SplitTemplate
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
 import app.recomp.workout.RestTimer
 import java.io.File
 import kotlinx.coroutines.flow.first
@@ -128,5 +130,32 @@ class WorkoutScreenTest {
         val shoulderRest = runBlocking { app.workouts.observeSessionExercises(session).first()[1].entry.restSec }
         assertEquals(shoulderRest, rest()!!.totalSec)
         compose.onNodeWithText("Skip").assertExists()
+    }
+
+    @Test
+    fun `in lb the card and dock read in lb, and the stepper stays on the lb scale`() {
+        var sessionId = 0L
+        suspend fun firstSet() = app.workouts.observeSessionExercises(sessionId).first().first().sets.minBy { it.setIndex }
+        sessionId = runBlocking {
+            pushWithHistory().also { id ->
+                // A load typed while the app was in kg, then the switch to lb.
+                val set = app.workouts.observeSessionExercises(id).first().first().sets.minBy { it.setIndex }
+                app.workouts.setValues(set.id, 42_500, null)
+                app.prefs.updatePersona { it.copy(units = Units.IMPERIAL) }
+            }
+        }
+        show(sessionId)
+        awaitText("Bench press · set 1 of 3")
+        // Last time's 40 kg is 88.2 lb.
+        awaitText("Last: 88.2 × 10/10/10")
+        // A load typed while in kg shows to 0.1 lb; the type-in keeping its grams is LoadTextTest's (the dialog's focused field never idles here).
+        compose.onNodeWithContentDescription("weight 93.7, tap to type").assertExists()
+        compose.onNodeWithText(" lb", useUnmergedTree = true).assertExists()
+
+        // The bench's 2.5 kg step shows as 5.51 lb, and stepping works in lb: 93.70 + 5.51 = 99.21 lb.
+        compose.onNodeWithContentDescription("weight +5.51").performClick()
+        val stepped = LoadUnits.step(42_500, 2_500, up = true, Units.IMPERIAL)
+        compose.waitUntil(5_000) { runBlocking { firstSet().loadG } == stepped }
+        awaitText("99.2")
     }
 }

@@ -23,13 +23,18 @@ import app.recomp.domain.model.SessionKind
 import app.recomp.domain.persona.Experience
 import app.recomp.domain.persona.ExperiencePolicy
 import app.recomp.domain.persona.SplitTemplate
-import app.recomp.domain.training.Loads
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
 import app.recomp.domain.training.Rotation
 import app.recomp.domain.training.Supersets
+import kotlinx.coroutines.flow.first
+import app.recomp.domain.training.Loads
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /** One slot of the equipment walkthrough (PR-04): pick the variant your gym has and its smallest step. */
 data class WalkthroughItem(
@@ -66,6 +71,9 @@ class TrainingRepository @Inject constructor(
     /** The training part of the persona (PS-03). */
     val settings: Flow<TrainingSettings> = prefs.training
 
+    /** The persona's units (PR-05), for screens that show loads and steps. */
+    val units: Flow<Units> = prefs.persona.map { it.units }.distinctUntilChanged()
+
     fun observeLibrary(): Flow<List<ExerciseEntity>> = exerciseDao.observeActive()
     fun observeExercise(id: Long): Flow<ExerciseEntity?> = exerciseDao.observe(id)
     suspend fun exercise(id: Long): ExerciseEntity? = exerciseDao.get(id)
@@ -83,11 +91,23 @@ class TrainingRepository @Inject constructor(
     fun policy(experience: Experience) = ExperiencePolicy.defaultFor(experience)
 
     /** Inserts any bundled exercise that isn't in the library yet. Safe to call on every launch. */
+    /**
+     * Onboarding in lb (PRD §12.16): every active exercise that logs a load and still has one of the kg steps moves to
+     * the nearest lb step, except [keep], whose steps the walkthrough just set.
+     */
+    suspend fun moveDefaultSteps(to: Units, keep: Set<Long>) {
+        val moved = exerciseDao.observeActive().first().filter { it.id !in keep && Loads.logsLoad(it.loadType) }.mapNotNull { e ->
+            LoadUnits.defaultIn(e.incrementG, e.equipment, to).takeIf { it != e.incrementG }?.let { e.copy(incrementG = it) }
+        }
+        if (moved.isNotEmpty()) exerciseDao.updateAll(moved)
+    }
+
     suspend fun ensureLibrarySeeded() {
         val policy = policy(prefs.currentTraining().experience)
         val present = exerciseDao.seeded().mapNotNull { it.seedKey }.toSet()
         val missing = seeds.exercises().filter { it.key !in present }
-        if (missing.isNotEmpty()) exerciseDao.insertAll(missing.map { it.toEntity(policy) })
+        val units = prefs.currentPersona().units
+        if (missing.isNotEmpty()) exerciseDao.insertAll(missing.map { it.toEntity(policy, units) })
     }
 
     // Training setup and equipment walkthrough
@@ -300,7 +320,7 @@ class TrainingRepository @Inject constructor(
                 mechanic = mechanic,
                 movementPattern = "other",
                 loadType = if (equipment == Equipment.BODYWEIGHT || equipment == Equipment.BAND) LoadType.BODYWEIGHT else LoadType.WEIGHTED,
-                incrementG = Loads.defaultIncrementG(equipment),
+                incrementG = LoadUnits.defaultIncrementG(equipment, prefs.currentPersona().units),
                 defaultRepMin = reps.first,
                 defaultRepMax = reps.last,
                 defaultRestSec = if (mechanic == Mechanic.COMPOUND) 120 else 90,

@@ -14,6 +14,17 @@ object DescribeText {
     const val PARSER_ONLY =
         "Estimate matches what you type against your own foods and the database. Anything it can't find, you can search for or quick add."
 
+    /**
+     * Why *Estimate* is greyed out with a photo and no words (M18's phone check): a photo needs the AI, and the parser
+     * reads only words. Null when there's nothing to explain: words are typed, there's no photo, or the AI is ready.
+     * With AI on but not ready, the card above already says why, so this only adds what to do meanwhile.
+     */
+    fun photoNeedsAi(state: AiState?, hasText: Boolean, hasPhoto: Boolean): String? = when {
+        !hasPhoto || hasText || state == AiState.READY -> null
+        state == AiState.OFF -> "A photo needs AI, which is off. Describe the meal in words to estimate it, or turn on AI in Settings → AI."
+        else -> "A photo needs AI. Describe the meal in words to estimate it now, or save it as a draft for later."
+    }
+
     /** After the reason AI isn't ready: the parser still answers, and the draft is still there. */
     const val PARSER_MEANWHILE = "Estimate still matches your own foods and the database."
 

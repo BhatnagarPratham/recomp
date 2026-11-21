@@ -100,6 +100,15 @@ private fun StepButton(text: String, description: String, onClick: () -> Unit) {
     ) { Text(text, style = MaterialTheme.typography.titleLarge) }
 }
 
+/** "4.5" ↔ "−4.5": flips a typed number's sign, accepting a hyphen or a minus sign. */
+fun toggleSign(text: String): String {
+    val t = text.trim()
+    return when {
+        t.startsWith("-") || t.startsWith("\u2212") -> t.drop(1)
+        else -> "\u2212$t"
+    }
+}
+
 /** Direct numeric entry for steppers and settings. Returns null when the text isn't a number. */
 @Composable
 fun NumberEntryDialog(
@@ -108,6 +117,8 @@ fun NumberEntryDialog(
     decimal: Boolean,
     onDismiss: () -> Unit,
     suffix: String? = null,
+    /** A value that can be negative (sit-and-reach): a ± button, since number keyboards often have no minus key. */
+    signed: Boolean = false,
     onConfirm: (String) -> Unit,
 ) {
     var text by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
@@ -123,6 +134,11 @@ fun NumberEntryDialog(
                 singleLine = true,
                 suffix = suffix?.let { { Text(it) } },
                 keyboardOptions = KeyboardOptions(keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number),
+                leadingIcon = if (signed) {
+                    {
+                        TextButton(onClick = { toggleSign(text.text).let { t -> text = TextFieldValue(t, TextRange(t.length)) } }) { Text("±") }
+                    }
+                } else null,
                 modifier = Modifier.focusRequester(focus),
             )
         },

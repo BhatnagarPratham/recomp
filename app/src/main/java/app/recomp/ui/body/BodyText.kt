@@ -19,18 +19,15 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.format.TextStyle
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.Locale
 import kotlin.math.abs
 
 /** Body's sentences (PRD §7.8, §7.9). Rates and protocol flags are information, never failure. */
 object BodyText {
-    /** "80.4 kg" from grams, to 0.1 kg. */
-    fun kg(grams: Int): String = "${oneDecimal(grams / 1000.0)} kg"
-
-    fun kg(value: Double): String = "${oneDecimal(value)} kg"
-
-    fun cm(value: Double): String = "${oneDecimal(value)} cm"
-
     fun oneDecimal(value: Double): String = "%.1f".format(Locale.getDefault(), value)
 
     /** "+0.4 kg", "−1.2 cm"; a value that rounds to 0.0 has no sign. */
@@ -54,9 +51,6 @@ object BodyText {
         WeightSource.GYM_SCALE -> "gym scale"
         WeightSource.SCAN -> "scans"
     }
-
-    /** "−0.4 kg this week (−0.5%)". */
-    fun rate(r: WeeklyRate): String = "${signed(r.kgPerWeek, "kg")} this week (${signed(r.pctPerWeek, "%").replace(" %", "%")})"
 
     /** "goal −0.5% a week", "goal +0.25 to +0.5% a week", "goal: steady". */
     fun pace(p: WeightPace): String = when {
@@ -129,14 +123,6 @@ object BodyText {
      * "+0.4 kg muscle · within noise; −0.8 pts body fat · within noise" (IB-04, TRD §5.6). A change in body fat is in
      * points of the percentage, not a percent of it.
      */
-    fun scanChange(c: ScanChange): String =
-        "${signed(c.muscleKg, "kg")} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
-            "; ${signed(c.bodyFatPct, "pts")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
-
-    /** The slopes per 4 weeks of muscle, fat mass and body fat (in points), signed. */
-    fun scanSlopes(s: ScanSlopes): String =
-        "Per 4 weeks: muscle ${signed(s.muscleKg, "kg")}, fat mass ${signed(s.fatKg, "kg")}, body fat ${signed(s.bodyFatPct, "pts")}"
-
     /** Which scans the chart's slope is from: the window's ("in the last 12 weeks") or all of them. */
     fun slopeFrom(scans: Int, weeks: Long?): String =
         if (weeks == null) "from all $scans on-protocol scans" else "from $scans on-protocol scans in the last $weeks weeks"
@@ -157,14 +143,94 @@ object BodyText {
         if (!p.changes) append("\nYour targets already match.")
     }
 
-    /** Typed numbers accept "80,4" as well as "80.4". */
-    fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+    /** Typed numbers accept "80,4" as well as "80.4", and a minus sign "−" (the ± button's) as well as a hyphen. */
+    fun parse(text: String): Double? = text.trim().replace(',', '.').replace('\u2212', '-').toDoubleOrNull()?.takeIf { it.isFinite() }
+
+    // Body weights and lengths in either unit (PR-05). Every body weight, tape and height on screen goes through these.
+
+    private fun one(value: Double, style: UnitStyle): String = style.mark("%.1f".format(Locale.ROOT, value))
+
+    /** A body weight from grams, to 0.1 in kg or lb. */
+    fun weight(grams: Int, style: UnitStyle): String = weight(grams / 1000.0, style)
+
+    fun weight(kg: Double, style: UnitStyle): String = "${weightNumber(kg, style)} ${style.weight}"
+
+    /** The number alone, for a field with the unit beside it. */
+    fun weightNumber(kg: Double, style: UnitStyle): String = one(UnitMath.weightOf(kg, style.units), style)
+
+    /** A change in kg: "+0.4 kg", "−0.9 lb"; one that shows as 0.0 has no sign. */
+    fun signedWeight(kgDelta: Double, style: UnitStyle): String = signedIn(UnitMath.weightOf(kgDelta, style.units), style.weight, style)
+
+    /** A length from cm: "81.5 cm", "32.25 in" (inches to the quarter, up to 2 decimals). */
+    fun length(cm: Double, style: UnitStyle): String = "${lengthNumber(cm, style)} ${style.length}"
+
+    fun lengthNumber(cm: Double, style: UnitStyle): String =
+        if (style.imperial) style.mark(BigDecimal(UnitMath.cmToIn(cm)).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString())
+        else one(cm, style)
+
+    /** A change in cm: "−1.2 cm", "−0.4 in". */
+    fun signedLength(cmDelta: Double, style: UnitStyle): String = signedIn(UnitMath.lengthOf(cmDelta, style.units), style.length, style)
+
+    /** The height fields' units in lb mode: feet, then inches. */
+    const val FEET = "ft"
+
+    /** "175 cm", "5 ft 9 in". */
+    fun height(cm: Double, style: UnitStyle): String =
+        if (style.imperial) UnitMath.feetAndInches(cm).let { (ft, inches) -> "$ft ft $inches in" } else "${GoalText.d(cm)} cm"
+
+    private fun signedIn(value: Double, unit: String, style: UnitStyle): String {
+        val tenths = Math.round(value * 10)
+        return (if (tenths > 0) "+" else if (tenths < 0) "−" else "") + "${one(abs(tenths) / 10.0, style)} $unit"
+    }
+
+    /** A typed body weight in the style's unit, in grams (lb typed to 0.1). Null when it isn't a number. */
+    fun parseWeight(text: String, style: UnitStyle): Int? = parse(text)?.let { value ->
+        if (style.imperial) UnitMath.lbToG(BigDecimal(value).setScale(1, RoundingMode.HALF_UP)) else Math.round(value * 1000).toInt()
+    }
+
+    /** A typed length in the style's unit, in cm. */
+    fun parseLength(text: String, style: UnitStyle): Double? = parse(text)?.let { UnitMath.lengthToCm(it, style.units) }
+
+    /** A body-weight stepper: 0.1 kg, or 0.2 lb on the lb grid so steps never drift. */
+    fun weightStep(grams: Int, up: Boolean, style: UnitStyle): Int {
+        if (!style.imperial) return grams + if (up) 100 else -100
+        val lb = BigDecimal(grams).divide(UnitMath.G_PER_LB, 1, RoundingMode.HALF_UP)
+        return UnitMath.lbToG(if (up) lb + STEP_LB else lb - STEP_LB)
+    }
+
+    /** A tape stepper: 0.5 cm, or ¼ in. Works in cm, so callers keep the exact value they show. */
+    fun lengthStep(cm: Double, up: Boolean, style: UnitStyle): Double =
+        if (style.imperial) UnitMath.inToCm(Math.round(UnitMath.cmToIn(cm) * 4) / 4.0 + if (up) 0.25 else -0.25) else cm + if (up) 0.5 else -0.5
+
+    /** The weekly rate in the style's unit: "−0.4 kg this week (−0.5%)". */
+    fun rate(r: WeeklyRate, style: UnitStyle): String = "${signedWeight(r.kgPerWeek, style)} this week (${signed(r.pctPerWeek, "%").replace(" %", "%")})"
+
+    fun scanChange(c: ScanChange, style: UnitStyle): String =
+        "${signedWeight(c.muscleKg, style)} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
+            "; ${signed(c.bodyFatPct, "pts")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
+
+    fun scanSlopes(s: ScanSlopes, style: UnitStyle): String =
+        "Per 4 weeks: muscle ${signedWeight(s.muscleKg, style)}, fat mass ${signedWeight(s.fatKg, style)}, body fat ${signed(s.bodyFatPct, "pts")}"
+
+    /** The scan table's caption, in the style's unit. */
+    fun scanTableCaption(style: UnitStyle): String = "Weight, muscle and fat in ${style.weight}. Off-protocol scans are marked ◌."
+
+    private val STEP_LB = BigDecimal("0.2")
 
     /** A number that may be negative, typed with a hyphen or a minus sign (YG-04's sit-and-reach). */
     fun parseSigned(text: String): Double? = parse(text.trim().replace('\u2212', '-'))
 
-    /** "+3.5 cm", "−4 cm", "0 cm". */
-    fun signedCm(value: Double): String = if (value == 0.0) "0 cm" else signed(value, "cm")
+    /**
+     * A signed length from cm, at the length's own precision (YG-04's sit-and-reach): "+3.5 cm", "−2.5 in", and
+     * "0 cm" or "0 in" for one that shows as zero.
+     */
+    fun signedLengthValue(cm: Double, style: UnitStyle): String {
+        if (lengthShowsZero(cm, style)) return "0 ${style.length}"
+        return (if (cm > 0) "+" else "−") + "${lengthNumber(abs(cm), style)} ${style.length}"
+    }
+
+    /** True when [cm] shows as zero in the style's unit. */
+    fun lengthShowsZero(cm: Double, style: UnitStyle): Boolean = parse(lengthNumber(abs(cm), style)) == 0.0
 
     /** "45 s", "1:05". */
     fun minutesSeconds(seconds: Int): String = if (seconds < 60) "$seconds s" else "%d:%02d".format(seconds / 60, seconds % 60)

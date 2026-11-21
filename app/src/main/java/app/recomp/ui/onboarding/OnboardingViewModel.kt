@@ -48,7 +48,11 @@ import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.Projection
 import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.training.LogDates
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.unitStyle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.LocalTime
@@ -65,7 +69,10 @@ enum class FlowMode { ONBOARDING, GOAL }
 
 enum class Step { PRESET, ABOUT, GOAL, QUESTIONS, SUGGESTION, PACE, FINISH, REVIEW, TARGETS, EQUIPMENT }
 
-/** "About you" (PR-01) as typed. */
+/**
+ * "About you" (PR-01) as typed, in [units] (PR-05): [height] is cm, or feet with [heightIn] the inches; [weight] is
+ * kg or lb. A prefilled height or weight left as shown keeps its stored value ([keptHeight], [keptWeight]).
+ */
 data class AboutForm(
     val sex: Sex? = null,
     val birthDate: LocalDate? = null,
@@ -74,9 +81,36 @@ data class AboutForm(
     val activity: ActivityLevel = ActivityLevel.MODERATE,
     /** GL-09: pregnant or breastfeeding. */
     val pregnant: Boolean = false,
+    val heightIn: String = "",
+    val units: Units = Units.METRIC,
+    val keptHeight: Kept? = null,
+    val keptWeight: Kept? = null,
 ) {
-    val heightCm: Double? get() = height.toDecimal()?.takeIf { it in 100.0..250.0 }
-    val weightKg: Double? get() = weight.toDecimal()?.takeIf { it in 30.0..300.0 }
+    private val style: UnitStyle get() = unitStyle(units)
+
+    val heightCm: Double?
+        get() = keptHeight?.takeIf { it.text == UnitFields.heightKey(height, heightIn, style) }?.value
+            ?: UnitFields.parseHeightCm(height, heightIn, style)?.takeIf { it in 100.0..250.0 }
+    val weightKg: Double?
+        get() = keptWeight?.takeIf { it.text == weight.trim() }?.value ?: UnitFields.parseWeightKg(weight, style)?.takeIf { it in 30.0..300.0 }
+
+    /** The form in other units: valid values are shown again in [to] and keep their exact cm and kg. */
+    fun inUnits(to: Units): AboutForm {
+        if (to == units) return this
+        val next = unitStyle(to)
+        val cm = heightCm
+        val kg = weightKg
+        var form = copy(units = to, keptHeight = null, keptWeight = null, heightIn = if (to == Units.METRIC) "" else heightIn)
+        if (cm != null) {
+            val (a, b) = UnitFields.heightTexts(cm, next)
+            form = form.copy(height = a, heightIn = b, keptHeight = Kept(UnitFields.heightKey(a, b, next), cm))
+        }
+        if (kg != null) {
+            val w = UnitFields.weightText(kg, next)
+            form = form.copy(weight = w, keptWeight = Kept(w, kg))
+        }
+        return form
+    }
 
     fun profile(today: LocalDate): Profile? {
         val birth = birthDate?.takeIf { it.isBefore(today) && it.isAfter(today.minusYears(120)) } ?: return null
@@ -84,7 +118,15 @@ data class AboutForm(
     }
 
     companion object {
-        fun of(p: Profile) = AboutForm(p.sex, p.birthDate, GoalText.d(p.heightCm), GoalText.d(p.weightKg), p.activity, p.pregnant)
+        fun of(p: Profile, units: Units = Units.METRIC): AboutForm {
+            val style = unitStyle(units)
+            val (a, b) = UnitFields.heightTexts(p.heightCm, style)
+            val w = UnitFields.weightText(p.weightKg, style)
+            return AboutForm(
+                p.sex, p.birthDate, a, w, p.activity, p.pregnant, heightIn = b, units = units,
+                keptHeight = Kept(UnitFields.heightKey(a, b, style), p.heightCm), keptWeight = Kept(w, p.weightKg),
+            )
+        }
     }
 }
 
@@ -116,9 +158,22 @@ data class GoalForm(
     val aiAnswer: String = "",
     /** Above the three questions: what the AI read, or why they're being asked instead. */
     val aiNote: String? = null,
+    /** [goalWeight]'s unit (PR-05), and the stored goal weight a prefill left unchanged keeps. */
+    val units: Units = Units.METRIC,
+    val keptGoalWeight: Kept? = null,
 ) {
     val bodyFatPct: Double? get() = if (knowsBodyFat) bodyFat.toDecimal()?.takeIf { it in 3.0..70.0 } else null
-    val goalWeightKg: Double? get() = goalWeight.toDecimal()?.takeIf { it in 30.0..300.0 }
+    val goalWeightKg: Double?
+        get() = keptGoalWeight?.takeIf { it.text == goalWeight.trim() }?.value
+            ?: UnitFields.parseWeightKg(goalWeight, unitStyle(units))?.takeIf { it in 30.0..300.0 }
+
+    /** The goal weight shown in [to], keeping its exact kg. */
+    fun inUnits(to: Units): GoalForm {
+        if (to == units) return this
+        val kg = goalWeightKg ?: return copy(units = to, keptGoalWeight = null)
+        val text = UnitFields.weightText(kg, unitStyle(to))
+        return copy(units = to, goalWeight = text, keptGoalWeight = Kept(text, kg))
+    }
     val targetBodyFatPct: Double? get() = targetBodyFat.toDecimal()?.takeIf { it in 5.0..50.0 }
 }
 
@@ -263,13 +318,15 @@ class OnboardingViewModel @Inject constructor(
             val routines = training.observeExtras().first().associateBy { it.id }
             val extras = stored.extras.mapNotNull { s -> routines[s.routineId]?.let { ExtraDraft(it.id, it.name, it.kind, s.days) } }
             val plan = stored.goal?.toPlan()
+            // A first run guesses the units from the phone's region; afterwards they're the persona's (PR-05).
+            val units = if (profile == null) UnitFields.defaultUnits() else stored.units
             _ui.update {
                 it.copy(
                     loaded = true,
                     today = today,
-                    about = profile?.let(AboutForm::of) ?: it.about,
-                    goal = plan?.let(::formOf) ?: it.goal,
-                    draft = stored.toDraft(),
+                    about = profile?.let { p -> AboutForm.of(p, units) } ?: it.about.inUnits(units),
+                    goal = plan?.let { p -> formOf(p, units) } ?: it.goal.inUnits(units),
+                    draft = stored.toDraft().copy(units = units),
                     extras = extras,
                     dayStart = personas.dayStart.first(),
                     overrides = personas.overrides.first(),
@@ -288,11 +345,13 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    private fun formOf(plan: GoalPlan) = GoalForm(
+    private fun formOf(plan: GoalPlan, units: Units) = GoalForm(
         goal = plan.goal,
         pace = plan.pace ?: Pace.STANDARD,
         custom = if (plan.pace == null && plan.goal != Goal.MAINTAIN) plan.policy else null,
-        goalWeight = plan.goalWeightKg?.let(GoalText::d).orEmpty(),
+        goalWeight = plan.goalWeightKg?.let { UnitFields.weightText(it, unitStyle(units)) }.orEmpty(),
+        keptGoalWeight = plan.goalWeightKg?.let { Kept(UnitFields.weightText(it, unitStyle(units)), it) },
+        units = units,
         goalWeightTouched = plan.goalWeightKg != null,
         finishKind = when (plan.finishLine) {
             null -> null
@@ -343,7 +402,8 @@ class OnboardingViewModel @Inject constructor(
                     step = Step.EQUIPMENT,
                     walkthrough = items,
                     choices = items.associate { it.slotKey to it.selectedId },
-                    increments = items.flatMap { it.options }.associate { it.id to it.incrementG },
+                    // The library is seeded in kg; a choice of lb shows lb steps (PRD §12.16).
+                    increments = items.flatMap { it.options }.associate { it.id to LoadUnits.defaultIn(it.incrementG, it.equipment, state.draft.units) },
                     busy = false,
                 )
             }
@@ -361,12 +421,14 @@ class OnboardingViewModel @Inject constructor(
             ui.copy(
                 presetKey = key,
                 draft = preset.draft.copy(
+                    // Presets don't set units: the ones already chosen stay (PR-05).
+                    units = stored.units,
                     experience = if (kept) stored.experience else preset.draft.experience,
                     split = if (kept) stored.split else preset.draft.split,
                     strengthDaysPerWeek = if (kept) stored.strengthDaysPerWeek else null,
                 ),
                 extras = if (kept) ui.extras else preset.draft.extras.map { ExtraDraft(null, it.name, it.kind, it.days.map { d -> d.value }.toSet()) },
-                goal = GoalForm(goal = preset.goal),
+                goal = GoalForm(goal = preset.goal, units = ui.draft.units),
             )
         }
     }
@@ -374,6 +436,21 @@ class OnboardingViewModel @Inject constructor(
     // About you (PR-01)
 
     fun updateAbout(transform: (AboutForm) -> AboutForm) = _ui.update { it.copy(about = transform(it.about)) }
+
+    /**
+     * Units (PR-05), asked at the top of About you and again on the review: the height, weight and goal weight
+     * already typed are shown again in them, keeping their exact values.
+     */
+    fun setUnits(units: Units) = _ui.update {
+        it.copy(
+            draft = it.draft.copy(units = units),
+            about = it.about.inUnits(units),
+            goal = it.goal.inUnits(units),
+            increments = it.increments.mapValues { (id, g) ->
+                it.walkthrough.flatMap { item -> item.options }.firstOrNull { e -> e.id == id }?.let { e -> LoadUnits.defaultIn(g, e.equipment, units) } ?: LoadUnits.defaultIn(g, units)
+            },
+        )
+    }
 
     // Goal (PRD §4.6)
 
@@ -517,7 +594,7 @@ class OnboardingViewModel @Inject constructor(
         val goalKg = plan.goalWeightKg ?: suggestedGoalWeight(ui)
         val weeks = goalKg?.let { Projection.weeksTo(profile.weightKg, it, perWeek) }
         val byDate = (plan.finishLine as? FinishLine.ByDate)?.date
-        return GoalText.projection(perWeek, weeks, weeks?.let { Projection.finishDate(ui.today, it) }, ui.today, byDate)
+        return GoalText.projection(perWeek, weeks, weeks?.let { Projection.finishDate(ui.today, it) }, ui.today, byDate, unitStyle(ui.draft.units))
     }
 
     private fun suggestedGoalWeight(ui: OnboardingUi): Double? {
@@ -571,7 +648,9 @@ class OnboardingViewModel @Inject constructor(
         val default = GoalWeights.defaultFinishLine(goal, ui.today)
         ui.copy(
             goal = form.copy(
-                goalWeight = if (form.goalWeightTouched) form.goalWeight else suggestion?.let(GoalText::d).orEmpty(),
+                // A suggestion is whole kg, or the nearest whole lb, and that's what's saved (PRD §12.16).
+                goalWeight = if (form.goalWeightTouched) form.goalWeight else suggestion?.let { UnitFields.suggestedText(it, unitStyle(form.units)) }.orEmpty(),
+                keptGoalWeight = if (form.goalWeightTouched) form.keptGoalWeight else null,
                 finishKind = if (form.finishChosen) form.finishKind else when (default) {
                     null -> null
                     FinishLine.GoalWeight -> FinishKind.GOAL_WEIGHT
@@ -592,7 +671,8 @@ class OnboardingViewModel @Inject constructor(
     fun setTargetBodyFat(text: String) = _ui.update { ui ->
         val form = ui.goal.copy(targetBodyFat = text, finishKind = FinishKind.BODY_FAT, finishChosen = true)
         val weight = ui.leanMassKg?.let { lean -> form.targetBodyFatPct?.let { GoalWeights.forBodyFat(lean, it) } }
-        ui.copy(goal = if (weight != null) form.copy(goalWeight = GoalText.d(weight), goalWeightTouched = true) else form)
+        val text = weight?.let { UnitFields.weightText(it, unitStyle(form.units)) }
+        ui.copy(goal = if (weight != null && text != null) form.copy(goalWeight = text, keptGoalWeight = Kept(text, weight), goalWeightTouched = true) else form)
     }
 
     fun setFinish(kind: FinishKind?) = _ui.update {

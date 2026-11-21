@@ -58,6 +58,8 @@ import app.recomp.data.repo.TodayNutrition
 import app.recomp.data.repo.WorkoutRepository.ExtraEntry
 import app.recomp.domain.nutrition.MainNumber
 import app.recomp.domain.nutrition.ProteinGoal
+import app.recomp.domain.progression.Action
+import app.recomp.domain.progression.Targets
 import app.recomp.domain.training.RestReason
 import app.recomp.domain.training.WeekProgress
 import app.recomp.domain.training.WeeklyPlan
@@ -70,6 +72,7 @@ import app.recomp.ui.body.WeighInDraft
 import app.recomp.ui.body.WeighInSheet
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.extra.ExtraLogSheet
 import app.recomp.ui.onboarding.GoalText
@@ -318,7 +321,7 @@ fun TodayScreen(
                             Row(Modifier.fillMaxWidth()) {
                                 Text(line.name, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(
-                                    line.target + if (line.weightUp) " ↑" else "",
+                                    (if (line.rec.action == Action.BASELINE) "first time" else Targets.describe(line.rec, LocalUnitStyle.current)) + if (line.weightUp) " ↑" else "",
                                     color = if (line.weightUp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }

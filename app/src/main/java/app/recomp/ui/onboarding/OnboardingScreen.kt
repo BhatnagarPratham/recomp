@@ -52,6 +52,8 @@ import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
+import app.recomp.domain.units.UnitStyle
+import app.recomp.ui.body.BodyText
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.DateDialog
@@ -67,6 +69,9 @@ import app.recomp.ui.setup.description
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import androidx.compose.runtime.CompositionLocalProvider
+import app.recomp.ui.components.unitStyle
+import app.recomp.ui.components.LocalUnitStyle
 
 /**
  * Onboarding (PS-01, PR-01, PR-02, J0): preset, about you, the goal flow, your settings, targets and
@@ -82,6 +87,8 @@ fun OnboardingScreen(onDone: () -> Unit, onExit: () -> Unit, viewModel: Onboardi
     val first = ui.steps.indexOf(ui.step) <= 0
     BackHandler(enabled = !first || ui.mode == FlowMode.GOAL) { if (!viewModel.back()) onExit() }
 
+    // The units chosen here, which may not be saved yet (PR-05).
+    CompositionLocalProvider(LocalUnitStyle provides unitStyle(ui.draft.units)) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
@@ -127,6 +134,7 @@ fun OnboardingScreen(onDone: () -> Unit, onExit: () -> Unit, viewModel: Onboardi
             Button(onClick = viewModel::next, enabled = ui.canContinue && !ui.busy, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text(label) }
         }
     }
+    }
 
     if (ui.askGoalNotice) {
         ConfirmDialog(
@@ -160,6 +168,16 @@ private fun LazyListScope.heading(title: String, body: String? = null) {
     }
 }
 
+/** The units chips (PR-05), at the top of About you and again on the review. */
+@Composable
+private fun UnitsChoice(ui: OnboardingUi, vm: OnboardingViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Units", style = MaterialTheme.typography.titleMedium)
+        ChoiceChips(Units.entries, ui.draft.units, Labels::units, vm::setUnits)
+        Text("Food stays in grams. You can change units later in Settings.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 // 1. Preset (PRD §4.4)
 
 private fun LazyListScope.presetStep(ui: OnboardingUi, vm: OnboardingViewModel) {
@@ -177,6 +195,8 @@ private fun LazyListScope.presetStep(ui: OnboardingUi, vm: OnboardingViewModel) 
 
 private fun LazyListScope.aboutStep(ui: OnboardingUi, vm: OnboardingViewModel) {
     heading("About you", "For your calorie and protein targets. It stays on this phone.")
+    // PR-05: asked first, so height and weight are typed in them.
+    item { UnitsChoice(ui, vm) }
     item {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Sex", style = MaterialTheme.typography.titleMedium)
@@ -201,8 +221,15 @@ private fun LazyListScope.aboutStep(ui: OnboardingUi, vm: OnboardingViewModel) {
     }
     item {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            NumberField("Height", ui.about.height, "cm", Modifier.weight(1f), error = ui.about.height.isNotBlank() && ui.about.heightCm == null) { t -> vm.updateAbout { it.copy(height = t) } }
-            NumberField("Current weight", ui.about.weight, "kg", Modifier.weight(1f), error = ui.about.weight.isNotBlank() && ui.about.weightKg == null) { t -> vm.updateAbout { it.copy(weight = t) } }
+            val style = unitStyle(ui.about.units)
+            val heightError = (ui.about.height.isNotBlank() || ui.about.heightIn.isNotBlank()) && ui.about.heightCm == null
+            if (style.imperial) {
+                NumberField("Height", ui.about.height, BodyText.FEET, Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
+                NumberField("", ui.about.heightIn, "in", Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(heightIn = t) } }
+            } else {
+                NumberField("Height", ui.about.height, UnitStyle.METRIC.length, Modifier.weight(1f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
+            }
+            NumberField("Current weight", ui.about.weight, style.weight, Modifier.weight(1f), error = ui.about.weight.isNotBlank() && ui.about.weightKg == null) { t -> vm.updateAbout { it.copy(weight = t) } }
         }
     }
     item { Text("Activity", style = MaterialTheme.typography.titleMedium) }
@@ -400,7 +427,7 @@ private fun LazyListScope.finishStep(ui: OnboardingUi, vm: OnboardingViewModel) 
             NumberField(
                 if (required) "Goal weight" else "Goal weight (optional)",
                 ui.goal.goalWeight,
-                "kg",
+                unitStyle(ui.goal.units).weight,
                 Modifier.fillMaxWidth(),
                 error = ui.goal.goalWeight.isNotBlank() && ui.goal.goalWeightKg == null,
                 onChange = vm::setGoalWeight,
@@ -451,7 +478,7 @@ private fun LazyListScope.finishStep(ui: OnboardingUi, vm: OnboardingViewModel) 
                     onChange = vm::setTargetBodyFat,
                 )
                 ui.goal.targetBodyFatPct?.let { pct ->
-                    Text(GoalText.bodyFatGoal(lean, pct), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(GoalText.bodyFatGoal(lean, pct, LocalUnitStyle.current), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -508,11 +535,7 @@ private fun LazyListScope.reviewStep(ui: OnboardingUi, vm: OnboardingViewModel) 
         }
     }
     item {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Units", style = MaterialTheme.typography.titleMedium)
-            ChoiceChips(listOf(Units.METRIC), d.units, Labels::units, { u -> vm.updateDraft { it.copy(units = u) } })
-            Text("lb and in arrive in a later version.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        UnitsChoice(ui, vm)
     }
     item {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -552,7 +575,7 @@ private fun LazyListScope.targetsStep(ui: OnboardingUi, vm: OnboardingViewModel)
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("What to expect", style = MaterialTheme.typography.titleMedium)
-                    Text(GoalText.expect(e))
+                    Text(GoalText.expect(e, LocalUnitStyle.current))
                     if (ui.switching) Text(GoalText.FRESH_START, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -591,15 +614,16 @@ fun TargetList(
 ) {
     var editing by remember { mutableStateOf<String?>(null) }
     val o = targets.overrides
+    val style = LocalUnitStyle.current
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Protein first: the hero metric (NU-02).
-        TargetRow("Protein", "${targets.proteinG} g", before?.proteinG?.let { "$it g" }, GoalText.protein(targets), o.proteinG != null, { editing = "protein" }) {
+        TargetRow("Protein", "${targets.proteinG} g", before?.proteinG?.let { "$it g" }, GoalText.protein(targets, style), o.proteinG != null, { editing = "protein" }) {
             onOverride(o.copy(proteinG = null))
         }
         TargetRow("Calories", GoalText.kcal(targets.kcal), before?.kcal?.let(GoalText::kcal), GoalText.calories(targets, policy, estimateWeek), o.kcal != null, { editing = "kcal" }, note = kcalNote) {
             onOverride(o.copy(kcal = null))
         }
-        TargetRow("Fat", "${targets.fatG} g", before?.fatG?.let { "$it g" }, GoalText.fat(targets), o.fatG != null, { editing = "fat" }) {
+        TargetRow("Fat", "${targets.fatG} g", before?.fatG?.let { "$it g" }, GoalText.fat(targets, style), o.fatG != null, { editing = "fat" }) {
             onOverride(o.copy(fatG = null))
         }
         TargetRow("Carbs", "${targets.carbsG} g", before?.carbsG?.let { "$it g" }, GoalText.CARBS, overridden = false, onEdit = null, onReset = {})

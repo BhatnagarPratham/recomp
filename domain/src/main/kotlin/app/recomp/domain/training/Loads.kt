@@ -3,6 +3,9 @@ package app.recomp.domain.training
 import app.recomp.domain.model.Equipment
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitStyle
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -12,20 +15,20 @@ import java.math.RoundingMode
  */
 data class LoggedSet(val type: SetType, val loadG: Int?, val reps: Int, val rir: Int? = null)
 
-/** Load maths and formatting. Storage is always grams; display is kg (lb display is an open question, PRD §11). */
+/**
+ * Load maths and formatting. Storage is always grams; display is kg or lb (PR-05), through [LoadUnits]. [formatKg]
+ * and [parseKg] are metric helpers; screens go through [LoadUnits] and the app's `Labels`.
+ */
 object Loads {
-    /** Smallest steps offered by the equipment walkthrough (PR-04), in grams. */
-    val incrementChoicesG = listOf(1000, 1250, 2000, 2500, 4000, 5000)
+    /** Smallest steps offered by the equipment walkthrough (PR-04) in kg, in grams. In lb see [LoadUnits.incrementChoicesG]. */
+    val incrementChoicesG = LoadUnits.incrementChoicesG(Units.METRIC)
 
     /**
-     * Starting increment per equipment, confirmed or changed in the walkthrough. Barbell and plate-loaded
-     * steps assume 1.25 kg plates on each side; dumbbells are per dumbbell, never the pair (TRD §5.1).
+     * Starting increment per equipment in kg, confirmed or changed in the walkthrough. Barbell and plate-loaded
+     * steps assume 1.25 kg plates on each side; dumbbells are per dumbbell, never the pair (TRD §5.1). In lb see
+     * [LoadUnits.defaultIncrementG].
      */
-    fun defaultIncrementG(equipment: Equipment): Int = when (equipment) {
-        Equipment.BARBELL, Equipment.PLATE_LOADED, Equipment.DUMBBELL, Equipment.BODYWEIGHT, Equipment.BAND -> 2500
-        Equipment.MACHINE, Equipment.CABLE -> 5000
-        Equipment.KETTLEBELL -> 4000
-    }
+    fun defaultIncrementG(equipment: Equipment): Int = LoadUnits.defaultIncrementG(equipment, Units.METRIC)
 
     /** 42500 → "42.5", 40000 → "40", 1250 → "1.25". */
     fun formatKg(grams: Int): String =
@@ -42,7 +45,7 @@ object Loads {
         return grams.takeIf { it <= BigDecimal(MAX_LOAD_G) }?.intValueExact()
     }
 
-    /** Weight stepper (WL-03): one increment up or down, never below zero. */
+    /** Weight stepper (WL-03) in kg: one increment up or down, never below zero. In either unit see [LoadUnits.step]. */
     fun step(loadG: Int, incrementG: Int, up: Boolean): Int =
         if (up) loadG + incrementG else (loadG - incrementG).coerceAtLeast(0)
 
@@ -60,10 +63,11 @@ object Loads {
     fun logsLoad(loadType: LoadType): Boolean = loadType != LoadType.BODYWEIGHT
 
     /**
-     * Compact history line, e.g. "45 × 12/11/10" or "40 × 12, 42.5 × 10/9". Warm-ups are left out.
-     * Bodyweight sets print as "BW × 15/12", and assisted ones as "assist 25 × 8/8" ("BW" with no assistance).
+     * Compact history line, e.g. "45 × 12/11/10" or "40 × 12, 42.5 × 10/9", in [style]'s unit with no unit word.
+     * Warm-ups are left out. Bodyweight sets print as "BW × 15/12", and assisted ones as "assist 25 × 8/8"
+     * ("BW" with no assistance).
      */
-    fun describe(sets: List<LoggedSet>, loadType: LoadType = LoadType.WEIGHTED): String {
+    fun describe(sets: List<LoggedSet>, style: UnitStyle, loadType: LoadType = LoadType.WEIGHTED): String {
         val counted = sets.filter { it.type != SetType.WARMUP }
         if (counted.isEmpty()) return ""
         val runs = mutableListOf<Pair<Int?, MutableList<Int>>>()
@@ -74,8 +78,8 @@ object Loads {
         return runs.joinToString(", ") { (load, reps) ->
             val weight = when {
                 load == null -> "BW"
-                loadType == LoadType.ASSISTED -> if (load == 0) "BW" else "assist ${formatKg(load)}"
-                else -> formatKg(load)
+                loadType == LoadType.ASSISTED -> if (load == 0) "BW" else "assist ${LoadUnits.format(load, style)}"
+                else -> LoadUnits.format(load, style)
             }
             "$weight × ${reps.joinToString("/")}"
         }

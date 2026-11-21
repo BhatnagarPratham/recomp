@@ -16,6 +16,9 @@ import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.progression.PrType
 import app.recomp.domain.training.Loads
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.onboarding.GoalText
 
 /** User-facing names for the domain vocabulary. */
@@ -128,24 +131,39 @@ object Labels {
         PrType.SESSION_VOLUME -> "best session volume"
     }
 
-    /** A PR's value. An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
-    fun recordValue(type: PrType, value: Long, loadG: Int?, assisted: Boolean): String = when (type) {
-        PrType.MAX_LOAD -> if (assisted) assist(loadG ?: 0) else "${Loads.formatKg(value.toInt())} kg"
-        PrType.REPS_AT_LOAD -> "$value reps" + when {
-            assisted -> if ((loadG ?: 0) == 0) " with no assistance" else " at ${assist(loadG!!)}"
-            else -> loadG?.takeIf { it > 0 }?.let { " at ${Loads.formatKg(it)} kg" } ?: ""
-        }
-        PrType.E1RM -> "about ${(value + 500) / 1000} kg"
-        PrType.SESSION_VOLUME -> "${GoalText.n((value + 500) / 1000)} kg"
-    }
-
-    /** "2.5 kg". */
-    fun kg(grams: Int) = "${Loads.formatKg(grams)} kg"
-
-    /** "assist 25 kg" (WL-09), or "no assistance". */
-    fun assist(grams: Int) = if (grams == 0) "no assistance" else "assist ${kg(grams)}"
+    /** An estimated 1RM: to 0.1 kg as before M20, or whole lb. */
+    fun e1rm(grams: Int, style: UnitStyle): String =
+        if (style.imperial) wholeLoad(grams.toLong(), style) else load((grams + 50) / 100 * 100, style)
 
     fun muscle(key: String) = key.replace('_', ' ').replaceFirstChar { it.uppercase() }
+
+    // Loads in either unit (PR-05). Every lift load, step and record on screen goes through these.
+
+    /** "42.5 kg", "93.7 lb". */
+    fun load(grams: Int, style: UnitStyle) = "${LoadUnits.format(grams, style)} ${style.weight}"
+
+    /** A weight step: "1.25 kg", "2.5 lb", "5.51 lb". */
+    fun step(grams: Int, style: UnitStyle) = "${LoadUnits.formatStep(grams, style)} ${style.weight}"
+
+    /** "assist 25 kg" (WL-09), or "no assistance". */
+    fun assist(grams: Int, style: UnitStyle) = if (grams == 0) "no assistance" else "assist ${load(grams, style)}"
+
+    /** Whole units, for volume and estimated 1RMs: "4,250 kg", "9,370 lb". */
+    fun wholeLoad(grams: Long, style: UnitStyle): String {
+        val whole = if (style.imperial) Math.round(grams / UnitMath.G_PER_LB.toDouble()) else (grams + 500) / 1000
+        return "${GoalText.n(whole)} ${style.weight}"
+    }
+
+    /** A PR's value. An assisted lift's records keep the assistance in `load_g` (WL-09), so that's what they show. */
+    fun recordValue(type: PrType, value: Long, loadG: Int?, assisted: Boolean, style: UnitStyle): String = when (type) {
+        PrType.MAX_LOAD -> if (assisted) assist(loadG ?: 0, style) else load(value.toInt(), style)
+        PrType.REPS_AT_LOAD -> "$value reps" + when {
+            assisted -> if ((loadG ?: 0) == 0) " with no assistance" else " at ${assist(loadG!!, style)}"
+            else -> loadG?.takeIf { it > 0 }?.let { " at ${load(it, style)}" } ?: ""
+        }
+        PrType.E1RM -> "about ${wholeLoad(value, style)}"
+        PrType.SESSION_VOLUME -> wholeLoad(value, style)
+    }
 
     /** YG-03: "Hips", "Full body". */
     fun focusArea(key: String) = muscle(key)

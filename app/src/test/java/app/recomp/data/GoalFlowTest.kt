@@ -46,6 +46,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import app.recomp.domain.units.UnitStyle
 
 /**
  * M19 over real storage (GL-06, GL-09, PS-04; PRD §12.15): Goal reached, the maintenance break's two target
@@ -494,7 +495,7 @@ class GoalFlowTest {
         assertTrue(view.pregnant)
         assertNull(view.proposal)
         assertEquals(CheckinStatus.ON_TRACK, view.status)
-        assertEquals(CheckinText.PREGNANT_VERDICT, CheckinText.verdict(view))
+        assertEquals(CheckinText.PREGNANT_VERDICT, CheckinText.verdict(view, UnitStyle.METRIC))
         assertTrue(targets.all().none { it.reason == TargetReason.CHECKIN })
     }
 
@@ -548,7 +549,7 @@ class GoalFlowTest {
             val view = app.checkins.open(week.weekStart, at(monday, 13))!!
             assertTrue(view.pregnant)
             assertFalse(view.pregnantNow)
-            assertEquals(CheckinText.AFTER_PREGNANCY_VERDICT, CheckinText.verdict(view))
+            assertEquals(CheckinText.AFTER_PREGNANCY_VERDICT, CheckinText.verdict(view, UnitStyle.METRIC))
         }
         assertTrue(checkinDao.all().none { it.flag != null || it.proposedKcal != null })
         assertTrue(targets.all().none { it.reason == TargetReason.CHECKIN })
@@ -626,7 +627,7 @@ class GoalFlowTest {
         assertTrue(resting.body.atMaintenance)
         assertNull(resting.body.pace)
         assertNull(resting.outlook)
-        assertTrue(ReviewText.trend(resting.body).endsWith(ReviewText.MAINTENANCE_WEEK))
+        assertTrue(ReviewText.trend(resting.body, UnitStyle.METRIC).endsWith(ReviewText.MAINTENANCE_WEEK))
         // The week before the break is judged by the goal as before.
         val before = app.reviews.week(date(77), today = date(88))
         assertFalse(before.body.atMaintenance)

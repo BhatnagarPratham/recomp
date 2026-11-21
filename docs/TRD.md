@@ -225,7 +225,7 @@ data class Persona(
     val strengthDaysPerWeek: Int,
     val extras: List<ExtraSession>,    // name, kind and weekdays, e.g. a yoga class on Saturdays
     val weightSource: WeightSource,    // HOME_SCALE | SCAN | GYM_SCALE
-    val units: Units,                  // METRIC | IMPERIAL (display only; metric only until v1.1)
+    val units: Units,                  // METRIC | IMPERIAL: display and entry only (PR-05, M20); storage is always grams and cm
     val proteinRamp: Boolean,          // NU-03; defaults on for vegan, lacto-vegetarian and eggetarian
 )
 
@@ -1842,7 +1842,7 @@ Tests cover:
   - the 60-day and protocol rules for which scan counts;
   - the body-fat goal weight;
   - a shared image with and without a matching draft, and the image deleted with its scan.
-- **Risks:** the image is sensitive: it stays in app-private storage, out of Android's own backup, and is never sent anywhere. Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
+- **Risks:** the image is sensitive: it stays in app-private storage and out of Android's own backup, and no AI or server ever gets it. Since the backup fixes (2026-11-22) it also goes into your own backups (an export, or the automatic backup folder you chose) when *Include photos* is on (§6.5). Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
 - **Parallel:** with M16.
 
 **M15 results (2026-11-21; no Room change).** Built to PRD §12.11 and the block above. Where the spec was silent:
@@ -2015,6 +2015,22 @@ Tests cover:
 - **Tests:** kg ↔ lb round trips on stored grams (225 lb is 102,058 g and shows as 225.0 lb); lb steps on the engine's integer grams; rounding only at display.
 - **Risks:** it touches every screen with a weight or a length, so it runs alone and last.
 - **Parallel:** none.
+- **Built (2026-11-22):**
+  - **One place for units.** `:domain`'s `units/UnitMath.kt` holds `UnitStyle` (units and the decimal mark), `UnitMath` (exact: 453.59237 g a pound, 2.54 cm an inch) and `LoadUnits`. The app formats through `Labels` (loads, steps, records), `BodyText` (body weight, lengths, height, scan text) and `GoalText`, with `LocalUnitStyle` provided at the root from the persona's `units`.
+    - Domain text builders (`Loads.describe`, `Targets`, `WarmupPlanner`, `ProgrammeReport`) take a required `UnitStyle`, so the compiler finds every caller.
+    - `UnitsGuardTest` fails on a string literal that spells "kg", "lb" or "cm" outside the formatters, the SI outputs (CSV, Health Connect) and the food parser.
+  - **No drift.** In lb every value comes from a lb number, never from adding grams: steppers work on the 0.01 lb grid (`LoadUnits.step`, `BodyText.weightStep`). The engine's targets are snapped before they're frozen (`ProgressionRepository`): an increase to the nearest grid point above what you lifted (`LoadUnits.increase`), a deload and warm-ups down. A repeat or add-a-rep keeps exactly what you lifted: rounding a kg-era load to 0.01 lb could raise it by a gram or two and log a false heavier lift (PR #26 review). So a typed 225 lb (102,058 g) hits a 225 lb target exactly.
+  - **Unchanged text keeps the stored value** (`LoadEntry`, the scan form, the weigh-in and waist sheets, onboarding's fields): opening and saving without a change never rewrites history.
+  - **The switch** (`UnitSwitch`, Settings → Body data → *Units*) moves only `exercise.increment_g`, to the nearest offered step in the new unit (`LoadUnits.nearestIncrementG`); the dialog says that switching back uses the nearest step again (1 kg → 2.5 lb → 1.25 kg). The units are written first and put back if the step move fails. Onboarding in lb moves the seeded library's kg default steps too: one still on its equipment's kg default takes that equipment's lb default (a kettlebell gets 5 lb), others the nearest step (`LoadUnits.defaultIn`), keeping any step typed in the walkthrough.
+  - **What stays metric:** storage, protein (g per kg), internal thresholds, the CSV export and Health Connect writes. The M11 report to the AI uses display units, with a units line at the top and "." as its decimal mark.
+  - **M17's tape sites and sit-and-reach** (merged in before M20's review) format through `BodyText.length`/`lengthStep`. Sit-and-reach is a signed length with a ± button in the number dialog, since number keyboards often have no minus key. The squat hold and toe touch don't convert.
+
+| Check | Result |
+|-------|--------|
+| Over the real data (2026-11-22, release b8c2361 on main 0c63f86 with M17; no schema change) | ✅ After an export you saved into "Recomp backup" (02:39, schema 14), the release installed with no crash. Today, Body and Train read exactly as before, compared as text screen by screen; units stayed kg. A *Back up now* afterwards (02:41) had the same row count in all 26 tables (only the manifests' counts were read). |
+| lb and in (dev install, invented data, uninstalled afterwards) | ✅ Onboarding asked units first on *About you*. In lb and in, height took feet and inches, and weight took lb. The equipment step offered 1, 2.5, 5 and 10 lb with 5 lb preselected. A workout typed at 135 lb × 12 × 3 showed volume 4,860 lb and "Bench press goes to 140 lb". The weigh-in stepped by 0.2 lb. The waist stepped by quarters (33.46 → 33.75 → 33.25 in) and saved as 33.25 in. Sit-and-reach took −2.5 in through the ± button and stepped to −2.25 in. Settings showed 5 ft 9 in, the trend in lb, a 170 lb goal and protein as "1.6 g per kg of your goal weight (170 lb)". Switching to kg and cm listed each step it would move (5 lb → 2.5 kg, 10 lb → 5 kg); afterwards Body read the same weigh-in in kg. <!-- pii-ok: invented dev-install values --> |
+| Found on the phone | The switch dialog's keep-steps example read "2.5 kg as 2.5 kg" when switching to kg, and a kept lb step showed as "2.268 kg". Fixed: the example converts the unit you're leaving ("5 lb as 2.27 kg"), and steps show at most 2 decimals in kg too. |
+| Not run on the phone | A target typed as shown hitting it exactly in lb, and a kg-era repeat in lb (both covered by `ProgressionFlowTest`). The scan form's kg/lb switch. A German phone's decimal comma (covered by tests). |
 
 ## 11. Risks and mitigations
 

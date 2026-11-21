@@ -55,7 +55,11 @@ import app.recomp.domain.body.ProtocolCheck
 import app.recomp.domain.body.ScanProtocol
 import app.recomp.domain.body.ScanSlot
 import app.recomp.domain.body.SinceMeal
+import app.recomp.data.repo.PersonaRepository
+import app.recomp.domain.persona.Units
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.ChoiceChips
+import app.recomp.ui.components.unitStyle
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.WhenRow
 import app.recomp.ui.navigation.ScanRoute
@@ -65,12 +69,17 @@ import javax.inject.Inject
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** The scan form as typed (IB-01). Masses are kg strings; [fatPctTyped] stops body fat % following fat mass ÷ weight. */
+/**
+ * The scan form as typed (IB-01). Masses are strings in [style]'s unit, the form's own kg/lb switch (PR-05), since
+ * the InBody sheet's unit is the machine's. [shown] keeps the grams behind each prefilled mass, so a field left as
+ * it was shown saves its stored grams exactly. [fatPctTyped] stops body fat % following fat mass ÷ weight.
+ */
 data class ScanForm(
     val loaded: Boolean = false,
     val id: Long? = null,
@@ -90,12 +99,57 @@ data class ScanForm(
     val score: String = "",
     val segments: List<String> = List(5) { "" },
     val notes: String = "",
+    val style: UnitStyle = UnitStyle.METRIC,
+    val shown: Map<MassField, Shown> = emptyMap(),
 ) {
-    private fun kgToG(text: String, range: ClosedFloatingPointRange<Double>): Int? = BodyText.parse(text)?.takeIf { it in range }?.let { (it * 1000).roundToInt() }
+    /** A prefilled mass: the text it was shown as, and its stored grams. */
+    data class Shown(val text: String, val grams: Int)
 
-    val weightG: Int? get() = kgToG(weight, 20.0..300.0)
-    val muscleG: Int? get() = kgToG(muscle, 5.0..150.0)?.takeIf { weightG == null || it < weightG!! }
-    val fatG: Int? get() = kgToG(fatMass, 0.5..250.0)?.takeIf { weightG == null || it < weightG!! }
+    /** The mass fields, for [shown]. */
+    enum class MassField { WEIGHT, MUSCLE, FAT, SEG0, SEG1, SEG2, SEG3, SEG4 }
+
+    private fun text(f: MassField): String = when (f) {
+        MassField.WEIGHT -> weight
+        MassField.MUSCLE -> muscle
+        MassField.FAT -> fatMass
+        else -> segments[f.ordinal - MassField.SEG0.ordinal]
+    }
+
+    private fun withText(f: MassField, t: String): ScanForm = when (f) {
+        MassField.WEIGHT -> copy(weight = t)
+        MassField.MUSCLE -> copy(muscle = t)
+        MassField.FAT -> copy(fatMass = t)
+        else -> copy(segments = segments.toMutableList().also { it[f.ordinal - MassField.SEG0.ordinal] = t })
+    }
+
+    /** A mass field's grams: the stored grams when its text is as shown, else what's typed in [style]'s unit, in [kgRange]. */
+    private fun grams(f: MassField, kgRange: ClosedFloatingPointRange<Double>): Int? {
+        val text = text(f)
+        shown[f]?.takeIf { it.text == text.trim() }?.let { return it.grams }
+        return BodyText.parseWeight(text, style)?.takeIf { it / 1000.0 in kgRange }
+    }
+
+    /**
+     * The form in the other unit: each mass is shown again in [units], and one you haven't changed still saves its
+     * stored grams. A field that isn't a number is left as typed.
+     */
+    fun inUnits(units: Units): ScanForm {
+        if (units == style.units) return this
+        val next = style.copy(units = units)
+        var form = copy(style = next)
+        val kept = mutableMapOf<MassField, Shown>()
+        MassField.entries.forEach { f ->
+            val g = shown[f]?.takeIf { it.text == text(f).trim() }?.grams ?: BodyText.parseWeight(text(f), style) ?: return@forEach
+            val t = massText(g, next)
+            form = form.withText(f, t)
+            kept[f] = Shown(t, g)
+        }
+        return form.copy(shown = kept)
+    }
+
+    val weightG: Int? get() = grams(MassField.WEIGHT, 20.0..300.0)
+    val muscleG: Int? get() = grams(MassField.MUSCLE, 5.0..150.0)?.takeIf { weightG == null || it < weightG!! }
+    val fatG: Int? get() = grams(MassField.FAT, 0.5..250.0)?.takeIf { weightG == null || it < weightG!! }
     val fatPctValue: Double? get() = BodyText.parse(fatPct)?.takeIf { it in 1.0..75.0 }
     val visceralValue: Double? get() = BodyText.parse(visceral)?.takeIf { it in 1.0..60.0 }
 
@@ -105,14 +159,19 @@ data class ScanForm(
     val bmrValue get() = optional(bmr, 500.0..5000.0)
     val ecwValue get() = optional(ecw, 0.2..0.6)
     val scoreValue get() = optional(score, 0.0..200.0)
-    val segmentValues get() = segments.map { optional(it, 0.1..80.0) }
+    /** Segmental lean masses in grams. */
+    val segmentValues: List<Result<Int?>>
+        get() = segments.indices.map { i ->
+            if (segments[i].isBlank()) Result.success(null)
+            else grams(MassField.entries[MassField.SEG0.ordinal + i], 0.1..80.0)?.let { Result.success(it) } ?: Result.failure(IllegalArgumentException())
+        }
 
     /** Null until every required field is valid and *Last ate* is answered. */
     fun input(): ScanInput? {
         val segs = segmentValues
         if (listOf(bmrValue, ecwValue, scoreValue).any { it.isFailure } || segs.any { it.isFailure }) return null
         val parts = segs.map { it.getOrNull() }
-        val segmental = if (parts.all { it != null }) parts.map { (it!! * 1000).roundToInt() }.let { SegmentalLean(it[0], it[1], it[2], it[3], it[4]) } else null
+        val segmental = if (parts.all { it != null }) parts.map { it!! }.let { SegmentalLean(it[0], it[1], it[2], it[3], it[4]) } else null
         if (parts.any { it != null } && segmental == null) return null
         return ScanInput(
             measuredAt = at,
@@ -132,33 +191,39 @@ data class ScanForm(
     }
 
     companion object {
-        private fun kg(g: Int) = BodyText.oneDecimal(g / 1000.0)
+        /** A mass as the form shows it: one decimal in [style]'s unit. */
+        fun massText(grams: Int, style: UnitStyle): String = BodyText.weightNumber(grams / 1000.0, style)
+
         private fun num(d: Double) = if (d % 1.0 == 0.0) d.toInt().toString() else d.toString()
+
+        /** Prefilled masses, each remembered with its grams. */
+        private fun ScanForm.prefilled(masses: Map<MassField, Int>): ScanForm =
+            masses.entries.fold(copy(shown = emptyMap())) { form, (f, g) ->
+                val t = massText(g, style)
+                form.withText(f, t).copy(shown = form.shown + (f to Shown(t, g)))
+            }
 
         /**
          * An InBody draft (IB-07): its time, weight, body fat % and BMR are filled in, with fat mass worked out
          * from the first two. Muscle and visceral fat are yours to type, and the protocol questions are asked as usual.
          */
-        fun of(d: ScanDraftEntity): ScanForm = ScanForm(
+        fun of(d: ScanDraftEntity, style: UnitStyle = UnitStyle.METRIC): ScanForm = ScanForm(
             loaded = true,
             at = d.measuredAt,
-            weight = kg(d.weightG),
             fatPct = d.bodyFatPct?.let(::num).orEmpty(),
             fatPctTyped = d.bodyFatPct != null,
-            fatMass = d.bodyFatPct?.let { kg((d.weightG * it / 100).roundToInt()) }.orEmpty(),
             more = d.bmrKcal != null,
             bmr = d.bmrKcal?.toString().orEmpty(),
-        )
+            style = style,
+        ).prefilled(listOfNotNull(MassField.WEIGHT to d.weightG, d.bodyFatPct?.let { MassField.FAT to (d.weightG * it / 100).roundToInt() }).toMap())
 
-        fun of(s: BodyCompositionEntity): ScanForm {
+        fun of(s: BodyCompositionEntity, style: UnitStyle = UnitStyle.METRIC): ScanForm {
             val seg = BodyRepository.segmental(s.segmentalLeanJson)
+            val segs = seg?.let { listOf(it.rightArmG, it.leftArmG, it.trunkG, it.rightLegG, it.leftLegG) }.orEmpty()
             return ScanForm(
                 loaded = true,
                 id = s.id,
                 at = s.measuredAt,
-                weight = kg(s.weightG),
-                muscle = kg(s.skeletalMuscleG),
-                fatMass = kg(s.bodyFatG),
                 fatPct = num(s.bodyFatPct),
                 fatPctTyped = true,
                 visceral = num(s.visceralFatLevel),
@@ -169,8 +234,11 @@ data class ScanForm(
                 bmr = s.bmrKcal?.toString().orEmpty(),
                 ecw = s.ecwTbwRatio?.let(::num).orEmpty(),
                 score = s.inbodyScore?.toString().orEmpty(),
-                segments = seg?.let { listOf(it.rightArmG, it.leftArmG, it.trunkG, it.rightLegG, it.leftLegG).map(::kg) } ?: List(5) { "" },
                 notes = s.notes.orEmpty(),
+                style = style,
+            ).prefilled(
+                mapOf(MassField.WEIGHT to s.weightG, MassField.MUSCLE to s.skeletalMuscleG, MassField.FAT to s.bodyFatG) +
+                    segs.mapIndexed { i, g -> MassField.entries[MassField.SEG0.ordinal + i] to g },
             )
         }
     }
@@ -182,6 +250,7 @@ class ScanViewModel @Inject constructor(
     private val body: BodyRepository,
     private val health: HealthRepository,
     private val images: ScanImages,
+    private val personas: PersonaRepository,
 ) : ViewModel() {
     private val scanId = savedState.toRoute<ScanRoute>().scanId.takeIf { it > 0 }
 
@@ -202,13 +271,15 @@ class ScanViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // The form's kg/lb switch starts at the app's unit and is remembered for this form only (PR-05).
+            val style = unitStyle(personas.stored.first().units)
             val existing = scanId?.let { body.scan(it) }
             // A shared screenshot picks up the InBody draft from the same time, if Health Connect has one (PRD §12.11).
             if (existing == null && draftId == null && sharedImage != null) draftId = health.draftForShare(System.currentTimeMillis())?.id
             val draft = if (existing == null) draftId?.let { health.draft(it) } else null
-            _form.value = existing?.let(ScanForm::of)
-                ?: draft?.let { ScanForm.of(it).copy(workout = body.trainedBefore(it.measuredAt)) }
-                ?: ScanForm(loaded = true).let { it.copy(workout = body.trainedBefore(it.at)) }
+            _form.value = existing?.let { ScanForm.of(it, style) }
+                ?: draft?.let { ScanForm.of(it, style).copy(workout = body.trainedBefore(it.measuredAt)) }
+                ?: ScanForm(loaded = true, style = style).let { it.copy(workout = body.trainedBefore(it.at)) }
             (sharedImage ?: existing?.imagePath)?.let { _image.value = loadScanImage(images, it) }
         }
     }
@@ -219,6 +290,9 @@ class ScanViewModel @Inject constructor(
         if (new.fatPctTyped) new
         else new.copy(fatPct = new.weightG?.let { w -> new.fatG?.let { f -> ScanProtocol.bodyFatPct(w, f) } }?.toString().orEmpty())
     }
+
+    /** The form's kg/lb switch. */
+    fun setUnits(units: Units) = update { it.inUnits(units) }
 
     /** A new time re-checks "trained before", unless you've set it yourself. */
     fun setAt(at: Long) {
@@ -347,12 +421,15 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
 
             WhenRow(form.at, BodyText::dateTime, viewModel::setAt)
 
+            Text("Masses on the sheet are in", style = MaterialTheme.typography.labelLarge)
+            ChoiceChips(Units.entries, form.style.units, { UnitStyle(it).weight }, viewModel::setUnits)
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field("Weight", form.weight, "kg", form.weight.isNotBlank() && form.weightG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(weight = v) } }
-                Field("Skeletal muscle", form.muscle, "kg", form.muscle.isNotBlank() && form.muscleG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(muscle = v) } }
+                Field("Weight", form.weight, form.style.weight, form.weight.isNotBlank() && form.weightG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(weight = v) } }
+                Field("Skeletal muscle", form.muscle, form.style.weight, form.muscle.isNotBlank() && form.muscleG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(muscle = v) } }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field("Body fat mass", form.fatMass, "kg", form.fatMass.isNotBlank() && form.fatG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(fatMass = v) } }
+                Field("Body fat mass", form.fatMass, form.style.weight, form.fatMass.isNotBlank() && form.fatG == null, Modifier.weight(1f)) { v -> viewModel.update { it.copy(fatMass = v) } }
                 Field("Body fat", form.fatPct, "%", form.fatPct.isNotBlank() && form.fatPctValue == null, Modifier.weight(1f)) { v ->
                     viewModel.update { it.copy(fatPct = v, fatPctTyped = v.isNotBlank()) }
                 }
@@ -381,7 +458,7 @@ fun ScanScreen(onDone: () -> Unit, viewModel: ScanViewModel = hiltViewModel()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         names.forEachIndexed { col, name ->
                             val i = row * 2 + col
-                            Field(name, form.segments[i], "kg", form.segmentValues[i].isFailure, Modifier.weight(1f)) { v ->
+                            Field(name, form.segments[i], form.style.weight, form.segmentValues[i].isFailure, Modifier.weight(1f)) { v ->
                                 viewModel.update { it.copy(segments = it.segments.toMutableList().also { s -> s[i] = v }) }
                             }
                         }

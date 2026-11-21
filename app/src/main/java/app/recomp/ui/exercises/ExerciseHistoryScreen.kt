@@ -35,6 +35,7 @@ import app.recomp.domain.progression.ExerciseChart
 import app.recomp.domain.progression.ExerciseChartData
 import app.recomp.domain.training.Loads
 import app.recomp.ui.components.Labels
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.navigation.ExerciseHistoryRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
@@ -98,6 +99,7 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
         onPauseOrDispose {}
     }
     val dates = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
+    val style = LocalUnitStyle.current
 
     Scaffold(
         topBar = {
@@ -127,8 +129,8 @@ fun ExerciseHistoryScreen(onBack: () -> Unit, viewModel: ExerciseHistoryViewMode
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(entry.sets, style = MaterialTheme.typography.titleMedium)
-                        entry.bestE1rmG?.let { Text("Estimated 1RM ${Loads.formatKg((it + 50) / 100 * 100)} kg", style = MaterialTheme.typography.bodySmall) }
+                        Text(Loads.describe(entry.sets, style, entry.loadType), style = MaterialTheme.typography.titleMedium)
+                        entry.bestE1rmG?.let { Text("Estimated 1RM ${Labels.e1rm(it, style)}", style = MaterialTheme.typography.bodySmall) }
                         if (entry.records.isNotEmpty()) {
                             Text("PR: " + entry.records.joinToString { Labels.record(it, exercise?.loadType == LoadType.ASSISTED) }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
                         }

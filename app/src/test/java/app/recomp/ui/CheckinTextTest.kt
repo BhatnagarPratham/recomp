@@ -17,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
+import app.recomp.domain.units.UnitStyle
 
 /** The check-in screen's sentences (PRD §12.1) where they depend on state. Numbers are invented. */
 class CheckinTextTest {
@@ -42,9 +43,18 @@ class CheckinTextTest {
 
     @Test
     fun `the verdict compares against the pace of the goal the flag belongs to`() {
-        assertEquals("Losing slower than planned: −0.2% a week against −0.75%", CheckinText.verdict(view(Goal.FAT_LOSS)))
+        assertEquals("Losing slower than planned: −0.2% a week against −0.75%", CheckinText.verdict(view(Goal.FAT_LOSS), UnitStyle.METRIC))
         // The goal has since changed to a lean bulk: the cut's flag is named without the bulk's pace.
-        assertEquals("Losing slower than planned", CheckinText.verdict(view(Goal.LEAN_BULK)))
+        assertEquals("Losing slower than planned", CheckinText.verdict(view(Goal.LEAN_BULK), UnitStyle.METRIC))
+    }
+
+    @Test
+    fun `the headline and waist lines in lb and in (PR-05)`() {
+        val recomp = view(Goal.RECOMP).let { it.copy(evaluation = it.evaluation.copy(waistChangeCm = -1.27)) }
+        // 80 kg is 176.37 lb; −1.27 cm is −0.5 in.
+        assertEquals("Waist −0.5 in · Trend 176.4 lb", CheckinText.headline(recomp, UnitStyle.IMPERIAL))
+        assertEquals("Waist −1.3 cm · Trend 80.0 kg", CheckinText.headline(recomp, UnitStyle.METRIC))
+        assertEquals("Waist −0.5 in over 4 weeks", CheckinText.waist(recomp, UnitStyle.IMPERIAL))
     }
 
     @Test

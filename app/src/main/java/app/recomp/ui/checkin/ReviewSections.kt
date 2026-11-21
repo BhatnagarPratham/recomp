@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.recomp.data.repo.WeekReview
 import app.recomp.domain.review.CalendarDay
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.SectionTitle
 import java.time.DayOfWeek
 import java.time.format.TextStyle
@@ -36,6 +37,7 @@ import java.util.Locale
  */
 @Composable
 fun ReviewSections(r: WeekReview) {
+    val style = LocalUnitStyle.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val locale = LocalConfiguration.current.locales[0]
 
@@ -47,17 +49,17 @@ fun ReviewSections(r: WeekReview) {
     SectionTitle("Training")
     Text(ReviewText.plan(r.training), style = MaterialTheme.typography.bodyLarge)
     if (r.training.strengthTarget == null) Text(ReviewText.PAST_PLAN, style = MaterialTheme.typography.bodySmall, color = muted)
-    val records = ReviewText.records(r.training.records)
+    val records = ReviewText.records(r.training.records, LocalUnitStyle.current)
     if (records.isEmpty()) Text(ReviewText.NO_RECORDS, color = muted)
     records.take(ReviewText.RECORDS_SHOWN).forEach { Text(it) }
     if (records.size > ReviewText.RECORDS_SHOWN) Text(ReviewText.moreRecords(records.size - ReviewText.RECORDS_SHOWN), color = muted)
     if (r.training.stalled.isNotEmpty()) Text(ReviewText.stalled(r.training.stalled), color = muted)
 
     SectionTitle("Body")
-    Text(ReviewText.trend(r.body), style = MaterialTheme.typography.bodyLarge)
+    Text(ReviewText.trend(r.body, style), style = MaterialTheme.typography.bodyLarge)
     ReviewText.earlierPlan(r.plan)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = muted) }
-    ReviewText.waist(r.body)?.let { Text(it) }
-    r.body.scan?.let { Text(ReviewText.scan(it)) }
+    ReviewText.waist(r.body, style)?.let { Text(it) }
+    r.body.scan?.let { Text(ReviewText.scan(it, style)) }
     r.activity?.let { a ->
         ReviewText.steps(a)?.let { Text(it) }
         ReviewText.sleep(a)?.let { Text(it) }
@@ -65,7 +67,7 @@ fun ReviewSections(r: WeekReview) {
 
     r.outlook?.let {
         SectionTitle("Finish line")
-        Text(ReviewText.outlook(it), style = MaterialTheme.typography.bodyLarge)
+        Text(ReviewText.outlook(it, style), style = MaterialTheme.typography.bodyLarge)
     }
 
     SectionTitle(r.month.month.getDisplayName(TextStyle.FULL, locale) + " ${r.month.year}")

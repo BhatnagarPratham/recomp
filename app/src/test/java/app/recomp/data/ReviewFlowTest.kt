@@ -57,6 +57,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import app.recomp.domain.units.UnitStyle
 
 /** The weekly review (HM-03, HM-04, PRD §12.4): each aggregate on fixed, invented data. */
 @RunWith(RobolectricTestRunner::class)
@@ -265,13 +266,13 @@ class ReviewFlowTest {
         val within = reviews.week(date(28), today = date(70)).body
         assertEquals(-1.0, within.waistChangeCm!!, 1e-9)
         assertEquals(date(0), within.waistSince)
-        assertEquals("Waist 89.0 cm (−1.0 cm since ${BodyText.shortDate(date(0))})", ReviewText.waist(within))
+        assertEquals("Waist 89.0 cm (−1.0 cm since ${BodyText.shortDate(date(0))})", ReviewText.waist(within, UnitStyle.METRIC))
         // 29 days apart: just the reading.
         val stale = reviews.week(date(56), today = date(70)).body
         assertEquals(88.6, stale.waistCm!!, 1e-9)
         assertNull(stale.waistChangeCm)
         assertNull(stale.waistSince)
-        assertEquals("Waist 88.6 cm", ReviewText.waist(stale))
+        assertEquals("Waist 88.6 cm", ReviewText.waist(stale, UnitStyle.METRIC))
     }
 
     private fun cut(startedOn: LocalDate) = GoalPlan.of(Goal.FAT_LOSS, Pace.STANDARD, 76.0, FinishLine.GoalWeight, startedOn)
@@ -363,7 +364,7 @@ class ReviewFlowTest {
         val week = reviews.week(date(28), today = date(36))
         assertEquals(WeekPlan.Current, week.plan)
         assertEquals(FinishOutlook.NeedsData(newPlan = true), week.outlook)
-        assertEquals("The date appears once your plan is a week old", ReviewText.outlook(week.outlook!!))
+        assertEquals("The date appears once your plan is a week old", ReviewText.outlook(week.outlook!!, UnitStyle.METRIC))
         // The next week the plan is 10 days old at its last weigh-in: a rate over those days.
         val next = reviews.week(date(35), today = date(43)).outlook
         assertTrue("$next", next !is FinishOutlook.NeedsData)

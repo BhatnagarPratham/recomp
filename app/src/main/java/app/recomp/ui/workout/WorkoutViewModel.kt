@@ -25,7 +25,10 @@ import app.recomp.domain.training.Prefill
 import app.recomp.domain.training.SetValues
 import app.recomp.domain.training.Supersets
 import app.recomp.domain.training.WarmupPlanner
+import app.recomp.domain.units.LoadUnits
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.NewExercise
+import app.recomp.ui.components.unitStyle
 import app.recomp.ui.navigation.WorkoutRoute
 import app.recomp.workout.RestState
 import app.recomp.workout.RestTimer
@@ -86,9 +89,11 @@ data class ExerciseUi(
     val canSupersetWithNext: Boolean = false,
     /** WL-11's suggestion for the first heavy lift, lightest first; empty when there's none to show. */
     val warmup: List<SetValues> = emptyList(),
+    /** The persona's units and decimal mark (PR-05): every load and step on the card and dock. */
+    val style: UnitStyle = UnitStyle.METRIC,
 ) {
     /** "45 × 12/12/10 · add reps", or null for a baseline. */
-    val targetText: String? get() = target?.takeIf { it.action != Action.BASELINE }?.let { "${Targets.describe(it)} · ${Targets.actionLabel(it)}" }
+    val targetText: String? get() = target?.takeIf { it.action != Action.BASELINE }?.let { "${Targets.describe(it, style)} · ${Targets.actionLabel(it)}" }
 
     /** The stall card shows until the exercise's first set is ticked (PO-05). */
     val showStall: Boolean get() = target?.stalled == true && canSwap
@@ -98,7 +103,7 @@ data class ExerciseUi(
     val canSwap: Boolean get() = sets.none { it.done }
 
     /** "Warm-up: 20 × 8 · 30 × 5 · 40 × 3", or null. */
-    val warmupText: String? get() = warmup.takeIf { it.isNotEmpty() }?.let(WarmupPlanner::describe)
+    val warmupText: String? get() = warmup.takeIf { it.isNotEmpty() }?.let { WarmupPlanner.describe(it, style) }
 
     fun ref() = Supersets.ExerciseRef(supersetGroup, sets.map { Supersets.SetRef(it.id, it.type == SetType.WARMUP, it.done) })
 }
@@ -113,6 +118,7 @@ data class WorkoutUi(
     val selectedSetId: Long? = null,
     val rest: RestState? = null,
     val keepScreenOn: Boolean = false,
+    val style: UnitStyle = UnitStyle.METRIC,
 ) {
     private val allSets get() = exercises.flatMap { ex -> ex.sets.map { ex to it } }
     val selected: Pair<ExerciseUi, SetUi>? get() = allSets.firstOrNull { it.second.id == selectedSetId }
@@ -170,15 +176,15 @@ class WorkoutViewModel @Inject constructor(
     }
 
     val ui: StateFlow<WorkoutUi> = combine(
-        combine(workouts.observeSession(sessionId), title, training.settings) { s, t, settings -> Triple(s, t, settings.keepScreenOn) },
+        combine(workouts.observeSession(sessionId), title, training.settings, training.units) { s, t, settings, units -> Head(s, t, settings.keepScreenOn, unitStyle(units)) },
         exercises,
         history,
         requestedSelection,
         restTimer.state,
-    ) { (session, title, keepScreenOn), rows, history, requested, rest ->
+    ) { (session, title, keepScreenOn, style), rows, history, requested, rest ->
         val groups = Supersets.normalize(rows.map { it.entry.supersetGroup })
         val built = rows.mapIndexed { i, row ->
-            row.toUi(history[row.exercise.id]).copy(
+            row.toUi(history[row.exercise.id], style).copy(
                 supersetGroup = groups[i],
                 superset = Supersets.position(groups, i),
                 canSupersetWithNext = Supersets.canJoinNext(groups, i),
@@ -199,6 +205,7 @@ class WorkoutViewModel @Inject constructor(
             selectedSetId = selected,
             rest = rest,
             keepScreenOn = keepScreenOn,
+            style = style,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkoutUi())
 
@@ -210,11 +217,11 @@ class WorkoutViewModel @Inject constructor(
     private fun ExerciseUi.withWarmup(): ExerciseUi {
         if (sets.any { it.type == SetType.WARMUP || it.done }) return this
         val load = target?.loadG ?: return this
-        val floor = if (equipment == Equipment.BARBELL) WarmupPlanner.BAR_G else 0
-        return copy(warmup = WarmupPlanner.plan(load, incrementG, floor))
+        val floor = if (equipment == Equipment.BARBELL) WarmupPlanner.barG(style.units) else 0
+        return copy(warmup = WarmupPlanner.plan(load, incrementG, floor, style.units))
     }
 
-    private fun SessionExerciseWithSets.toUi(last: List<LoggedSet>?): ExerciseUi {
+    private fun SessionExerciseWithSets.toUi(last: List<LoggedSet>?, style: UnitStyle): ExerciseUi {
         val ordered = sets.sortedBy { it.setIndex }
         val logsLoad = Loads.logsLoad(exercise.loadType)
         val target = ProgressionRepository.decode(entry.recommendationJson)
@@ -242,8 +249,9 @@ class WorkoutViewModel @Inject constructor(
             repMax = entry.repMax,
             restSec = entry.restSec,
             notes = entry.notes,
-            last = last?.let { Loads.describe(it, exercise.loadType) }?.ifEmpty { null },
+            last = last?.let { Loads.describe(it, style, exercise.loadType) }?.ifEmpty { null },
             target = target,
+            style = style,
             sets = ordered.mapIndexed { i, set ->
                 val ordinal = if (set.setType == SetType.WORKING) working else -1
                 SetUi(
@@ -264,7 +272,7 @@ class WorkoutViewModel @Inject constructor(
                     rir = set.rir,
                     done = set.completedAt != null,
                     feedback = if (set.completedAt != null && ordinal >= 0) {
-                        Targets.feedback(plannedSets.getOrNull(ordinal), set.toLogged(), lastWorking.getOrNull(ordinal), exercise.loadType == LoadType.ASSISTED)
+                        Targets.feedback(plannedSets.getOrNull(ordinal), set.toLogged(), lastWorking.getOrNull(ordinal), style, exercise.loadType == LoadType.ASSISTED)
                     } else {
                         null
                     },
@@ -284,7 +292,7 @@ class WorkoutViewModel @Inject constructor(
 
     fun stepLoad(setId: Long, up: Boolean) {
         val (ex, set) = find(setId) ?: return
-        val next = Loads.step(set.load ?: 0, ex.incrementG, up)
+        val next = LoadUnits.step(set.load ?: 0, ex.incrementG, up, ex.style.units)
         viewModelScope.launch { workouts.setValues(setId, next, set.enteredReps) }
     }
 
@@ -405,3 +413,6 @@ class WorkoutViewModel @Inject constructor(
         workouts.discard(sessionId)
     }
 }
+
+/** The session row, title, keep-screen-on and the unit style, combined for [WorkoutViewModel.ui]. */
+private data class Head<S>(val session: S, val title: String, val keepScreenOn: Boolean, val style: UnitStyle)

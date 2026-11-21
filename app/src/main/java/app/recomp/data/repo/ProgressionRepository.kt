@@ -26,24 +26,33 @@ import app.recomp.domain.progression.ProgressionEngine
 import app.recomp.domain.progression.Recommendation
 import app.recomp.domain.progression.SessionSet
 import app.recomp.domain.progression.StallReset
-import app.recomp.domain.progression.Targets
+import app.recomp.domain.persona.Units
 import app.recomp.domain.training.Loads
+import app.recomp.domain.training.LoggedSet
+import app.recomp.domain.units.LoadUnits
+import java.math.RoundingMode
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-/** One line of Today's preview (PRD §7.5): "Bench press 42.5 × 8 ↑". */
-data class PreviewLine(val name: String, val target: String, val weightUp: Boolean)
+/** One line of Today's preview (PRD §7.5): "Bench press 42.5 × 8 ↑". The screen formats [rec] in the persona's units. */
+data class PreviewLine(val name: String, val rec: Recommendation) {
+    val weightUp: Boolean get() = rec.action == Action.INCREASE && rec.loadG != null
+}
 
-/** One past session of an exercise (HM-02). */
+/** One past session of an exercise (HM-02). [sets] are formatted at the screen, in the persona's units. */
 data class HistoryEntry(
     val sessionId: Long,
     val date: LocalDate,
     val routineName: String?,
-    val sets: String,
+    val sets: List<LoggedSet>,
+    val loadType: LoadType,
     val bestE1rmG: Int?,
     val records: List<PrType>,
 )
@@ -99,12 +108,20 @@ class ProgressionRepository @Inject constructor(
         nutritionDao.targetOn(days.of(now))?.let { EnergyBalance.inDeficit(it.kcal, it.tdeeEstimate) } ?: false
 
     /** [asOf] limits history to sessions started by then, e.g. to replay what an old workout implied. */
-    suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int, asOf: Long = Long.MAX_VALUE): Recommendation =
-        ProgressionEngine.recommend(
+    suspend fun recommend(exercise: ExerciseEntity, targetSets: Int, repMin: Int, repMax: Int, asOf: Long = Long.MAX_VALUE): Recommendation {
+        val past = history(exercise.id, asOf = asOf)
+        val rec = ProgressionEngine.recommend(
             ExerciseConfig(repMin, repMax, targetSets, exercise.incrementG, exercise.loadType),
-            history(exercise.id, asOf = asOf),
+            past,
             context(exercise, asOf),
         )
+        return onGrid(rec, past.firstOrNull()?.topLoadG(exercise.loadType), exercise.incrementG, currentUnits())
+    }
+
+    /** The persona's units (PR-05): targets snap to the lb grid in lb, and screens format loads in them. */
+    suspend fun currentUnits(): Units = prefs.currentPersona().units
+
+    val units: Flow<Units> = prefs.persona.map { it.units }.distinctUntilChanged()
 
     // Stall choices (PO-05). Both reset stall detection from the start of today's session.
 
@@ -115,7 +132,10 @@ class ProgressionRepository @Inject constructor(
         val exercise = exerciseDao.get(row.exerciseId) ?: return@withTransaction
         val top = history(exercise.id, limit = 1).firstOrNull()?.topLoadG(exercise.loadType) ?: return@withTransaction
         val load = ProgressionEngine.deloadLoad(exercise.loadType, top, exercise.incrementG, bodyWeightFor(exercise))
-        val deload = Recommendation(Action.DELOAD, load, List(row.targetSets) { row.repMin }, assisted = exercise.loadType == LoadType.ASSISTED)
+        val deload = onGrid(
+            Recommendation(Action.DELOAD, load, List(row.targetSets) { row.repMin }, assisted = exercise.loadType == LoadType.ASSISTED),
+            top, exercise.incrementG, currentUnits(),
+        )
         workoutDao.setRecommendation(row.id, encode(deload))
         exerciseDao.update(exercise.copy(stallResetAt = session.startedAt - 1, stallResetKeepsBaseline = false))
     }
@@ -130,7 +150,10 @@ class ProgressionRepository @Inject constructor(
         val exercise = exerciseDao.get(exerciseId)?.takeIf { it.deloadPending } ?: return null
         val top = history(exercise.id, limit = 1).firstOrNull()?.topLoadG(exercise.loadType) ?: return null
         val load = ProgressionEngine.deloadLoad(exercise.loadType, top, exercise.incrementG, bodyWeightFor(exercise))
-        return Recommendation(Action.DELOAD, load, List(targetSets) { repMin }, assisted = exercise.loadType == LoadType.ASSISTED)
+        return onGrid(
+            Recommendation(Action.DELOAD, load, List(targetSets) { repMin }, assisted = exercise.loadType == LoadType.ASSISTED),
+            top, exercise.incrementG, currentUnits(),
+        )
     }
 
     /**
@@ -186,7 +209,7 @@ class ProgressionRepository @Inject constructor(
     /** Today's next-workout card (PRD §7.5): each exercise with its target, ↑ where the weight goes up. */
     suspend fun preview(routineId: Long): List<PreviewLine> = routineDao.exercises(routineId).map { row ->
         val rec = recommend(row.exercise, row.entry.targetSets, row.entry.repMin, row.entry.repMax)
-        PreviewLine(row.exercise.name, if (rec.action == Action.BASELINE) "first time" else Targets.describe(rec), rec.action == Action.INCREASE && rec.loadG != null)
+        PreviewLine(row.exercise.name, rec)
     }
 
     /**
@@ -205,7 +228,8 @@ class ProgressionRepository @Inject constructor(
                 sessionId = first.sessionId,
                 date = first.logDate,
                 routineName = first.routineName,
-                sets = Loads.describe(sets, loadType),
+                sets = sets,
+                loadType = loadType,
                 bestE1rmG = lifted.filter { it.type != SetType.WARMUP && (it.loadG ?: 0) > 0 && it.reps in 1..ProgressionEngine.E1RM_MAX_REPS }
                     .maxOfOrNull { ProgressionEngine.e1rmG(it.loadG!!, it.reps) }?.toInt(),
                 records = records[first.sessionId].orEmpty(),
@@ -235,6 +259,39 @@ class ProgressionRepository @Inject constructor(
         const val PR_HISTORY_LIMIT = 500
         const val FULL_HISTORY_LIMIT = 500
         private val json = Json { ignoreUnknownKeys = true }
+
+        /**
+         * PRD §12.16: in lb, a target lands on the exercise's lb grid before it's frozen, so typing what's shown hits it
+         * exactly. An increase goes to the grid point nearest the engine's load that's still past what you lifted ([topG]):
+         * heavier, or for an assisted lift less assistance. A deload rounds to the easier side (lighter, or more
+         * assistance). A repeat or added rep keeps what you lifted, to the nearest 0.01 lb. In kg nothing changes.
+         */
+        fun onGrid(rec: Recommendation, topG: Int?, incrementG: Int, units: Units): Recommendation {
+            val load = rec.loadG ?: return rec
+            if (units == Units.METRIC) return rec
+            val snapped = when (rec.action) {
+                Action.INCREASE -> when {
+                    topG == null -> LoadUnits.snap(load, units)
+                    rec.assisted -> lessAssistance(topG, load, incrementG, units)
+                    else -> LoadUnits.increase(topG, load, incrementG, units)
+                }
+                Action.DELOAD -> LoadUnits.toGrid(load, incrementG, units, if (rec.assisted) RoundingMode.UP else RoundingMode.DOWN)
+                // A repeat or add-a-rep keeps exactly what you lifted (PRD §12.16). Snapping a kg-era load to 0.01 lb can
+                // round it up (42,500 g → 42,502 g), which would log a false heavier lift; LoadEntry keeps the stored
+                // grams when the shown text is unchanged, so typing what's shown still hits the target.
+                else -> load
+            }
+            return rec.copy(loadG = snapped)
+        }
+
+        /** [LoadUnits.increase] for assistance, which goes down: the grid point nearest [targetG] below [topG], never under 0. */
+        private fun lessAssistance(topG: Int, targetG: Int, incrementG: Int, units: Units): Int {
+            if (targetG <= 0 || incrementG <= 0) return LoadUnits.snap(targetG, units)
+            val near = LoadUnits.toGrid(targetG, incrementG, units, RoundingMode.HALF_UP)
+            if (near < topG) return near
+            val down = LoadUnits.step(LoadUnits.toGrid(topG, incrementG, units, RoundingMode.UP), incrementG, up = false, units)
+            return if (down < topG) down else LoadUnits.step(down, incrementG, up = false, units)
+        }
 
         /** `session_exercise.recommendation_json` (TRD §5.1). */
         fun encode(rec: Recommendation): String =

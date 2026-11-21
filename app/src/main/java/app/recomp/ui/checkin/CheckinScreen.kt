@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import app.recomp.ui.components.LocalUnitStyle
 
 /**
  * The review on screen. [week] is the week asked for, which ‹ and › move through [weeks]; [checkin] (null for the week
@@ -228,13 +229,13 @@ private fun CheckinContent(v: CheckinView, busy: Boolean, viewModel: CheckinView
 
     // The goal's headline and one verdict.
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(CheckinText.headline(v), style = MaterialTheme.typography.headlineSmall)
+        Text(CheckinText.headline(v, LocalUnitStyle.current), style = MaterialTheme.typography.headlineSmall)
         Text(
-            CheckinText.verdict(v),
+            CheckinText.verdict(v, LocalUnitStyle.current),
             style = MaterialTheme.typography.titleMedium,
             color = if (v.status == CheckinStatus.FLAGGED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (v.plan.goal == Goal.RECOMP || v.evaluation.waistChangeCm != null) Text(CheckinText.waist(v), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (v.plan.goal == Goal.RECOMP || v.evaluation.waistChangeCm != null) Text(CheckinText.waist(v, LocalUnitStyle.current), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
     // The maintenance estimate. The week's averages and trend are in the review's Food and Body sections below.

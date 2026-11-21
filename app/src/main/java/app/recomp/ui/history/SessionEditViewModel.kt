@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
+import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.HistoryRepository
 import app.recomp.domain.model.LoadType
 import app.recomp.domain.model.SetType
@@ -13,6 +14,9 @@ import app.recomp.domain.training.EditedSet
 import app.recomp.domain.training.Loads
 import app.recomp.domain.training.SessionEdit
 import app.recomp.domain.training.Supersets
+import app.recomp.domain.units.UnitStyle
+import app.recomp.ui.components.LoadEntry
+import app.recomp.ui.components.unitStyle
 import app.recomp.ui.navigation.SessionEditRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
@@ -26,8 +30,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** A set row being edited. [key] is stable while the screen is open; [id] is null for an added set. */
-data class EditSetUi(val key: Long, val id: Long?, val type: SetType, val load: String, val reps: String, val rir: Int?)
+/**
+ * A set row being edited. [key] is stable while the screen is open; [id] is null for an added set. [storedG] is the
+ * load as stored, kept when [load] still reads as it was shown (PRD §12.16: a lb screen never rewrites a kg-era set).
+ */
+data class EditSetUi(val key: Long, val id: Long?, val type: SetType, val load: String, val reps: String, val rir: Int?, val storedG: Int? = null)
 
 data class EditExerciseUi(
     val sessionExerciseId: Long,
@@ -51,6 +58,8 @@ data class SessionEditUi(
     val error: String? = null,
     val dirty: Boolean = false,
     val saving: Boolean = false,
+    /** The persona's units (PR-05): loads show and are typed in them. */
+    val style: UnitStyle = UnitStyle.METRIC,
 )
 
 sealed interface EditDone {
@@ -63,7 +72,11 @@ sealed interface EditDone {
  * *Save*, which is one transaction ([HistoryRepository.saveEdit]).
  */
 @HiltViewModel
-class SessionEditViewModel @Inject constructor(savedState: SavedStateHandle, private val history: HistoryRepository) : ViewModel() {
+class SessionEditViewModel @Inject constructor(
+    savedState: SavedStateHandle,
+    private val history: HistoryRepository,
+    private val prefs: SettingsPrefs,
+) : ViewModel() {
     private val sessionId = savedState.toRoute<SessionEditRoute>().sessionId
     private val zone: ZoneId = ZoneId.systemDefault()
     private var nextKey = 0L
@@ -86,6 +99,7 @@ class SessionEditViewModel @Inject constructor(savedState: SavedStateHandle, pri
                 return@launch
             }
             dayStart = history.dayStart()
+            val style = unitStyle(prefs.currentPersona().units)
             originalStart = editable.session.startedAt
             originalEnd = editable.session.endedAt ?: originalStart
             fun time(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().truncatedTo(ChronoUnit.MINUTES)
@@ -96,10 +110,11 @@ class SessionEditViewModel @Inject constructor(savedState: SavedStateHandle, pri
                 start = time(originalStart),
                 end = time(originalEnd),
                 notes = editable.session.notes.orEmpty(),
+                style = style,
                 exercises = editable.exercises.map { row ->
                     EditExerciseUi(
                         row.entry.id, row.exercise.name, row.exercise.loadType, row.entry.supersetGroup,
-                        sets = row.sets.map { EditSetUi(nextKey++, it.id, it.setType, it.loadG?.let(Loads::formatKg).orEmpty(), "${it.reps ?: 0}", it.rir) },
+                        sets = row.sets.map { EditSetUi(nextKey++, it.id, it.setType, LoadEntry.shown(it.loadG, style), "${it.reps ?: 0}", it.rir, it.loadG) },
                     )
                 }.grouped(),
             )
@@ -149,7 +164,7 @@ class SessionEditViewModel @Inject constructor(savedState: SavedStateHandle, pri
     /** A new set starts as a copy of the one above it, the usual case for a set you forgot to tick. */
     fun addSet(exercise: Long) = changeSets(exercise) { sets ->
         val last = sets.lastOrNull()
-        sets + EditSetUi(nextKey++, null, SetType.WORKING, last?.load.orEmpty(), last?.reps.orEmpty(), null)
+        sets + EditSetUi(nextKey++, null, SetType.WORKING, last?.load.orEmpty(), last?.reps.orEmpty(), null, last?.storedG)
     }
 
     fun removeExercise(exercise: Long) = change { ui -> ui.copy(exercises = ui.exercises.filter { it.sessionExerciseId != exercise }.grouped()) }
@@ -163,7 +178,7 @@ class SessionEditViewModel @Inject constructor(savedState: SavedStateHandle, pri
                 ex.sets.mapIndexed { i, set ->
                     val where = "${ex.name}, set ${i + 1}"
                     val reps = set.reps.toIntOrNull() ?: return fail("$where: enter the reps.")
-                    val load = if (Loads.logsLoad(ex.loadType)) Loads.parseKg(set.load) ?: return fail("$where: enter a weight.") else null
+                    val load = if (Loads.logsLoad(ex.loadType)) LoadEntry.parse(set.load, set.storedG, ui.style) ?: return fail("$where: enter a weight.") else null
                     EditedSet(set.id, set.type, load, reps, set.rir).also { edited ->
                         SessionEdit.setProblem(edited, ex.loadType)?.let { return fail("$where: $it") }
                     }

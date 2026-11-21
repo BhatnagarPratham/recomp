@@ -24,7 +24,7 @@ enum class FoodRegion { INDIAN, INTERNATIONAL }
 /** Where the weight trend comes from (BM-01). */
 enum class WeightSource { HOME_SCALE, SCAN, GYM_SCALE }
 
-/** Display units. Storage is always metric; the MVP shows metric only (PRD §11). */
+/** Display units (PR-05, PRD §12.16). Storage is always metric; `UnitStyle` converts at the edge. */
 enum class Units { METRIC, IMPERIAL }
 
 /** Activity factor for TDEE (TRD §5.3). [MODERATE] is the default. */

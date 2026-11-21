@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** "Resume workout?" (WL-06, TRD §6.1). [stale] sessions are more than 4 hours old. */
@@ -81,6 +83,10 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** PR-05: the units every screen shows, from the persona; provided as `LocalUnitStyle` at the nav host's root. */
+    val units: StateFlow<app.recomp.domain.persona.Units> =
+        personas.stored.map { it.units }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, app.recomp.domain.persona.Units.METRIC)
 
     private val unreadableSeen = MutableStateFlow(false)
 

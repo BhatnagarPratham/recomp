@@ -33,7 +33,9 @@ import androidx.compose.ui.unit.dp
 import app.recomp.data.db.MeasurementEntity
 import app.recomp.domain.body.MobilityMarker
 import app.recomp.domain.body.MobilityMarkers
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.ChoiceChips
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.NumberEntryDialog
 import app.recomp.ui.components.Stepper
 import app.recomp.ui.components.WhenRow
@@ -49,12 +51,15 @@ object MobilityText {
         MobilityMarker.TOE_TOUCH -> "Toe touch"
     }
 
-    /** "+3.5 cm past your toes", "4 cm short", "45 s", "Yes". */
-    fun value(m: MobilityMarker, v: Double): String = when (m) {
+    /**
+     * Sit-and-reach is a length in the style's unit, past or short of your toes; the squat hold's seconds and the
+     * toe touch don't convert (PRD §12.16).
+     */
+    fun value(m: MobilityMarker, v: Double, style: UnitStyle): String = when (m) {
         MobilityMarker.SIT_AND_REACH -> when {
-            v > 0 -> "${BodyText.oneDecimal(v)} cm past your toes"
-            v < 0 -> "${BodyText.oneDecimal(-v)} cm short"
-            else -> "At your toes"
+            BodyText.lengthShowsZero(v, style) -> "At your toes"
+            v > 0 -> "${BodyText.length(v, style)} past your toes"
+            else -> "${BodyText.length(-v, style)} short"
         }
         MobilityMarker.SQUAT_HOLD -> BodyText.minutesSeconds(v.roundToInt())
         MobilityMarker.TOE_TOUCH -> if (v >= 1.0) "Yes" else "Not yet"
@@ -64,6 +69,7 @@ object MobilityText {
 /** YG-04: the monthly card. It shows each marker's latest and asks again every 4 weeks; hidden while the setting is off. */
 @Composable
 fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: LocalDate, onLog: () -> Unit, onOpen: (MobilityMarker) -> Unit = {}) {
+    val style = LocalUnitStyle.current
     val last = history.values.flatten().maxOfOrNull { it.logDate }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -74,9 +80,9 @@ fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: L
                 rows.firstOrNull()?.let { latest ->
                     // Tapping a marker lists its readings to change or delete one.
                     Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "${MobilityText.name(m)} readings") { onOpen(m) }) {
-                        Text("${MobilityText.name(m)}: ${MobilityText.value(m, latest.value)}", style = MaterialTheme.typography.bodyLarge)
+                        Text("${MobilityText.name(m)}: ${MobilityText.value(m, latest.value, style)}", style = MaterialTheme.typography.bodyLarge)
                         rows.getOrNull(1)?.let { before ->
-                            Text("Before: ${MobilityText.value(m, before.value)} on ${BodyText.date(before.logDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Before: ${MobilityText.value(m, before.value, style)} on ${BodyText.date(before.logDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -91,10 +97,10 @@ fun MobilityCard(history: Map<MobilityMarker, List<MeasurementEntity>>, today: L
     }
 }
 
-/** The markers you took; one left at its start (nothing entered) isn't saved. */
-data class MobilityDraft(val reachTenths: Int?, val holdSeconds: Int?, val toeTouch: Boolean?, val at: Long) {
+/** The markers you took; one left at its start (nothing entered) isn't saved. Sit-and-reach is in exact cm. */
+data class MobilityDraft(val reachCm: Double?, val holdSeconds: Int?, val toeTouch: Boolean?, val at: Long) {
     fun values(): Map<MobilityMarker, Double> = buildMap {
-        reachTenths?.let { put(MobilityMarker.SIT_AND_REACH, it / 10.0) }
+        reachCm?.let { put(MobilityMarker.SIT_AND_REACH, it) }
         holdSeconds?.let { put(MobilityMarker.SQUAT_HOLD, clampHold(it).toDouble()) }
         toeTouch?.let { put(MobilityMarker.TOE_TOUCH, if (it) 1.0 else 0.0) }
     }
@@ -104,6 +110,15 @@ data class MobilityDraft(val reachTenths: Int?, val holdSeconds: Int?, val toeTo
         const val MAX_HOLD = 1_800
 
         fun clampHold(seconds: Int): Int = seconds.coerceIn(0, MAX_HOLD)
+
+        /** What `MobilityMarkers.validReach` takes, in cm. */
+        val REACH_CM = -60.0..60.0
+
+        /** One press of the sit-and-reach stepper: 0.5 cm, or ¼ in, in exact cm. */
+        fun reachStep(cm: Double, up: Boolean, style: UnitStyle): Double = BodyEntry.lengthStep(cm, up, style, REACH_CM)
+
+        /** A typed sit-and-reach in exact cm, negative when short; the prefill left unchanged keeps [cm]. */
+        fun typedReach(text: String, cm: Double, style: UnitStyle): Double? = BodyEntry.typedLength(text, cm, style, REACH_CM)
     }
 }
 
@@ -111,8 +126,10 @@ data class MobilityDraft(val reachTenths: Int?, val holdSeconds: Int?, val toeTo
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (MobilityDraft) -> Unit) {
+    val style = LocalUnitStyle.current
+    val (minus, plus) = BodyEntry.lengthStepLabels(style)
     // Saveable, so a rotation keeps what's entered and a running stopwatch keeps counting from when it started.
-    var reach by rememberSaveable { mutableStateOf<Int?>(null) }
+    var reach by rememberSaveable { mutableStateOf<Double?>(null) }
     var hold by rememberSaveable { mutableStateOf<Int?>(null) }
     var toe by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var at by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
@@ -144,16 +161,16 @@ fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (Mobility
 
             Text(MobilityText.name(MobilityMarker.SIT_AND_REACH), style = MaterialTheme.typography.titleMedium)
             Text(MobilityMarkers.how(MobilityMarker.SIT_AND_REACH), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val r = reach ?: ((lastReachCm ?: 0.0) * 10).roundToInt()
+            val r = reach ?: lastReachCm ?: 0.0
             Stepper(
-                "cm past your toes",
-                if (reach == null) "—" else BodyText.signedCm(r / 10.0),
-                onMinus = { reach = (r - 5).coerceAtLeast(-600) },
-                onPlus = { reach = (r + 5).coerceAtMost(600) },
+                "Past your toes",
+                if (reach == null) "—" else BodyText.signedLengthValue(r, style),
+                onMinus = { reach = MobilityDraft.reachStep(r, up = false, style) },
+                onPlus = { reach = MobilityDraft.reachStep(r, up = true, style) },
                 onValueClick = { typing = MobilityMarker.SIT_AND_REACH },
                 modifier = Modifier.fillMaxWidth(),
-                minusLabel = "−½",
-                plusLabel = "+½",
+                minusLabel = minus,
+                plusLabel = plus,
                 ghost = reach == null,
             )
 
@@ -187,9 +204,12 @@ fun MobilitySheet(lastReachCm: Double?, onDismiss: () -> Unit, onSave: (Mobility
     }
 
     when (typing) {
-        MobilityMarker.SIT_AND_REACH -> NumberEntryDialog("Sit-and-reach", BodyText.oneDecimal((reach ?: ((lastReachCm ?: 0.0) * 10).roundToInt()) / 10.0), decimal = true, onDismiss = { typing = null }, suffix = "cm") { text ->
-            typing = null
-            BodyText.parseSigned(text)?.takeIf(MobilityMarkers::validReach)?.let { reach = (it * 10).roundToInt() }
+        MobilityMarker.SIT_AND_REACH -> {
+            val r = reach ?: lastReachCm ?: 0.0
+            NumberEntryDialog("Sit-and-reach", BodyEntry.lengthText(r, style), decimal = true, onDismiss = { typing = null }, suffix = style.length, signed = true) { text ->
+                typing = null
+                MobilityDraft.typedReach(text, r, style)?.takeIf(MobilityMarkers::validReach)?.let { reach = it }
+            }
         }
         MobilityMarker.SQUAT_HOLD -> NumberEntryDialog("Deep-squat hold", "${hold ?: elapsed}", decimal = false, onDismiss = { typing = null }, suffix = "s") { text ->
             typing = null
