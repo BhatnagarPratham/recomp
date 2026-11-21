@@ -610,7 +610,7 @@ AI uses an API key that each person brings, from the provider they choose (AI-05
 | DA-05 | P2 | Import history from other workout apps' CSV exports (Strong, Hevy). |
 
 **Export and import in the app (M4, DA-01):**
-- **Export all data** (Settings → Data) opens the system's save dialog with `recomp-backup-YYYY-MM-DD.zip`, so the file can go to Google Drive or any folder.
+- **Export all data** (Settings → Data) opens the system's save dialog with `recomp-export-YYYY-MM-DD.zip`, so the file can go to Google Drive or any folder. The name differs from the automatic backup's `recomp-backup-…`, so its rotation never counts or deletes an export.
   - It holds every table and every setting. It never holds the AI key.
   - A message says what was saved.
 - **Import a backup** opens a file.
