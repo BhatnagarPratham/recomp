@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -29,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -58,6 +60,7 @@ import app.recomp.ui.body.WaistDraft
 import app.recomp.ui.body.WaistSheet
 import app.recomp.ui.body.WeighInDraft
 import app.recomp.ui.body.WeighInSheet
+import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.extra.ExtraLogSheet
@@ -342,7 +345,16 @@ fun TodayScreen(
             val names = (ui.dueExtras + ui.otherExtras).associate { it.id to it.name }
             val parts = listOf("Strength ${week.strengthDays} of ${week.strengthTarget} days") +
                 week.extras.mapNotNull { e -> names[e.routineId]?.let { if (e.planned > 0) "$it ${e.done} of ${e.planned}" else "$it ${e.done}" } }
-            Text("This week: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodyLarge)
+            // Today's weekly-plan card opens this week's review (PRD §12.4), the same screen as the check-in.
+            val openReview = LocalOpenCheckin.current
+            Text(
+                "This week: " + parts.joinToString(" · ") + " ›",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier
+                    .clickable(onClickLabel = "Open this week's review") { openReview(WeeklyPlan.weekStart(today)) }
+                    .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically),
+            )
         }
 
         ui.last?.let { last ->

@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -99,6 +101,9 @@ class BodyViewModel @Inject constructor(private val body: BodyRepository, days: 
     /** The chart's window in days; null is everything. */
     val range = MutableStateFlow<Long?>(28)
 
+    /** The body-composition chart's window in weeks (IB-04): 12, or null for everything. */
+    val compositionRange = MutableStateFlow<Long?>(12)
+
     fun save(d: WeighInDraft) = viewModelScope.launch { entries.save(d) }
     fun save(d: WaistDraft) = viewModelScope.launch { entries.save(d) }
     suspend fun deleteWeighIn(id: Long) = body.deleteWeighIn(id)
@@ -108,6 +113,8 @@ class BodyViewModel @Inject constructor(private val body: BodyRepository, days: 
 }
 
 private val RANGES: List<Long?> = listOf(28L, 84L, null)
+
+private val COMPOSITION_RANGES: List<Long?> = listOf(12L, null)
 
 private fun rangeLabel(days: Long?) = when (days) {
     28L -> "4 weeks"
@@ -189,6 +196,16 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, viewModel: BodyViewModel = hiltViewM
             item {
                 Column {
                     SectionTitle("Scans")
+                    if (scans.isNotEmpty()) {
+                        val weeks by viewModel.compositionRange.collectAsStateWithLifecycle()
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ChoiceChips(COMPOSITION_RANGES, weeks, { if (it == null) "All" else "$it weeks" }, { viewModel.compositionRange.value = it })
+                                BodyCompositionChart(scans, t, waist, today, weeks)
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
                     ScanTable(scans, onOpen = { onOpenScan(it) }, onLog = { onOpenScan(null) })
                 }
             }
