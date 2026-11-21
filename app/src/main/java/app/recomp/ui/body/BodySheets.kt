@@ -1,5 +1,7 @@
 package app.recomp.ui.body
 
+import app.recomp.domain.body.TapeSites
+import app.recomp.domain.body.TapeSite
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,6 +52,9 @@ data class WeighInDraft(
 
 /** A waist measurement being logged or edited, in exact cm (PR-05: never via tenths, so ¼ in readings don't drift). */
 data class WaistDraft(val id: Long?, val cm: Double, val at: Long)
+
+/** *Log measurements* (BM-03): the sites due today, waist first, each in tenths of a cm, prefilled from last time. */
+data class TapeDraft(val sites: List<Pair<TapeSite, Int>>, val at: Long)
 
 /**
  * The weigh-in and waist sheets' maths in the persona's units (PR-05), kept out of composition so it's tested.
@@ -181,3 +186,57 @@ fun WaistSheet(draft: WaistDraft, onDismiss: () -> Unit, onDelete: (() -> Unit)?
         }
     }
 }
+
+private const val STEP_G = 100
+private const val MIN_G = 20_000
+private const val MAX_G = 300_000
+private const val MIN_WAIST = 300
+private const val MAX_WAIST = 2500
+
+/**
+ * *Log measurements* (PRD §12.13): waist first, then the other chosen sites once they're 4 weeks old. Each has
+ * its how-to and a 0.5 cm stepper, prefilled from last time.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MeasurementsSheet(draft: TapeDraft, onDismiss: () -> Unit, onSave: (TapeDraft) -> Unit) {
+    var values by remember { mutableStateOf(draft.sites.toMap()) }
+    var at by remember { mutableLongStateOf(draft.at) }
+    var typing by remember { mutableStateOf<TapeSite?>(null) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Log measurements", style = MaterialTheme.typography.titleLarge)
+            draft.sites.forEach { (site, _) ->
+                val tenths = values.getValue(site)
+                Text(TapeSites.how(site), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                Stepper(
+                    BodyText.site(site),
+                    BodyText.cm(tenths / 10.0),
+                    onMinus = { values = values + (site to (tenths - 5).coerceAtLeast(MIN_TAPE)) },
+                    onPlus = { values = values + (site to (tenths + 5).coerceAtMost(MAX_WAIST)) },
+                    onValueClick = { typing = site },
+                    modifier = Modifier.fillMaxWidth(),
+                    minusLabel = "−½",
+                    plusLabel = "+½",
+                )
+            }
+            WhenRow(at, BodyText::dateTime, { at = it })
+            Button(onClick = { onSave(TapeDraft(draft.sites.map { (site, _) -> site to values.getValue(site) }, at)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
+        }
+    }
+
+    typing?.let { site ->
+        NumberEntryDialog(BodyText.site(site), BodyText.oneDecimal(values.getValue(site) / 10.0), decimal = true, onDismiss = { typing = null }, suffix = "cm") { text ->
+            typing = null
+            BodyText.parse(text)?.let { (it * 10).roundToInt() }?.takeIf { it in MIN_TAPE..MAX_WAIST }?.let { values = values + (site to it) }
+        }
+    }
+}
+
+/** An arm can be far smaller than any waist. */
+private const val MIN_TAPE = 100
+

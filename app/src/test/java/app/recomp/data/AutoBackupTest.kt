@@ -4,6 +4,8 @@ import app.recomp.data.backup.AutoBackup
 import app.recomp.data.backup.BackupRun
 import app.recomp.data.backup.BackupStorage
 import app.recomp.data.backup.StoredFile
+import app.recomp.data.db.PhotoPose
+import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.data.prefs.BackupTarget
 import app.recomp.domain.export.BackupRotation
 import java.io.ByteArrayInputStream
@@ -36,8 +38,9 @@ class FakeBackupStorage : BackupStorage {
 
     override suspend fun files(target: BackupTarget): List<StoredFile> = files.keys.map { StoredFile(it, "uri:$it") }
 
-    override suspend fun write(target: BackupTarget, name: String?, bytes: ByteArray) {
+    override suspend fun write(target: BackupTarget, name: String?, source: File) {
         fail?.let { throw it }
+        val bytes = source.readBytes()
         if (name == null) single = bytes else files[name] = bytes
     }
 
@@ -162,5 +165,43 @@ class AutoBackupTest {
         assertTrue(app.prefs.exportable().asMap().keys.none { it.name.startsWith("backup_") })
         app.device.setBackupTarget(null)
         assertNull(app.device.autoBackup.first().target)
+    }
+
+    @Test
+    fun `photos go in the automatic backup only when switched on, and come back on restore`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        assertEquals(false, app.device.autoBackup.first().includePhotos)
+        val front = app.photos.newCaptureFile(PhotoPose.FRONT, 1).apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        app.photos.saveCapture(front, PhotoPose.FRONT, takenAt = 1)
+        app.clock.instant = sunday(0)
+        backup.run()
+        fun photoEntries(bytes: ByteArray) = ZipInputStream(ByteArrayInputStream(bytes)).use { z -> generateSequence { z.nextEntry }.map { it.name }.filter { it.startsWith("photos/") }.toList() }
+        assertEquals(emptyList<String>(), photoEntries(storage.files.values.single()))
+
+        app.device.setBackupPhotos(true)
+        app.clock.instant = sunday(1)
+        backup.run()
+        val withPhotos = storage.files.getValue(BackupRotation.fileName(LocalDate.of(2026, 9, 13)))
+        assertEquals(listOf("photos/${front.name}"), photoEntries(withPhotos))
+        // The scratch file in the cache is gone once the backup is written.
+        assertTrue(!app.backup.autoBackupScratch.exists())
+
+        // Restoring that backup brings the photo back, through the import's checks.
+        val bytes = front.readBytes()
+        app.photos.delete(app.db.photoDao().all().single().id)
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(withPhotos)))
+        val row = app.db.photoDao().all().single()
+        assertTrue(app.photos.fileOf(row)!!.readBytes().contentEquals(bytes))
+    }
+
+    @Test
+    fun `an automatic backup with a photo row pointing outside the photos folder can't be restored`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        app.device.setBackupPhotos(true)
+        app.db.photoDao().insert(ProgressPhotoEntity(logDate = LocalDate.of(2026, 9, 1), takenAt = 1, pose = PhotoPose.SIDE, filePath = "datastore/settings.preferences_pb"))
+        app.clock.instant = sunday(0)
+        backup.run()
+        val refused = runCatching { app.backup.prepare(ByteArrayInputStream(storage.files.values.single())) }.exceptionOrNull()
+        assertTrue(refused?.message.orEmpty(), refused?.message.orEmpty().contains("outside the photos folder"))
     }
 }

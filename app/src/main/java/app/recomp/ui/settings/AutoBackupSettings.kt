@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.recomp.ui.onboarding.SwitchRow
 
 @HiltViewModel
 class AutoBackupViewModel @Inject constructor(
@@ -65,6 +66,9 @@ class AutoBackupViewModel @Inject constructor(
         runCatching { scheduler.reschedule() }
         backUpNow()
     }
+
+    /** M17: progress photos in the automatic backup too; off by default. */
+    fun setIncludePhotos(on: Boolean) = viewModelScope.launch { device.setBackupPhotos(on) }
 
     fun turnOff() = viewModelScope.launch {
         device.autoBackup.first().target?.let { storage.release(Uri.parse(it.uri)) }
@@ -102,6 +106,9 @@ fun AutoBackupSettings(viewModel: AutoBackupViewModel = hiltViewModel()) {
         style = MaterialTheme.typography.bodySmall,
         color = if (state.error != null) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    if (target != null) {
+        SwitchRow("Photos in the automatic backup", AutoBackupText.PHOTOS, checked = state.includePhotos, onChange = viewModel::setIncludePhotos)
+    }
 
     if (choosing) {
         AlertDialog(
@@ -132,6 +139,8 @@ fun AutoBackupSettings(viewModel: AutoBackupViewModel = hiltViewModel()) {
 
 /** The words of Settings' automatic backup row (PRD §12.12). */
 object AutoBackupText {
+    const val PHOTOS = "Progress photos go in each weekly backup too. Off, they stay only on this phone."
+
     const val EXPLAIN =
         "Every Sunday night, when the battery isn't low, Recomp saves a full backup. In a folder on this phone it keeps the newest " +
             "${BackupRotation.KEEP}. On Google Drive, pick one file in the save dialog and it's overwritten each week. Backups never hold an AI key."

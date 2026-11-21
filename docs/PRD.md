@@ -1001,6 +1001,7 @@ These rules hold for every block:
   - *Log waist* becomes *Log measurements*: waist first, then the others once they're 4 or more weeks old.
   - Each site has a one-line how-to, e.g. "Right arm, relaxed, at the widest point".
   - Body shows each one's latest value and its change.
+  - The sheet prefills each site from its last reading. The waist card's own history still edits single readings.
 - **Progress photos (BM-04).** Body → Photos: front, side and back.
   - They go straight into Recomp's private storage and never reach the gallery.
   - *Compare* puts two dates side by side for one pose.
@@ -1009,13 +1010,16 @@ These rules hold for every block:
   - An import never deletes your current photos until it has finished, and *Restore the data from before the import* brings them back.
   - ◆ **Decided, backups:** the full export and the automatic backup get *Include photos*, off by default.
   - ◆ **Decided, camera:** the phone's camera app takes them. An in-app camera with an alignment overlay was the alternative.
-- **Focus areas (YG-03).** The extra-session form gets chips (hips, hamstrings, back, shoulders, core, full body), prefilled from last time.
+  - Recomp asks for the camera permission first, the first time you take one; if you say no, it says where to allow it.
+  - A photo tile shows "Photo not on this phone" when a backup restored its row without the file.
+  - *Include photos* is a switch next to *Export all data*, off each time you open Settings.
+- **Focus areas (YG-03).** The extra-session form gets chips (hips, hamstrings, back, shoulders, core, full body), prefilled from last time. Any number can be chosen, or none.
 - **Mobility markers (YG-04),** monthly, on a Body card when Settings → Training → *Mobility markers* is on. It's on by default when you have a yoga or mobility session.
   - Sit-and-reach in cm past your toes (negative when you're short of them).
   - Deep-squat hold in seconds, with a stopwatch.
   - Toe touch, yes or no.
 
-  Each has its how-to and its history.
+  Each has its how-to and its history. The card shows each marker's latest and the one before, asks again 4 weeks after the last test, and any test can be skipped. The stopwatch can be typed over.
 
 ### 12.14 M18: Camera food (NU-19, NU-21, NU-20)
 

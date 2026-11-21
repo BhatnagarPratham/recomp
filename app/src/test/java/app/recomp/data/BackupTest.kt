@@ -21,6 +21,8 @@ import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
+import app.recomp.data.db.PhotoPose
+import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.data.db.ScanDraftEntity
 import app.recomp.data.db.SleepSource
 import app.recomp.data.db.YogaDetailEntity
@@ -55,6 +57,7 @@ import app.recomp.domain.persona.Profile
 import app.recomp.domain.persona.WeightSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import kotlinx.serialization.encodeToString
 import java.io.File
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -209,6 +212,8 @@ class BackupTest {
         health.ensureDay(today.minusDays(1))
         health.setTypedSleep(today.minusDays(1), 7.5)
         health.insert(ScanDraftEntity(measuredAt = now - 5 * dayMs, weightG = 80_600, bodyFatPct = 25.4, bmrKcal = 1_690, hcIds = listOf("w-1", "f-1", "b-1")))
+        // M17: a progress photo's row (the file itself only travels with *Include photos*).
+        app.db.photoDao().insert(ProgressPhotoEntity(logDate = today, takenAt = now, pose = PhotoPose.FRONT, filePath = "photos/test-front.jpg"))
         app.db.workoutDao().insertExtraSession(
             WorkoutSessionEntity(
                 routineId = null, kind = SessionKind.CARDIO, status = SessionStatus.COMPLETED, startedAt = now - 4 * dayMs,
@@ -777,5 +782,174 @@ class BackupTest {
 
         app.backup.restore(app.backup.prepare(ByteArrayInputStream(backup)))
         assertEquals(planted, app.store.data.first()[stringPreferencesKey("ai_api_key")])
+    }
+
+    // Progress photos in backups (M17, PRD §12.13). The "photos" are invented bytes, never images of anyone.
+
+    private fun photoDir() = File(app.photos.dir.path)
+
+    /** A photo file and the row that shows it (an export only carries photos a row points at). */
+    private suspend fun putPhoto(name: String, bytes: ByteArray, row: Boolean = true) = File(photoDir(), name).apply {
+        writeBytes(bytes)
+        if (row) {
+            val pose = PhotoPose.valueOf(name.substringBefore('-').uppercase())
+            app.db.photoDao().insert(ProgressPhotoEntity(logDate = LocalDate.of(2026, 11, 1), takenAt = 1, pose = pose, filePath = "photos/$name"))
+        }
+    }
+
+    private fun photoBytes(seed: Int, size: Int = 2_000) = ByteArray(size) { (it * 31 + seed).toByte() }
+
+    private fun photosOnDisk(): Map<String, List<Byte>> = photoDir().listFiles().orEmpty().filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+
+    private suspend fun exportWithPhotos(): ByteArray = ByteArrayOutputStream().also { app.backup.export(it, includePhotos = true) }.toByteArray()
+
+    @Test
+    fun `a backup without photos stays format 1 and carries no images, and one with them is format 2`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1))
+        putPhoto("side-2.jpg", photoBytes(2))
+
+        val plain = entries(export())
+        assertTrue(plain.keys.none { it.startsWith("photos/") })
+        val plainManifest = json.decodeFromString<BackupManifest>(plain.getValue(BackupManager.MANIFEST))
+        assertEquals(1, plainManifest.formatVersion)
+        assertEquals(0, plainManifest.photos)
+
+        val withPhotos = exportWithPhotos()
+        val names = ZipInputStream(ByteArrayInputStream(withPhotos)).use { z -> generateSequence { z.nextEntry }.map { it.name }.toList() }
+        // The JSON comes first, then each photo as its own entry.
+        assertEquals(listOf(BackupManager.MANIFEST, BackupManager.DATABASE, BackupManager.SETTINGS, "photos/front-1.jpg", "photos/side-2.jpg"), names)
+        val manifest = json.decodeFromString<BackupManifest>(entries(withPhotos).getValue(BackupManager.MANIFEST))
+        assertEquals(2, manifest.formatVersion)
+        assertEquals(2, manifest.photos)
+    }
+
+    @Test
+    fun `an import with photos replaces them only once it has committed, and the safety copy brings the old ones back`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1))
+        val backup = exportWithPhotos()
+        val inBackup = photosOnDisk()
+
+        // Afterwards the phone has different photos.
+        File(photoDir(), "front-1.jpg").delete()
+        putPhoto("back-9.jpg", photoBytes(9))
+        val current = photosOnDisk()
+
+        val prepared = app.backup.prepare(ByteArrayInputStream(backup))
+        // Prepared but not confirmed: nothing on the phone has changed.
+        assertEquals(current, photosOnDisk())
+        app.backup.restore(prepared)
+        assertEquals(inBackup, photosOnDisk())
+        assertFalse(app.backup.incomingPhotos.exists())
+
+        app.backup.restore(app.backup.prepareSafetyCopy())
+        assertEquals(current, photosOnDisk())
+    }
+
+    @Test
+    fun `an import without photos leaves the current files in place, and a row without its file is kept`() = runBlocking {
+        fill()
+        val backup = export()
+        putPhoto("front-5.jpg", photoBytes(5))
+        val current = photosOnDisk()
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(backup)))
+        assertEquals(current, photosOnDisk())
+        // The fixture's photo row points at a file that isn't on this phone: it's still listed, as missing.
+        val row = app.db.photoDao().all().single()
+        assertFalse(app.photos.items(listOf(row)).single().present)
+    }
+
+    @Test
+    fun `a discarded import leaves no staged photos, and the phone's are untouched`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1))
+        val backup = exportWithPhotos()
+        putPhoto("side-3.jpg", photoBytes(3))
+        val current = photosOnDisk()
+        app.backup.discard(app.backup.prepare(ByteArrayInputStream(backup)))
+        assertFalse(app.backup.incomingPhotos.exists())
+        assertEquals(current, photosOnDisk())
+    }
+
+    @Test
+    fun `photos don't count toward the JSON budget, but each has its own cap`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1, size = 200_000))
+        putPhoto("side-1.jpg", photoBytes(2, size = 200_000))
+        val backup = exportWithPhotos()
+        // The JSON fits a small budget even though the photos together are far bigger.
+        app.backup.maxBytes = 300 * 1024
+        app.backup.discard(app.backup.prepare(ByteArrayInputStream(backup)))
+        app.backup.maxBytes = 16L * 1024 * 1024
+
+        app.backup.maxPhotoFileBytes = 100_000
+        assertEquals(BackupManager.TOO_BIG, refused(backup))
+        assertFalse(app.backup.incomingPhotos.exists())
+        app.backup.maxPhotoFileBytes = 25L * 1024 * 1024
+        app.backup.maxPhotoBytes = 300_000
+        assertEquals(BackupManager.TOO_BIG, refused(backup))
+    }
+
+    @Test
+    fun `a photo entry that could escape its folder, or a count that disagrees, is refused`() = runBlocking {
+        fill()
+        val good = exportWithPhotos()
+        val parts = entries(good)
+        val manifest = json.decodeFromString<BackupManifest>(parts.getValue(BackupManager.MANIFEST))
+        fun withPhotos(m: BackupManifest, vararg photos: Pair<String, String>) = zip(
+            BackupManager.MANIFEST to json.encodeToString(m),
+            BackupManager.DATABASE to parts.getValue(BackupManager.DATABASE),
+            BackupManager.SETTINGS to parts.getValue(BackupManager.SETTINGS),
+            *photos,
+        )
+        assertTrue(refused(withPhotos(manifest.copy(formatVersion = 2, photos = 1), "photos/../recomp.db" to "x")).contains("name"))
+        assertTrue(refused(withPhotos(manifest.copy(formatVersion = 2, photos = 1), "photos/a/b.jpg" to "x")).contains("name"))
+        assertTrue(refused(withPhotos(manifest.copy(formatVersion = 2, photos = 2), "photos/front-1.jpg" to "x")).contains("photos"))
+        assertFalse(app.backup.incomingPhotos.exists())
+        assertTrue(photosOnDisk().isEmpty())
+    }
+
+    @Test
+    fun `an export carries only the photos the app shows, never a file no row points at`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1))
+        putPhoto("side-2.jpg", photoBytes(2), row = false)
+        val names = entries(exportWithPhotos()).keys.filter { it.startsWith("photos/") }
+        assertEquals(listOf("photos/front-1.jpg"), names)
+        assertEquals(1, json.decodeFromString<BackupManifest>(entries(exportWithPhotos()).getValue(BackupManager.MANIFEST)).photos)
+    }
+
+    @Test
+    fun `a backup whose photo row points outside the photos folder is refused`() = runBlocking {
+        fill()
+        val parts = entries(export())
+        listOf("datastore/settings.preferences_pb", "photos/../databases/recomp.db", "photos/a/b.jpg", "front-1.jpg").forEach { path ->
+            val database = parts.getValue(BackupManager.DATABASE).replace("\"photos/test-front.jpg\"", json.encodeToString(path))
+            assertTrue(path, database.contains(json.encodeToString(path)))
+            val crafted = zip(BackupManager.MANIFEST to parts.getValue(BackupManager.MANIFEST), BackupManager.DATABASE to database, BackupManager.SETTINGS to parts.getValue(BackupManager.SETTINGS))
+            assertTrue(path, refused(crafted).contains("outside the photos folder"))
+        }
+    }
+
+    @Test
+    fun `a photo deleted after an import is gone from the safety copy too`() = runBlocking {
+        fill()
+        putPhoto("front-1.jpg", photoBytes(1))
+        putPhoto("side-2.jpg", photoBytes(2))
+        // Any import makes the safety copy, which keeps the phone's photos.
+        app.backup.restore(app.backup.prepare(ByteArrayInputStream(export())))
+        val front = app.db.photoDao().all().single { it.filePath == "photos/front-1.jpg" }
+        assertTrue(app.photos.delete(front.id))
+
+        val copy = entries(app.backup.safetyCopyFile.readBytes())
+        assertFalse(copy.containsKey("photos/front-1.jpg"))
+        assertTrue(copy.containsKey("photos/side-2.jpg"))
+        assertFalse(copy.getValue(BackupManager.DATABASE).contains("front-1.jpg"))
+        assertEquals(1, json.decodeFromString<BackupManifest>(copy.getValue(BackupManager.MANIFEST)).photos)
+        // Restoring the data from before the import brings back the photo you kept, not the one you deleted.
+        app.backup.restore(app.backup.prepareSafetyCopy())
+        assertEquals(listOf("photos/side-2.jpg"), app.db.photoDao().all().map { it.filePath }.filter { it.startsWith("photos/side") || it.startsWith("photos/front") })
+        assertEquals(setOf("side-2.jpg"), photosOnDisk().keys)
     }
 }

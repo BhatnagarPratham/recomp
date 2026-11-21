@@ -66,7 +66,8 @@ import app.recomp.domain.training.WeeklyPlan
 import app.recomp.ui.body.BodyEntries
 import app.recomp.ui.body.TrendSummary
 import app.recomp.ui.body.WaistDraft
-import app.recomp.ui.body.WaistSheet
+import app.recomp.ui.body.MeasurementsSheet
+import app.recomp.ui.body.TapeDraft
 import app.recomp.ui.body.WeighInDraft
 import app.recomp.ui.body.WeighInSheet
 import app.recomp.ui.checkin.LocalOpenCheckin
@@ -153,6 +154,8 @@ class TodayViewModel @Inject constructor(
     fun save(d: WeighInDraft) = viewModelScope.launch { bodyEntries.save(d) }
 
     fun save(d: WaistDraft) = viewModelScope.launch { bodyEntries.save(d) }
+
+    fun save(d: TapeDraft) = viewModelScope.launch { bodyEntries.save(d) }
 
     /** GL-07, GL-10: the goal's main number and the 7-day average. */
     val food: StateFlow<TodayNutrition?> = nutrition.observeToday().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -246,7 +249,7 @@ fun TodayScreen(
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val body by viewModel.body.collectAsStateWithLifecycle()
     var weighIn by remember { mutableStateOf<WeighInDraft?>(null) }
-    var waist by remember { mutableStateOf<WaistDraft?>(null) }
+    var waist by remember { mutableStateOf<TapeDraft?>(null) }
     val food by viewModel.food.collectAsStateWithLifecycle()
     val today by viewModel.today.collectAsStateWithLifecycle()
     val steps by viewModel.steps.collectAsStateWithLifecycle()
@@ -370,7 +373,7 @@ fun TodayScreen(
                 onSleep = { sleepSheet = sleep },
                 onOpen = onOpenBody,
                 onLogWeight = { scope.launch { weighIn = viewModel.bodyEntries.newWeighIn() } },
-                onLogWaist = { scope.launch { waist = viewModel.bodyEntries.newWaist() } },
+                onLogWaist = { scope.launch { waist = viewModel.bodyEntries.newMeasurements() } },
             )
         }
 
@@ -432,7 +435,7 @@ fun TodayScreen(
         }
     }
     waist?.let { d ->
-        WaistSheet(d, onDismiss = { waist = null }, onDelete = null) { saved ->
+        MeasurementsSheet(d, onDismiss = { waist = null }) { saved ->
             waist = null
             viewModel.save(saved)
         }
@@ -484,7 +487,7 @@ private fun WeightCard(b: TodayBody, sleep: SleepToday?, onSleep: () -> Unit, on
             TrendSummary(b.trend)
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onLogWeight, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log weight") }
-                if (b.waistDue) OutlinedButton(onClick = onLogWaist, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log waist") }
+                if (b.waistDue) OutlinedButton(onClick = onLogWaist, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Log measurements") }
             }
             // AR-02: asks until last night is entered, then shows it; tap to change it.
             if (sleep != null) {

@@ -164,4 +164,7 @@ object Labels {
         PrType.E1RM -> "about ${wholeLoad(value, style)}"
         PrType.SESSION_VOLUME -> wholeLoad(value, style)
     }
+
+    /** YG-03: "Hips", "Full body". */
+    fun focusArea(key: String) = muscle(key)
 }

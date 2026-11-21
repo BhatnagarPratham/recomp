@@ -49,8 +49,11 @@ data class HealthShareState(val lastWriteAt: Long? = null, val error: String? = 
  */
 data class BackupTarget(val uri: String, val folder: Boolean, val label: String)
 
-/** The automatic backup's last outcome: when it last worked, and why the latest try didn't. */
-data class AutoBackupState(val target: BackupTarget? = null, val lastSuccessAt: Long? = null, val error: String? = null)
+/**
+ * The automatic backup's last outcome: when it last worked, and why the latest try didn't. [includePhotos] (M17) puts
+ * the progress photos in it too; off by default, and this phone's choice only.
+ */
+data class AutoBackupState(val target: BackupTarget? = null, val lastSuccessAt: Long? = null, val error: String? = null, val includePhotos: Boolean = false)
 
 /** When Health Connect was last read, and what went wrong if something did. */
 data class HealthSyncState(val lastSyncAt: Long? = null, val error: String? = null)
@@ -93,6 +96,7 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
         val BACKUP_LABEL = stringPreferencesKey("backup_label")
         val BACKUP_LAST_AT = longPreferencesKey("backup_last_at")
         val BACKUP_ERROR = stringPreferencesKey("backup_error")
+        val BACKUP_PHOTOS = booleanPreferencesKey("backup_photos")
     }
 
     // Health Connect writes (M16, DA-04)
@@ -132,7 +136,7 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
 
     val autoBackup: Flow<AutoBackupState> = store.data.map { prefs ->
         val target = prefs[Keys.BACKUP_URI]?.let { BackupTarget(it, prefs[Keys.BACKUP_IS_FOLDER] ?: true, prefs[Keys.BACKUP_LABEL].orEmpty()) }
-        AutoBackupState(target, prefs[Keys.BACKUP_LAST_AT], prefs[Keys.BACKUP_ERROR])
+        AutoBackupState(target, prefs[Keys.BACKUP_LAST_AT], prefs[Keys.BACKUP_ERROR], prefs[Keys.BACKUP_PHOTOS] ?: false)
     }.distinctUntilChanged()
 
     suspend fun setBackupTarget(target: BackupTarget?) = store.edit { prefs ->
@@ -152,6 +156,8 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
     }
 
     suspend fun setBackupError(error: String) = store.edit { it[Keys.BACKUP_ERROR] = error }
+
+    suspend fun setBackupPhotos(on: Boolean) = store.edit { it[Keys.BACKUP_PHOTOS] = on }
 
     // Reminders (M12)
 

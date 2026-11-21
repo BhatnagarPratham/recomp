@@ -21,7 +21,11 @@ import kotlinx.coroutines.flow.Flow
 enum class ScanSource { MANUAL, SHARE_AI, HEALTH_CONNECT }
 
 /** Tape measurements (BM-02, BM-03), in cm. Mobility markers (YG-04) add types later. */
-enum class MeasurementType { WAIST, CHEST, ARM, THIGH, HIP }
+/**
+ * Tape sites in cm (BM-02, BM-03), and YG-04's mobility markers: SIT_AND_REACH in cm past the toes
+ * (negative when short of them), SQUAT_HOLD in seconds, TOE_TOUCH 1 or 0.
+ */
+enum class MeasurementType { WAIST, CHEST, ARM, THIGH, HIP, SIT_AND_REACH, SQUAT_HOLD, TOE_TOUCH }
 
 /**
  * A body-composition scan (IB-01, IB-02). Masses are integer grams. [protocolOk] and [minsFromSlot] are
@@ -128,6 +132,10 @@ interface BodyDao {
 
     @Query("SELECT * FROM measurement WHERE type = :type ORDER BY measured_at DESC LIMIT 1")
     suspend fun lastMeasurement(type: MeasurementType): MeasurementEntity?
+
+    /** Every measurement, tape and mobility, for Body's cards (BM-03, YG-04). */
+    @Query("SELECT * FROM measurement ORDER BY measured_at")
+    fun observeAllMeasurements(): Flow<List<MeasurementEntity>>
 
     @Query("SELECT * FROM measurement WHERE id = :id")
     suspend fun measurement(id: Long): MeasurementEntity?

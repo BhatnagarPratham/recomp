@@ -32,6 +32,7 @@ One user per install, offline-first, no backend, no accounts. AI meal logging is
 > - M19: goals: *What to expect* when you change goal, a Goal reached card, a suggested maintenance break after 12 weeks in a deficit that resumes on its own, *Describe your goal* read by AI (only the text you type is sent), a pregnancy and breastfeeding switch that turns off deficits, and presets as data files a fork can add to.
 > - M20: lb and in: Settings → Body data → *Units* shows and takes body weight and lifts in lb (with 1, 2.5, 5 and 10 lb steps), lengths in inches and height in feet and inches. Storage stays metric, so history never changes; switching offers to move your exercises' weight steps to the nearest lb plates. Food stays in grams.
 > - M18: camera food: scan a pack's barcode (your foods, then Open Food Facts), scan a nutrition label read on the phone (and checked by AI when it's on), Open Food Facts search for the International region, and meal photos in *Describe it*.
+> - M17: body extras: tape measurements beyond the waist, progress photos that stay in the app (never the gallery, never AI, in a backup only when you include them), focus areas on classes, and monthly mobility tests.
 >
 > With M4 the MVP is complete; v1.1 is under way. See the milestones in the TRD.
 >
