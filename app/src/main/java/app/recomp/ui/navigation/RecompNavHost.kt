@@ -80,7 +80,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class ScanRoute(val scanId: Long = 0, val draftId: Long = 0, val image: String = "")
 
 /** "What is this?" for a shared image (IB-03, TRD §6.7); [image] is its kept copy, empty when it couldn't be read. */
-@Serializable data class ShareRoute(val image: String)
+@Serializable data class ShareRoute(val image: String, val setup: Boolean = false)
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
@@ -165,7 +165,7 @@ fun RecompNavHost(main: MainViewModel) {
                     nav.openTopLevel(TodayRoute)
                     nav.openCheckin(event.weekStart)
                 }
-                is AppNav.Shared -> nav.navigate(ShareRoute(event.image))
+                is AppNav.Shared -> nav.navigate(ShareRoute(event.image, event.setup))
             }
         }
     }

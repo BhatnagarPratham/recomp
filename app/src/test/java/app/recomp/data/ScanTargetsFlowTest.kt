@@ -182,4 +182,46 @@ class ScanTargetsFlowTest {
         assertNull(app.scanImages.file("../recomp.db"))
         assertFalse(File(tmp.root, "app/scan_images").listFiles().orEmpty().any { it.length() == 0L })
     }
+
+    @Test
+    fun `with a check-in estimate that keeps every macro, saving still takes the scan's BMR and the offer clears`() = runBlocking {
+        onboardVectorB()
+        // A generous estimate: the floor doesn't bind, so the scan changes BMR and nothing else.
+        app.db.checkinDao().upsert(
+            WeeklyCheckinEntity(today().minusWeeks(1), computedAt = 1, windowDays = 21, loggedDays = 20, weighIns = 20, tdeeObs = 2_900, tdeePrev = 2_611, tdeeNew = 2_900),
+        )
+        personas.save()
+        val before = app.db.nutritionDao().targetOn(today())!!
+        scan(daysAgo = 2)
+        assertNotNull(personas.scanOffer.first())
+        val preview = personas.preview()
+        assertEquals(before.kcal, preview.after.kcal)
+        assertTrue("a BMR change is a change", preview.changes)
+        personas.save()
+        assertEquals(1796, app.db.nutritionDao().targetOn(today())!!.bmrKcal)
+        assertEquals(before.kcal, app.db.nutritionDao().targetOn(today())!!.kcal)
+        assertNull(personas.scanOffer.first())
+    }
+
+    @Test
+    fun `a share is read only from another app's content URI, and kept only if it decodes as an image`() = runBlocking {
+        val own = "app.recomp"
+        assertTrue(ScanImages.acceptsUri("content", "com.google.android.apps.photos.contentprovider", own))
+        assertTrue(ScanImages.acceptsUri("content", "media", own))
+        // A path into the app's own storage, or a URI of the app's own (or a dev build's), never.
+        assertFalse(ScanImages.acceptsUri("file", null, own))
+        assertFalse(ScanImages.acceptsUri("file", "", own))
+        assertFalse(ScanImages.acceptsUri("content", "app.recomp", own))
+        assertFalse(ScanImages.acceptsUri("content", "app.recomp.fileprovider", own))
+        assertFalse(ScanImages.acceptsUri("http", "example.com", own))
+        assertFalse(ScanImages.acceptsUri(null, "media", own))
+
+        // Bytes that claim to be a PNG but don't decode: refused, and nothing left behind.
+        val dir = File(tmp.root, "strict")
+        val strict = ScanImages(dir, isImage = { false })
+        assertNull(strict.stage(ByteArrayInputStream(ByteArray(512) { 9 }), "image/png"))
+        assertTrue(dir.listFiles().orEmpty().isEmpty())
+        // HEIC photos of the printed sheet are kept.
+        assertTrue(app.scanImages.stage(ByteArrayInputStream(ByteArray(64) { 1 }), "image/heic")!!.endsWith(".heic"))
+    }
 }

@@ -2,6 +2,7 @@ package app.recomp
 
 import android.content.Intent
 import android.net.Uri
+import app.recomp.data.body.ScanImages
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -48,7 +49,12 @@ class MainActivity : ComponentActivity() {
      */
     private fun shared(intent: Intent) {
         if (intent.action != Intent.ACTION_SEND || intent.type?.startsWith("image/") != true) return
-        val uri = intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) ?: return
+        val uri = intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            ?.takeIf { ScanImages.acceptsUri(it.scheme, it.authority, packageName) }
+        if (uri == null) {
+            mainViewModel.onSharedImage(null) { null }
+            return
+        }
         val type = contentResolver.getType(uri) ?: intent.type
         mainViewModel.onSharedImage(type) { runCatching { contentResolver.openInputStream(uri) }.getOrNull() }
     }

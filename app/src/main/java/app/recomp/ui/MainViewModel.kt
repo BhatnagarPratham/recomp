@@ -1,5 +1,7 @@
 package app.recomp.ui
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import app.recomp.data.body.ScanImages
 import app.recomp.data.repo.BodyRepository
 import java.io.InputStream
@@ -47,8 +49,11 @@ sealed interface AppNav {
     data object Body : AppNav
     data class Checkin(val weekStart: java.time.LocalDate) : AppNav
 
-    /** A shared image, kept as [image] (IB-03); empty when it couldn't be read or isn't one the app keeps. */
-    data class Shared(val image: String) : AppNav
+    /**
+     * A shared image, kept as [image] (IB-03); empty when it couldn't be read or isn't one the app keeps. [setup] means
+     * onboarding hasn't finished, so it wasn't kept.
+     */
+    data class Shared(val image: String, val setup: Boolean = false) : AppNav
 }
 
 /**
@@ -175,7 +180,13 @@ class MainViewModel @Inject constructor(
     /** Copies a shared image in and opens "What is this?" (IB-03). */
     fun onSharedImage(mimeType: String?, open: () -> InputStream?) {
         viewModelScope.launch {
-            val name = open()?.let { scanImages.stage(it, mimeType) }
+            // Before onboarding there's no profile or usual slot to log a scan against.
+            if (onboarded.first { it != null } != true) {
+                _nav.send(AppNav.Shared("", setup = true))
+                return@launch
+            }
+            // Opening a provider's stream can be slow (a photo in the cloud): off the main thread.
+            val name = withContext(Dispatchers.IO) { open() }?.let { scanImages.stage(it, mimeType) }
             _nav.send(AppNav.Shared(name.orEmpty()))
         }
     }

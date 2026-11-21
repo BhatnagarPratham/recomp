@@ -76,7 +76,9 @@ data class TargetPreview(
 ) {
     val changes: Boolean
         get() = before == null || before.kcal != after.kcal || before.proteinG != after.proteinG ||
-            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != plan.goal
+            before.fatG != after.fatG || before.carbsG != after.carbsG || before.goal != plan.goal ||
+            // A scan's BMR (IB-05) is worth a version even when a check-in estimate keeps every macro the same.
+            before.bmrKcal != after.bmrKcal.roundToInt()
 }
 
 /**

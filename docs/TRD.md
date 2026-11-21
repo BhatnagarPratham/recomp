@@ -1695,6 +1695,14 @@ Tests cover:
   - Deleting the scan deletes the file. An image no scan keeps, such as a share you backed out of, is removed a day later at launch.
   - Android's backup rules list only the database and the settings, so the images are left out by omission, which `BackupRulesTest` checks. The app's own export doesn't carry them either.
 
+**Fixed after PR #21's review (2026-11-21):**
+- *A stuck offer.* With a check-in estimate the scan's BMR can leave every macro unchanged. Settings' preview now counts a BMR difference as a change, so *Save* writes the scan's BMR and the offer clears.
+- *What a share may read.* Only a `content://` URI from another app is read. A `file://` path, or a URI of the app's own, could point at its private files (the database, the key store), so it's refused. A staged file is kept only if it decodes as an image.
+- *Smaller fixes:* a share before onboarding has finished says to finish setting up first, and keeps nothing. The shared stream is opened off the main thread. HEIC photos are accepted.
+- *As designed, now written down:*
+  - A body-fat finish line's goal weight is set when you type the target, and later scans don't move it until you edit the goal; "reached" is judged on the scans.
+  - Backups don't carry images. After an import, images the restored database doesn't name are removed a day later, so a rollback to the safety copy after that brings its scans back without images.
+
 Tests cover:
 - `:domain`: `ScanTargetsTest`: the 60-day and protocol rules, lean mass and Katch-McArdle, the 20 kcal threshold, the body-fat goal weight and the scan-based suggestion.
 - `ScanTargetsFlowTest`:

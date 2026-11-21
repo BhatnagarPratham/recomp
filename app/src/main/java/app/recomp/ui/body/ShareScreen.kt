@@ -49,6 +49,9 @@ suspend fun loadScanImage(images: ScanImages, name: String, maxPx: Int = 1600): 
 class ShareViewModel @Inject constructor(savedState: SavedStateHandle, private val images: ScanImages) : ViewModel() {
     val image: String = savedState.toRoute<ShareRoute>().image
 
+    /** Shared before onboarding finished: nothing was kept. */
+    val setup: Boolean = savedState.toRoute<ShareRoute>().setup
+
     private val _bitmap = MutableStateFlow<ImageBitmap?>(null)
     val bitmap: StateFlow<ImageBitmap?> = _bitmap
 
@@ -70,7 +73,10 @@ fun ShareScreen(onInBody: (String) -> Unit, onDone: () -> Unit, viewModel: Share
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("What is this?", style = MaterialTheme.typography.headlineSmall)
         if (viewModel.image.isEmpty()) {
-            Text("This image couldn't be read. Share a screenshot or photo (JPEG, PNG or WebP, up to 20 MB).")
+            Text(
+                if (viewModel.setup) "Finish setting up Recomp first, then share the image again."
+                else "This image couldn't be read. Share a screenshot or photo (JPEG, PNG, WebP or HEIC, up to 20 MB).",
+            )
             Button(onClick = onDone, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OK") }
             return@Column
         }

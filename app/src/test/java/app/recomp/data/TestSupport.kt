@@ -340,7 +340,7 @@ class TestApp(private val dir: File) {
     val healthSource = FakeHealthSource()
     val notifier = FakeNotifier()
     /** Shared InBody images (IB-03), in the test's own folder. */
-    val scanImages = app.recomp.data.body.ScanImages(File(dir, "scan_images"))
+    val scanImages = app.recomp.data.body.ScanImages(File(dir, "scan_images"), isImage = { true })
 
     lateinit var db: AppDatabase
         private set

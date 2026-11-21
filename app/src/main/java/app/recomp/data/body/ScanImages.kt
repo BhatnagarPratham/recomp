@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  * (`data_extraction_rules.xml`) list only the database and the settings. A scan's `image_path` is the file's name.
  */
 @Singleton
-class ScanImages(private val dir: File) {
+class ScanImages(private val dir: File, private val isImage: (File) -> Boolean = ::decodes) {
     @Inject constructor(@ApplicationContext context: Context) : this(File(context.filesDir, DIR))
 
     /**
@@ -42,7 +42,8 @@ class ScanImages(private val dir: File) {
                 total > 0
             }
         }
-        if (ok) name else null.also { out.delete() }
+        // Only what decodes as an image is kept: a file named image/png that isn't one goes at once.
+        if (ok && isImage(out)) name else null.also { out.delete() }
     }
 
     /** The file for a stored name, or null for a name that isn't one of ours. */
@@ -61,7 +62,25 @@ class ScanImages(private val dir: File) {
         const val DIR = "scan_images"
         const val MAX_BYTES = 20L * 1024 * 1024
         const val STAGED_FOR_MS = 24 * 3_600_000L
-        private val EXTENSIONS = mapOf("image/jpeg" to "jpg", "image/jpg" to "jpg", "image/png" to "png", "image/webp" to "webp")
-        private val NAME = Regex("[0-9a-f-]{36}\\.(jpg|png|webp)")
+        private val EXTENSIONS = mapOf(
+            "image/jpeg" to "jpg", "image/jpg" to "jpg", "image/png" to "png", "image/webp" to "webp",
+            // Phone photos of the printed sheet; Android decodes HEIF from API 28.
+            "image/heic" to "heic", "image/heif" to "heic",
+        )
+        private val NAME = Regex("[0-9a-f-]{36}\\.(jpg|png|webp|heic)")
+
+        /** Whether [file] decodes as an image with a size: its bounds, without decoding the pixels. */
+        fun decodes(file: File): Boolean {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.path, o)
+            return o.outWidth > 0 && o.outHeight > 0
+        }
+
+        /**
+         * Whether a shared stream may be read (IB-03): only a `content://` URI from another app. A `file://` path, or
+         * a URI of this app's own, could point the app at its own private files, such as the database or the key store.
+         */
+        fun acceptsUri(scheme: String?, authority: String?, ownPackage: String): Boolean =
+            scheme == "content" && authority != null && authority != ownPackage && !authority.startsWith("$ownPackage.")
     }
 }
