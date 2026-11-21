@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.recomp.data.health.HealthFeature
 import app.recomp.di.SettingsStore
+import app.recomp.domain.body.TapeSite
 import app.recomp.domain.health.Steps
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiModel
@@ -421,6 +422,12 @@ internal object SettingsKeys {
     /** M13 (PRD §12.9): the Health Connect features turned on, as `HealthFeature` names. Absent is none. */
     val HEALTH_FEATURES = stringSetPreferencesKey("health_features")
 
+    /** BM-03: the tape sites you chose besides waist (`TapeSite` names). Missing means none. */
+    val TAPE_SITES = stringSetPreferencesKey("tape_sites")
+
+    /** YG-04: the mobility markers switch. Missing means the default, on when you have a yoga or mobility session. */
+    val MOBILITY_MARKERS = booleanPreferencesKey("mobility_markers")
+
     /** AR-01: the daily step goal, 2,000 to 20,000; absent is 8,000. Steps are on while the STEPS feature is. */
     val STEPS_GOAL = intPreferencesKey("steps_goal")
 
@@ -629,6 +636,8 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (wrongType(SettingsKeys.TRACK_SLEEP, Boolean::class)) add(SettingsKeys.TRACK_SLEEP.name)
             if (values[SettingsKeys.HEALTH_FEATURES.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.HEALTH_FEATURES.name)
             if (values[SettingsKeys.AI_NOTICES_SEEN.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.AI_NOTICES_SEEN.name)
+            if (values[SettingsKeys.TAPE_SITES.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.TAPE_SITES.name)
+            if (wrongType(SettingsKeys.MOBILITY_MARKERS, Boolean::class)) add(SettingsKeys.MOBILITY_MARKERS.name)
             // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
             if (!decodes(SettingsKeys.PERSONA, { settingsJson.decodeFromString<StoredPersona>(it).also { p -> p.goal?.toPlan(); p.extras.forEach(ExtraSchedule::toPlan) } })) {
                 add(SettingsKeys.PERSONA.name)
@@ -692,6 +701,20 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
     }
 
     suspend fun setKeepScreenOn(on: Boolean) = store.edit { it[SettingsKeys.KEEP_SCREEN_ON] = on }
+
+    /** BM-03's chosen sites; a name this build doesn't know (from a newer one) is ignored, never an error. */
+    val tapeSites: Flow<Set<TapeSite>> = store.data.map { prefs ->
+        prefs[SettingsKeys.TAPE_SITES].orEmpty().mapNotNull { name -> TapeSite.entries.firstOrNull { it.name == name } }.filter { it != TapeSite.WAIST }.toSet()
+    }.distinctUntilChanged()
+
+    suspend fun setTapeSites(sites: Set<TapeSite>) = store.edit { prefs ->
+        prefs[SettingsKeys.TAPE_SITES] = sites.filter { it != TapeSite.WAIST }.map { it.name }.toSet()
+    }
+
+    /** YG-04's switch as you set it, or null while it follows the default. */
+    val mobilityChoice: Flow<Boolean?> = store.data.map { it[SettingsKeys.MOBILITY_MARKERS] }.distinctUntilChanged()
+
+    suspend fun setMobilityMarkers(on: Boolean) = store.edit { it[SettingsKeys.MOBILITY_MARKERS] = on }
 
     /** A stored band that isn't valid reads as the default, so the card never draws a nonsense range. */
     val volumeBand: Flow<VolumeBand> = store.data.map { prefs ->

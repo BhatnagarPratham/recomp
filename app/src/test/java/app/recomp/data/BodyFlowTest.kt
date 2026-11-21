@@ -21,6 +21,9 @@ import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.trend.TrendCalculator
 import app.recomp.domain.trend.WeightPace
 import java.io.File
+import kotlinx.coroutines.flow.flowOf
+import app.recomp.domain.body.MobilityMarker
+import app.recomp.domain.body.TapeSite
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -274,4 +277,45 @@ class BodyFlowTest {
         body.restoreMeasurement(gone)
         assertNotNull(app.db.bodyDao().measurement(id))
     }
+
+    // Tape measurements (BM-03) and mobility markers (YG-04)
+
+    @Test
+    fun `the sheet asks for waist, then chosen sites once they're 4 weeks old`() = runBlocking {
+        val day0 = monday
+        assertEquals(listOf(TapeSite.WAIST), body.dueTapeSites(day0))
+        body.setTapeSites(setOf(TapeSite.ARM, TapeSite.HIP, TapeSite.WAIST))
+        assertEquals(setOf(TapeSite.ARM, TapeSite.HIP), app.prefs.tapeSites.first())
+        assertEquals(listOf(TapeSite.WAIST, TapeSite.ARM, TapeSite.HIP), body.dueTapeSites(day0))
+
+        body.logTape(mapOf(TapeSite.WAIST to 86.0, TapeSite.ARM to 35.0, TapeSite.HIP to 99.0), at(0, "07:00"))
+        assertEquals(listOf(TapeSite.WAIST), body.dueTapeSites(day0.plusDays(27)))
+        assertEquals(listOf(TapeSite.WAIST, TapeSite.ARM, TapeSite.HIP), body.dueTapeSites(day0.plusDays(28)))
+
+        body.logTape(mapOf(TapeSite.WAIST to 85.0, TapeSite.ARM to 35.5), at(28, "07:00"))
+        val latest = body.observeTape().first().associateBy { it.site }
+        assertEquals(-1.0, latest.getValue(TapeSite.WAIST).changeCm!!, 1e-9)
+        assertEquals(0.5, latest.getValue(TapeSite.ARM).changeCm!!, 1e-9)
+        assertNull(latest.getValue(TapeSite.HIP).changeCm)
+        // Waist readings still feed the check-in and the review as before.
+        assertEquals(85.0, body.lastWaistCm()!!, 1e-9)
+    }
+
+    @Test
+    fun `mobility markers default on with a yoga session, keep your choice, and log together`() = runBlocking {
+        assertTrue(body.observeMobilityOn(flowOf(listOf(SessionKind.YOGA))).first())
+        assertFalse(body.observeMobilityOn(flowOf(listOf(SessionKind.CARDIO))).first())
+        body.setMobilityMarkers(false)
+        assertFalse(body.observeMobilityOn(flowOf(listOf(SessionKind.YOGA))).first())
+
+        body.logMobility(mapOf(MobilityMarker.SIT_AND_REACH to -4.5, MobilityMarker.SQUAT_HOLD to 45.0, MobilityMarker.TOE_TOUCH to 0.0), at(0, "08:00"))
+        body.logMobility(mapOf(MobilityMarker.SIT_AND_REACH to -2.0, MobilityMarker.TOE_TOUCH to 1.0), at(30, "08:00"))
+        val history = body.observeMobility().first()
+        assertEquals(listOf(-2.0, -4.5), history.getValue(MobilityMarker.SIT_AND_REACH).map { it.value })
+        assertEquals(listOf(45.0), history.getValue(MobilityMarker.SQUAT_HOLD).map { it.value })
+        assertEquals(listOf(1.0, 0.0), history.getValue(MobilityMarker.TOE_TOUCH).map { it.value })
+        // Mobility readings never count as tape.
+        assertTrue(body.observeTape().first().isEmpty())
+    }
 }
+

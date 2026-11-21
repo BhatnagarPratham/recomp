@@ -133,6 +133,10 @@ interface BodyDao {
     @Query("SELECT * FROM measurement WHERE type = :type ORDER BY measured_at DESC LIMIT 1")
     suspend fun lastMeasurement(type: MeasurementType): MeasurementEntity?
 
+    /** Every measurement, tape and mobility, for Body's cards (BM-03, YG-04). */
+    @Query("SELECT * FROM measurement ORDER BY measured_at")
+    fun observeAllMeasurements(): Flow<List<MeasurementEntity>>
+
     @Query("SELECT * FROM measurement WHERE id = :id")
     suspend fun measurement(id: Long): MeasurementEntity?
 

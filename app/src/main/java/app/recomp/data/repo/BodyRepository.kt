@@ -1,5 +1,13 @@
 package app.recomp.data.repo
 
+import kotlinx.coroutines.flow.map
+import java.time.LocalDate
+import app.recomp.domain.model.SessionKind
+import app.recomp.domain.body.TapeSites
+import app.recomp.domain.body.TapeSite
+import app.recomp.domain.body.TapeReading
+import app.recomp.domain.body.MobilityMarkers
+import app.recomp.domain.body.MobilityMarker
 import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyCompositionEntity
@@ -166,6 +174,50 @@ class BodyRepository @Inject constructor(
         bodyDao.insert(row)
     }
 
+    // Other tape sites (BM-03) and mobility markers (YG-04)
+
+    val tapeSites: Flow<Set<TapeSite>> = prefs.tapeSites
+
+    suspend fun setTapeSites(sites: Set<TapeSite>) = prefs.setTapeSites(sites)
+
+    /** Every tape site's latest reading and its change, waist included. */
+    fun observeTape(): Flow<List<TapeReading>> = bodyDao.observeAllMeasurements().map { rows ->
+        TapeSites.latest(rows.mapNotNull { row -> row.type.tapeSite()?.let { Triple(it, row.logDate, row.value) } })
+    }
+
+    /** The sites the *Log measurements* sheet asks for today: waist, then chosen sites 4+ weeks old (PRD §12.13). */
+    suspend fun dueTapeSites(today: LocalDate): List<TapeSite> {
+        val last = TapeSite.entries.mapNotNull { site -> bodyDao.lastMeasurement(site.type())?.let { site to it.logDate } }.toMap()
+        return TapeSites.due(prefs.tapeSites.first(), last, today)
+    }
+
+    suspend fun lastTapeCm(site: TapeSite): Double? = bodyDao.lastMeasurement(site.type())?.value
+
+    /** Saves one sheet's readings together, all at [measuredAt]. */
+    suspend fun logTape(readings: Map<TapeSite, Double>, measuredAt: Long) = db.withTransaction {
+        readings.forEach { (site, cm) ->
+            bodyDao.insert(MeasurementEntity(logDate = days.of(measuredAt), measuredAt = measuredAt, type = site.type(), value = cm))
+        }
+    }
+
+    /** YG-04: the mobility card's switch, defaulting to on when you have a yoga or mobility session. */
+    fun observeMobilityOn(extras: Flow<List<SessionKind>>): Flow<Boolean> =
+        combine(prefs.mobilityChoice, extras) { choice, kinds -> MobilityMarkers.enabled(choice, kinds) }
+
+    suspend fun setMobilityMarkers(on: Boolean) = prefs.setMobilityMarkers(on)
+
+    /** Each marker's readings, newest first. */
+    fun observeMobility(): Flow<Map<MobilityMarker, List<MeasurementEntity>>> = bodyDao.observeAllMeasurements().map { rows ->
+        MobilityMarker.entries.associateWith { m -> rows.filter { it.type == m.type() }.sortedByDescending { it.measuredAt } }
+    }
+
+    /** Saves the markers taken in one go; a marker left out wasn't taken. */
+    suspend fun logMobility(values: Map<MobilityMarker, Double>, measuredAt: Long) = db.withTransaction {
+        values.forEach { (marker, value) ->
+            bodyDao.insert(MeasurementEntity(logDate = days.of(measuredAt), measuredAt = measuredAt, type = marker.type(), value = value))
+        }
+    }
+
     // Scans (IB-01, IB-02)
 
     fun observeScans(): Flow<List<BodyCompositionEntity>> = bodyDao.observeScans()
@@ -245,3 +297,21 @@ class BodyRepository @Inject constructor(
         fun segmental(json: String?): SegmentalLean? = json?.let { runCatching { Json.decodeFromString<SegmentalLean>(it) }.getOrNull() }
     }
 }
+
+/** The measurement type a tape site is stored as. */
+fun TapeSite.type(): MeasurementType = when (this) {
+    TapeSite.WAIST -> MeasurementType.WAIST
+    TapeSite.CHEST -> MeasurementType.CHEST
+    TapeSite.ARM -> MeasurementType.ARM
+    TapeSite.THIGH -> MeasurementType.THIGH
+    TapeSite.HIP -> MeasurementType.HIP
+}
+
+fun MeasurementType.tapeSite(): TapeSite? = TapeSite.entries.firstOrNull { it.type() == this }
+
+fun MobilityMarker.type(): MeasurementType = when (this) {
+    MobilityMarker.SIT_AND_REACH -> MeasurementType.SIT_AND_REACH
+    MobilityMarker.SQUAT_HOLD -> MeasurementType.SQUAT_HOLD
+    MobilityMarker.TOE_TOUCH -> MeasurementType.TOE_TOUCH
+}
+
