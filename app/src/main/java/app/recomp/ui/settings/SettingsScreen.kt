@@ -243,6 +243,7 @@ fun SettingsScreen(
     onOpenMeals: () -> Unit,
     onOpenPortions: () -> Unit,
     onOpenHidden: () -> Unit,
+    onOpenSnack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -339,6 +340,7 @@ fun SettingsScreen(
             onChange = viewModel::setRamp,
         )
         SettingRow("Meals", "Breakfast, lunch…", onClick = onOpenMeals)
+        SettingRow("Snack allowance", "Off, or 100–300 kcal", onClick = onOpenSnack)
         SettingRow("Portion sizes", "Katori, glass, cup…", onClick = onOpenPortions)
         SettingRow("Hidden foods", "Restore", onClick = onOpenHidden)
         SettingRow("Food data", "Sources", onClick = { foodData = true })

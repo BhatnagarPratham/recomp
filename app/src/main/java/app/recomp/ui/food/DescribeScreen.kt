@@ -52,10 +52,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import app.recomp.data.prefs.AiSettings
 import app.recomp.data.repo.AiGateView
-import app.recomp.data.repo.AiItemToLog
+import app.recomp.data.repo.DescribeResult
+import app.recomp.data.repo.FoodHit
+import app.recomp.data.repo.ItemFrom
+import app.recomp.data.repo.MealDescriber
+import app.recomp.data.repo.PortionChoice
+import app.recomp.data.repo.UnmatchedPart
 import app.recomp.data.repo.AiRepository
 import app.recomp.data.repo.DraftPlan
-import app.recomp.data.repo.EstimateResult
 import app.recomp.data.repo.FoodLogRepository
 import app.recomp.data.repo.FoodRepository
 import app.recomp.domain.ai.AiKind
@@ -90,22 +94,24 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** A reviewed item: what Claude estimated and what you've made of it. Changing anything makes it [edited]. */
-data class ReviewItem(val original: EstimatedItem, val current: EstimatedItem) {
-    val edited: Boolean get() = current != original
-}
-
-/** Describe it's three steps (PRD §7.7): typing, waiting for Claude, and reviewing the estimate. */
+/** Describe it's three steps (PRD §7.7): typing, waiting for the estimate, and reviewing it. */
 sealed interface DescribePhase {
     data object Input : DescribePhase
     data object Estimating : DescribePhase
-    /** [notice] says why a re-estimate didn't replace this one. */
+
+    /**
+     * [requestId] is the AI request, or null when the local parser answered alone (AI-04). [unmatched] are the
+     * chunks nothing found, as typed. [notice] says why a re-estimate didn't replace this one, or why the AI's
+     * part is missing.
+     */
     data class Review(
-        val requestId: Long,
+        val requestId: Long?,
         val items: List<ReviewItem>,
         val rejected: List<String>,
         val question: String?,
         val notice: String? = null,
+        val unmatched: List<UnmatchedPart> = emptyList(),
+        val alreadyCounted: List<ReviewItem> = emptyList(),
     ) : DescribePhase
 }
 
@@ -118,7 +124,8 @@ class DescribeViewModel @Inject constructor(
     private val ai: AiRepository,
     private val log: FoodLogRepository,
     private val foods: FoodRepository,
-) : ViewModel() {
+    private val describer: MealDescriber,
+) : ViewModel(), ReviewActions {
     private val route = savedState.toRoute<DescribeRoute>()
     val date: LocalDate = LocalDate.parse(route.date)
     val slot: String = route.slot
@@ -210,26 +217,35 @@ class DescribeViewModel @Inject constructor(
         val plan = if (clarification == null) DraftPlan(date, slot, draftId, keep = { mine == attempt }) else null
         viewModelScope.launch {
             val result = try {
-                ai.estimate(description, origin.value, clarification, plan)
+                describer.describe(description, origin.value, AiKind.MEAL_TEXT, clarification, plan)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                EstimateResult.Failed(AiStatus.UNEXPECTED, requestId = null)
+                DescribeResult.Failed(AiStatus.UNEXPECTED, requestId = null)
             }
             if (mine != attempt) return@launch
             val earlier = beforeReestimate
             beforeReestimate = null
             when (result) {
-                is EstimateResult.Estimated -> _phase.value = DescribePhase.Review(
-                    requestId = result.requestId,
-                    items = result.meal.items.map { ReviewItem(it, it) },
-                    rejected = result.meal.rejected,
-                    question = result.meal.clarifyingQuestion,
-                )
-                // The gate changed since the button showed: back to the text (or the earlier estimate), which says why.
-                is EstimateResult.NotReady -> _phase.value = earlier?.copy(notice = "AI isn't ready right now, so this is the earlier estimate.")
-                    ?: DescribePhase.Input
-                is EstimateResult.Failed -> if (earlier != null) {
+                is DescribeResult.Described -> {
+                    val meal = result.meal
+                    _phase.value = when {
+                        // A re-estimate that didn't reach the AI keeps the estimate it started from, which was paid for.
+                        earlier != null && meal.aiFailure != null -> earlier.copy(notice = "${AiText.reason(meal.aiFailure, provider())}, so this is the earlier estimate.")
+                        earlier != null && meal.requestId == null -> earlier.copy(notice = "AI isn't ready right now, so this is the earlier estimate.")
+                        meal.items.isEmpty() && meal.unmatched.isEmpty() -> DescribePhase.Input
+                        else -> DescribePhase.Review(
+                            requestId = meal.requestId.takeIf { meal.aiFailure == null },
+                            items = meal.reviewItems(),
+                            rejected = meal.rejected,
+                            question = meal.question,
+                            notice = DescribeText.notice(meal, provider()),
+                            unmatched = meal.unmatched,
+                            alreadyCounted = meal.countedItems(),
+                        )
+                    }
+                }
+                is DescribeResult.Failed -> if (earlier != null) {
                     _phase.value = earlier.copy(notice = "${AiText.reason(result.status, provider())}, so this is the earlier estimate.")
                 } else {
                     // Whatever went wrong, the description is kept: by the repository, or here if it never got that far.
@@ -269,18 +285,34 @@ class DescribeViewModel @Inject constructor(
     private suspend fun finishing(block: suspend () -> Unit) {
         try {
             block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A save that can't go through (a food gone after a backup import, nothing left to log) keeps the review
+            // and says why, rather than crashing.
+            (_phase.value as? DescribePhase.Review)?.let { _phase.value = it.copy(notice = DescribeText.saveFailed(e)) }
         } finally {
             if (_outcome.value == null) _busy.value = false
         }
     }
 
-    fun update(index: Int, item: EstimatedItem) = editReview { items -> items.mapIndexed { i, r -> if (i == index) r.copy(current = item) else r } }
+    override fun update(index: Int, item: ReviewItem) = editReview { it.copy(items = ReviewEdits.update(it.items, index, item)) }
 
-    fun remove(index: Int) = editReview { items -> items.filterIndexed { i, _ -> i != index } }
+    override fun remove(index: Int) = editReview { it.copy(items = ReviewEdits.remove(it.items, index)) }
 
-    private fun editReview(change: (List<ReviewItem>) -> List<ReviewItem>) {
+    override fun resolve(chunk: String, item: ReviewItem) = editReview { it.copy(items = it.items + item, unmatched = ReviewEdits.without(it.unmatched, chunk)) }
+
+    override fun skip(chunk: String) = editReview { it.copy(unmatched = ReviewEdits.without(it.unmatched, chunk)) }
+
+    override fun addAnyway(index: Int) = editReview { r -> ReviewEdits.addAnyway(r.items, r.alreadyCounted, index).let { (items, counted) -> r.copy(items = items, alreadyCounted = counted) } }
+
+    override suspend fun searchFoods(query: String): List<FoodHit> = foods.search(query)
+
+    override suspend fun portion(foodId: Long): PortionChoice? = foods.portion(foodId)
+
+    private fun editReview(change: (DescribePhase.Review) -> DescribePhase.Review) {
         val review = _phase.value as? DescribePhase.Review ?: return
-        _phase.value = review.copy(items = change(review.items))
+        _phase.value = change(review)
     }
 
     suspend fun mealNamed(name: String) = log.savedMealNamed(name)
@@ -291,11 +323,11 @@ class DescribeViewModel @Inject constructor(
         if (review.items.isEmpty() || !claim()) return
         viewModelScope.launch {
             finishing {
-                val ids = log.saveAiMeal(
-                    date, slot, review.items.map { AiItemToLog(it.current, it.edited) }, origin.value, review.requestId, foods.defaultDiet(),
+                val ids = log.saveDescribedMeal(
+                    date, slot, review.items.map { it.toLog() }, origin.value, review.requestId, foods.defaultDiet(),
                     mealName = mealName, draftId = draftId,
                 )
-                val totals = MealCheck.totals(review.items.map { it.current })
+                val totals = review.items.totals()
                 val n = review.items.size
                 _outcome.value = DescribeOutcome(
                     "Added $n ${if (n == 1) "item" else "items"} · ${FoodText.kcalProtein(totals)}" + if (mealName != null) " · saved to My meals" else "",
@@ -334,7 +366,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     val scope = rememberCoroutineScope()
     var notice by remember { mutableStateOf(false) }
     var addingKey by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Int?>(null) }
+    var target by remember { mutableStateOf<ReviewTarget?>(null) }
     var naming by remember { mutableStateOf<String?>(null) }
     var replacing by remember { mutableStateOf<String?>(null) }
     val slotName = slots.firstOrNull { it.key == viewModel.slot }?.name ?: viewModel.slot
@@ -345,9 +377,12 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
 
     LaunchedEffect(outcome) { outcome?.let(onDone) }
 
-    /** The first estimate shows the privacy notice once (TRD §6.2). */
+    /**
+     * The first estimate that may reach the provider shows the privacy notice once (TRD §6.2). With AI off or not
+     * ready nothing leaves the phone: the local parser answers (AI-04).
+     */
     fun requestEstimate() {
-        if (settings?.noticeSeen(AiKind.MEAL_TEXT) == true) viewModel.estimate() else notice = true
+        if (!ready || settings?.noticeSeen(AiKind.MEAL_TEXT) == true) viewModel.estimate() else notice = true
     }
 
     // Estimate now on a draft: start once the gate is known, and only if it's READY then. A gate that becomes
@@ -401,7 +436,12 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
                 padding = padding,
                 review = p,
                 origin = origin,
-                onEdit = { editing = it },
+                onEdit = { target = ReviewTarget.Edit(it) },
+                onSearch = { target = ReviewTarget.Search(it) },
+                onQuickAdd = { target = ReviewTarget.Quick(it) },
+                onSkip = viewModel::skip,
+                onResolve = viewModel::resolve,
+                onAddAnyway = viewModel::addAnyway,
                 onReestimate = { answer -> p.question?.let { viewModel.estimate(Clarification(it, answer)) } },
                 onSave = { viewModel.save(null) },
                 onSaveAsMeal = { naming = text.trim().replace(Regex("\\s+"), " ").take(40).trimEnd(',', ' ') },
@@ -428,22 +468,7 @@ fun DescribeScreen(onBack: () -> Unit, onDone: (DescribeOutcome) -> Unit, viewMo
     if (addingKey) {
         ApiKeyDialog(provider = settings?.provider ?: AiProviderId.DEFAULT, hasKey = hasKey, onDismiss = { addingKey = false }, onSave = { key -> viewModel.saveKey(key); addingKey = false }, onRemove = null)
     }
-    val review = phase as? DescribePhase.Review
-    editing?.let { index ->
-        val item = review?.items?.getOrNull(index)
-        if (item == null) {
-            editing = null
-        } else {
-            AiItemSheet(
-                item = item.current,
-                onDismiss = { editing = null },
-                onRemove = { editing = null; viewModel.remove(index) },
-            ) { edited ->
-                editing = null
-                viewModel.update(index, edited)
-            }
-        }
-    }
+    ReviewSheets(target, (phase as? DescribePhase.Review)?.items.orEmpty(), slots, origin, viewModel) { target = null }
     naming?.let { initial ->
         TextEntryDialog("Save to My meals", initial, onDismiss = { naming = null }) { name ->
             naming = null
@@ -490,7 +515,7 @@ private fun InputStep(
         AiText.notReady(gate)?.let { reason ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(reason, style = MaterialTheme.typography.bodyMedium)
+                    Text("$reason ${DescribeText.PARSER_MEANWHILE}", style = MaterialTheme.typography.bodyMedium)
                     if (gate?.state == AiState.NO_KEY) OutlinedButton(onClick = onAddKey) { Text("Add key") }
                     if (gate?.state == AiState.NO_LOCAL_NETWORK) OutlinedButton(onClick = onAllowLocalNetwork) { Text("Allow") }
                 }
@@ -516,18 +541,27 @@ private fun InputStep(
         Text("Origin", style = MaterialTheme.typography.labelLarge)
         ChoiceChips(Origin.entries, origin, FoodText::origin, { if (!estimating) onOrigin(it) })
         if (origin == Origin.ORDERED) {
-            Text("The estimate assumes restaurant levels of oil, ghee and cream.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (ready) "The estimate assumes restaurant levels of oil, ghee and cream." else FoodText.ORDERED_NOTE,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (gate?.state == AiState.OFF) {
+            Text(DescribeText.PARSER_ONLY, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (estimating) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(Modifier.padding(4.dp))
-                Text("Estimating with ${modelLabel ?: "AI"}… usually a few seconds.", Modifier.weight(1f))
+                Text(if (ready) "Estimating with ${modelLabel ?: "AI"}… usually a few seconds." else "Matching your foods…", Modifier.weight(1f))
             }
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel") }
-        } else if (ready) {
-            Button(onClick = onEstimate, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
         } else {
-            Button(onClick = onSaveDraft, enabled = text.isNotBlank() && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save draft") }
+            Button(onClick = onEstimate, enabled = text.isNotBlank() && gate != null && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Estimate") }
+            // AI on but not ready (AI-02): the parser answers now, and the description can still wait for the AI.
+            if (!ready && gate != null && gate.state != AiState.OFF) {
+                OutlinedButton(onClick = onSaveDraft, enabled = text.isNotBlank() && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Save draft") }
+            }
         }
     }
 }
@@ -538,13 +572,18 @@ private fun ReviewStep(
     review: DescribePhase.Review,
     origin: Origin,
     onEdit: (Int) -> Unit,
+    onSearch: (String) -> Unit,
+    onQuickAdd: (String) -> Unit,
+    onSkip: (String) -> Unit,
+    onResolve: (String, ReviewItem) -> Unit,
+    onAddAnyway: (Int) -> Unit,
     onReestimate: (String) -> Unit,
     onSave: () -> Unit,
     onSaveAsMeal: () -> Unit,
     busy: Boolean,
 ) {
     var answer by remember(review.requestId) { mutableStateOf("") }
-    val totals = MealCheck.totals(review.items.map { it.current })
+    val totals = review.items.totals()
     Column(Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
@@ -583,7 +622,24 @@ private fun ReviewStep(
                 }
             }
             itemsIndexed(review.items) { index, r -> ReviewRow(r, onClick = { onEdit(index) }) }
-            if (review.items.isEmpty()) item { Text("Every item was removed. Go back to describe the meal again.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            itemsIndexed(review.unmatched) { _, part ->
+                UnmatchedRow(
+                    part,
+                    onUse = { part.guess?.let { onResolve(part.typed, it.reviewItem()) } },
+                    onSearch = { onSearch(part.typed) },
+                    onQuickAdd = { onQuickAdd(part.typed) },
+                    onSkip = { onSkip(part.typed) },
+                )
+            }
+            itemsIndexed(review.alreadyCounted) { index, r -> CountedRow(r, onAdd = { onAddAnyway(index) }) }
+            if (review.items.isEmpty()) {
+                item {
+                    Text(
+                        if (review.unmatched.isEmpty()) "Every item was removed. Go back to describe the meal again." else "Nothing matched yet. Search or quick add each part, or go back and reword it.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         Column(Modifier.fillMaxWidth().padding(16.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onSave, enabled = review.items.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Save") }
@@ -593,14 +649,15 @@ private fun ReviewStep(
 }
 
 @Composable
-private fun ReviewRow(r: ReviewItem, onClick: () -> Unit) {
+internal fun ReviewRow(r: ReviewItem, onClick: () -> Unit) {
     val item = r.current
     Column(Modifier.fillMaxWidth().clickable(onClickLabel = "Change ${item.name}", onClick = onClick).padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(item.name + if (r.edited) " · edited" else "", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${amount(item)} · ${AiText.confidence(item.confidence)}",
+                    // Where the numbers came from (PRD §12.5), and how sure the estimate or the match is.
+                    listOfNotNull(amount(item), FoodText.from(r.from), AiText.confidence(item.confidence).takeIf { r.quick == null && !r.picked }).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -611,7 +668,7 @@ private fun ReviewRow(r: ReviewItem, onClick: () -> Unit) {
             }
         }
         if (item.assumptions.isNotBlank()) Text(item.assumptions, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (MealCheck.mismatched(item)) {
+        if (r.from == ItemFrom.AI && MealCheck.mismatched(item)) {
             Text(
                 "⚠ Its calories don't match its macros (they add up to ${GoalText.kcal(item.macroKcal)}). Check the numbers.",
                 style = MaterialTheme.typography.bodySmall,
@@ -623,19 +680,24 @@ private fun ReviewRow(r: ReviewItem, onClick: () -> Unit) {
 }
 
 /** "2 piece · 70 g", or "150 g" when the unit is grams. */
-private fun amount(item: EstimatedItem): String {
+private fun amount(item: EstimatedItem): String? {
     val unit = item.unit.trim().lowercase()
-    return if (unit in Portions.GRAM_LABELS && unit != "ml") "${item.grams.roundToInt()} g"
-    else "${Portions.format(item.quantity)} ${item.unit.trim()} · ${item.grams.roundToInt()} g"
+    return when {
+        // A quick add has calories and protein, no weight.
+        item.grams <= 0 -> null
+        unit in Portions.GRAM_LABELS && unit != "ml" -> "${item.grams.roundToInt()} g"
+        else -> "${Portions.format(item.quantity)} ${item.unit.trim()} · ${item.grams.roundToInt()} g"
+    }
 }
 
 /**
  * Changes one estimated item: name, weight (which scales its macros) and numbers, or removes it. Any change
- * makes it an AI-learned food when saved (TRD §6.2).
+ * makes it an AI-learned food when saved (TRD §6.2). With [amountOnly] it's a food the parser matched or you
+ * picked: only its weight changes, because its numbers are the food's own.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AiItemSheet(item: EstimatedItem, onDismiss: () -> Unit, onRemove: () -> Unit, onSave: (EstimatedItem) -> Unit) {
+internal fun AiItemSheet(item: EstimatedItem, amountOnly: Boolean = false, onDismiss: () -> Unit, onRemove: () -> Unit, onSave: (EstimatedItem) -> Unit) {
     fun num(d: Double) = if (d % 1.0 == 0.0) "${d.toLong()}" else "%.1f".format(d)
     var name by remember { mutableStateOf(item.name) }
     var grams by remember { mutableStateOf(num(item.grams)) }
@@ -673,7 +735,7 @@ private fun AiItemSheet(item: EstimatedItem, onDismiss: () -> Unit, onRemove: ()
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Change item", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, enabled = !amountOnly, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 value = grams,
                 onValueChange = { t ->
@@ -689,16 +751,17 @@ private fun AiItemSheet(item: EstimatedItem, onDismiss: () -> Unit, onRemove: ()
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MacroField("Calories", kcal, "kcal", Modifier.weight(1f)) { v -> typed { kcal = v } }
-                MacroField("Protein", protein, "g", Modifier.weight(1f)) { v -> typed { protein = v } }
+                MacroField("Calories", kcal, "kcal", Modifier.weight(1f), !amountOnly) { v -> typed { kcal = v } }
+                MacroField("Protein", protein, "g", Modifier.weight(1f), !amountOnly) { v -> typed { protein = v } }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MacroField("Carbs", carbs, "g", Modifier.weight(1f)) { v -> typed { carbs = v } }
-                MacroField("Fat", fat, "g", Modifier.weight(1f)) { v -> typed { fat = v } }
+                MacroField("Carbs", carbs, "g", Modifier.weight(1f), !amountOnly) { v -> typed { carbs = v } }
+                MacroField("Fat", fat, "g", Modifier.weight(1f), !amountOnly) { v -> typed { fat = v } }
             }
-            MacroField("Fibre", fiber, "g", Modifier.fillMaxWidth()) { v -> typed { fiber = v } }
+            MacroField("Fibre", fiber, "g", Modifier.fillMaxWidth(), !amountOnly) { v -> typed { fiber = v } }
             Text(
-                "Saving a changed item also keeps it as one of your foods (AI-learned), so it shows in search and later estimates.",
+                if (amountOnly) "These are the food's own numbers for this weight. To change them, edit the food from search."
+                else "Saving a changed item also keeps it as one of your foods (AI-learned), so it shows in search and later estimates.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -706,8 +769,9 @@ private fun AiItemSheet(item: EstimatedItem, onDismiss: () -> Unit, onRemove: ()
                 onClick = {
                     val v = values.map { it!! }
                     val changed = item.copy(name = name.trim(), grams = g!!, kcal = v[0], proteinG = v[1], carbsG = v[2], fatG = v[3], fiberG = v[4])
-                    // Only a real change counts: retyping the same numbers leaves the item as Claude's.
-                    onSave(if (sameNumbers(changed, item)) item else changed)
+                    // Only a real change counts: retyping the same numbers leaves the item as it was estimated. A matched
+                    // food keeps its exact per-gram numbers, scaled to the new weight.
+                    onSave(if (sameNumbers(changed, item)) item else if (amountOnly) item.scaledTo(g) else changed)
                 },
                 enabled = valid,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -725,10 +789,11 @@ private fun sameNumbers(a: EstimatedItem, b: EstimatedItem): Boolean {
 }
 
 @Composable
-private fun MacroField(label: String, value: String, suffix: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+private fun MacroField(label: String, value: String, suffix: String, modifier: Modifier = Modifier, enabled: Boolean = true, onChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
+        enabled = enabled,
         label = { Text(label) },
         suffix = { Text(suffix) },
         singleLine = true,

@@ -9,9 +9,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -56,10 +57,23 @@ interface HostResolver {
     suspend fun addresses(host: String): List<InetAddress>
 }
 
+/**
+ * The system resolver, with a limit it really keeps. `InetAddress.getAllByName` doesn't respond to a thread
+ * interrupt, so the lookup runs on its own and the caller simply stops waiting after [limitMs]; a lookup that
+ * hangs finishes (or fails) on its own later and is ignored.
+ */
 @Singleton
-class DnsHostResolver @Inject constructor() : HostResolver {
-    override suspend fun addresses(host: String): List<InetAddress> = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(LOOKUP_MS) { runInterruptible { runCatching { InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList()) } }.orEmpty()
+class DnsHostResolver(
+    private val limitMs: Long,
+    private val lookup: (String) -> List<InetAddress>,
+) : HostResolver {
+    @Inject constructor() : this(LOOKUP_MS, { InetAddress.getAllByName(it).toList() })
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override suspend fun addresses(host: String): List<InetAddress> {
+        val found = scope.async { runCatching { lookup(host) }.getOrDefault(emptyList()) }
+        return withTimeoutOrNull(limitMs) { found.await() }.orEmpty()
     }
 
     private companion object {
