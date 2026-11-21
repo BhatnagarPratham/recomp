@@ -8,7 +8,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.recomp.ui.MainViewModel
+import app.recomp.ui.components.LocalUnitStyle
+import app.recomp.ui.components.unitStyle
 import app.recomp.ui.navigation.RecompNavHost
 import app.recomp.ui.theme.RecompTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -27,7 +32,11 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             RecompTheme {
-                RecompNavHost(mainViewModel)
+                // PR-05: every screen formats weights and lengths with the persona's units.
+                val units by mainViewModel.units.collectAsStateWithLifecycle()
+                CompositionLocalProvider(LocalUnitStyle provides unitStyle(units)) {
+                    RecompNavHost(mainViewModel)
+                }
             }
         }
     }

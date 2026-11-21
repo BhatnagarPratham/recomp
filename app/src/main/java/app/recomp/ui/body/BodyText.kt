@@ -17,6 +17,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.format.TextStyle
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.Locale
 import kotlin.math.abs
 
@@ -140,4 +144,69 @@ object BodyText {
 
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+
+    // Body weights and lengths in either unit (PR-05). Every body weight, tape and height on screen goes through these.
+
+    private fun one(value: Double, style: UnitStyle): String = style.mark("%.1f".format(Locale.ROOT, value))
+
+    /** A body weight from grams, to 0.1 in kg or lb. */
+    fun weight(grams: Int, style: UnitStyle): String = weight(grams / 1000.0, style)
+
+    fun weight(kg: Double, style: UnitStyle): String = "${weightNumber(kg, style)} ${style.weight}"
+
+    /** The number alone, for a field with the unit beside it. */
+    fun weightNumber(kg: Double, style: UnitStyle): String = one(UnitMath.weightOf(kg, style.units), style)
+
+    /** A change in kg: "+0.4 kg", "−0.9 lb"; one that shows as 0.0 has no sign. */
+    fun signedWeight(kgDelta: Double, style: UnitStyle): String = signedIn(UnitMath.weightOf(kgDelta, style.units), style.weight, style)
+
+    /** A length from cm: "81.5 cm", "32.25 in" (inches to the quarter, up to 2 decimals). */
+    fun length(cm: Double, style: UnitStyle): String = "${lengthNumber(cm, style)} ${style.length}"
+
+    fun lengthNumber(cm: Double, style: UnitStyle): String =
+        if (style.imperial) style.mark(BigDecimal(UnitMath.cmToIn(cm)).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString())
+        else one(cm, style)
+
+    /** A change in cm: "−1.2 cm", "−0.4 in". */
+    fun signedLength(cmDelta: Double, style: UnitStyle): String = signedIn(UnitMath.lengthOf(cmDelta, style.units), style.length, style)
+
+    /** "175 cm", "5 ft 9 in". */
+    fun height(cm: Double, style: UnitStyle): String =
+        if (style.imperial) UnitMath.feetAndInches(cm).let { (ft, inches) -> "$ft ft $inches in" } else "${GoalText.d(cm)} cm"
+
+    private fun signedIn(value: Double, unit: String, style: UnitStyle): String {
+        val tenths = Math.round(value * 10)
+        return (if (tenths > 0) "+" else if (tenths < 0) "−" else "") + "${one(abs(tenths) / 10.0, style)} $unit"
+    }
+
+    /** A typed body weight in the style's unit, in grams (lb typed to 0.1). Null when it isn't a number. */
+    fun parseWeight(text: String, style: UnitStyle): Int? = parse(text)?.let { value ->
+        if (style.imperial) UnitMath.lbToG(BigDecimal(value).setScale(1, RoundingMode.HALF_UP)) else Math.round(value * 1000).toInt()
+    }
+
+    /** A typed length in the style's unit, in cm. */
+    fun parseLength(text: String, style: UnitStyle): Double? = parse(text)?.let { UnitMath.lengthToCm(it, style.units) }
+
+    /** A body-weight stepper: 0.1 kg, or 0.2 lb on the lb grid so steps never drift. */
+    fun weightStep(grams: Int, up: Boolean, style: UnitStyle): Int {
+        if (!style.imperial) return grams + if (up) 100 else -100
+        val lb = BigDecimal(grams).divide(UnitMath.G_PER_LB, 1, RoundingMode.HALF_UP)
+        return UnitMath.lbToG(if (up) lb + STEP_LB else lb - STEP_LB)
+    }
+
+    /** A tape stepper: 0.5 cm, or ¼ in. Works in cm, so callers keep the exact value they show. */
+    fun lengthStep(cm: Double, up: Boolean, style: UnitStyle): Double =
+        if (style.imperial) UnitMath.inToCm(Math.round(UnitMath.cmToIn(cm) * 4) / 4.0 + if (up) 0.25 else -0.25) else cm + if (up) 0.5 else -0.5
+
+    /** The weekly rate in the style's unit: "−0.4 kg this week (−0.5%)". */
+    fun rate(r: WeeklyRate, style: UnitStyle): String = "${signedWeight(r.kgPerWeek, style)} this week (${signed(r.pctPerWeek, "%").replace(" %", "%")})"
+
+    fun scanChange(c: ScanChange, style: UnitStyle): String =
+        "${signedWeight(c.muscleKg, style)} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
+            "; ${signed(c.bodyFatPct, "pts")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
+
+    fun scanSlopes(s: ScanSlopes, style: UnitStyle): String =
+        "Per 4 weeks: muscle ${signedWeight(s.muscleKg, style)}, fat mass ${signedWeight(s.fatKg, style)}, body fat ${signed(s.bodyFatPct, "pts")}"
+
+    private val STEP_LB = BigDecimal("0.2")
 }
