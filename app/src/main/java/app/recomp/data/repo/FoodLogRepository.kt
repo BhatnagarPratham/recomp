@@ -330,6 +330,7 @@ class FoodLogRepository @Inject constructor(
         val name = item.name.trim()
         val existing = foodDao.ownFoodNamed(name)
         val id = if (existing != null) {
+            val retagged = existing.source == FoodSource.AI && item.diet != null && item.diet != existing.diet
             foodDao.update(
                 existing.copy(
                     name = if (existing.source == FoodSource.AI) name else existing.name,
@@ -337,6 +338,8 @@ class FoodLogRepository @Inject constructor(
                     kcal100g = per.kcal, protein100g = per.proteinG, carbs100g = per.carbsG, fat100g = per.fatG, fiber100g = per.fiberG,
                 ),
             )
+            // A new diet tag reaches the recipes that hold this food (M14).
+            if (retagged) RecipeTags.refresh(db)
             existing.id
         } else {
             foodDao.insert(
@@ -397,15 +400,21 @@ class FoodLogRepository @Inject constructor(
 
     /**
      * One tap (NU-13): logs every item into [slot]. An item with a food recomputes from the food's current
-     * values, so a corrected custom food flows through; one without (a quick add) uses its snapshot.
+     * values, so a corrected custom food flows through; one without (a quick add) uses its snapshot. An amount
+     * in one of the food's own units takes that unit's current weight, so "1 serving" of a recipe follows its
+     * latest cooked weight and servings (M14), and a recalibrated unit is honoured. Grams, and a unit the food
+     * no longer has, keep the weight the meal was saved with.
      */
     suspend fun logSavedMeal(mealId: Long, date: LocalDate, slot: String, now: Long = System.currentTimeMillis()): List<Long> = db.withTransaction {
         val meal = savedMealDao.get(mealId) ?: return@withTransaction emptyList()
         val foods = foodDao.get(meal.items.mapNotNull { it.foodId }).associateBy { it.id }
+        val units = foodDao.units(foods.keys.toList()).groupBy { it.foodId }
         val rows = meal.items.sortedBy { it.position }.mapIndexed { i, item ->
             val food = item.foodId?.let(foods::get)
             if (food != null && item.grams != null) {
-                entry(date, slot, food, item.quantity, item.unitLabel, item.grams, item.origin, LogSource.SAVED_MEAL, now + i)
+                val unit = units[food.id]?.firstOrNull { it.label == item.unitLabel && it.label != Portions.GRAMS && it.grams > 0 }
+                val grams = unit?.let { item.quantity * it.grams } ?: item.grams
+                entry(date, slot, food, item.quantity, item.unitLabel, grams, item.origin, LogSource.SAVED_MEAL, now + i)
             } else {
                 FoodLogEntity(
                     logDate = date, mealSlot = slot, foodId = item.foodId, name = item.name, quantity = item.quantity, unitLabel = item.unitLabel,

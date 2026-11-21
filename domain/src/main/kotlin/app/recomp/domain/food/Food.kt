@@ -27,7 +27,8 @@ fun Diet.allows(tag: FoodDiet): Boolean = tag.ordinal <= level
 /** The tag a food you create gets by default: the most your diet allows, so it always shows for you. */
 val Diet.ownFoodTag: FoodDiet get() = FoodDiet.entries[level]
 
-enum class FoodSource { SEED, INDB, CUSTOM, AI, OFF, LABEL_OCR }
+/** Where a food came from. [RECIPE] is one you built from other foods (NU-22); its values come from its ingredients. */
+enum class FoodSource { SEED, INDB, CUSTOM, AI, OFF, LABEL_OCR, RECIPE }
 
 /** Why a food's numbers deserve a warning (TRD §6.4). */
 enum class FoodCaveat {

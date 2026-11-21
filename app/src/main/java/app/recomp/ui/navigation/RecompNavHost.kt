@@ -47,6 +47,8 @@ import app.recomp.ui.food.FoodScreen
 import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
 import app.recomp.ui.food.PortionSizesScreen
+import app.recomp.ui.food.RecipeOutcome
+import app.recomp.ui.food.RecipeScreen
 import app.recomp.ui.onboarding.OnboardingScreen
 import app.recomp.ui.reminders.LocalOpenReminders
 import app.recomp.ui.reminders.RemindersScreen
@@ -114,6 +116,9 @@ import kotlinx.serialization.Serializable
 
 /** Adding food to one meal of one day (J3). [date] is an ISO log date. */
 @Serializable data class AddFoodRoute(val date: String, val slot: String)
+
+/** The recipe editor (NU-22): [id] is the recipe's food, or 0 for a new one starting with [name]. */
+@Serializable data class RecipeRoute(val id: Long = 0, val name: String = "")
 
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
 @Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
@@ -228,13 +233,20 @@ fun RecompNavHost(main: MainViewModel) {
             }
             composable<AddFoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
+                val (recipe, recipeShown) = entry.recipeOutcome()
                 AddFoodScreen(
                     onDone = { nav.popBackStack() },
                     onDescribe = { date, slot -> nav.navigate(DescribeRoute(date.toString(), slot)) },
                     onFit = { slot -> nav.navigate(FitRoute(slot)) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
+                    onRecipe = { id, name -> nav.navigate(RecipeRoute(id ?: 0, if (id == null) name else "")) },
+                    recipeOutcome = recipe,
+                    onRecipeOutcomeShown = recipeShown,
                 )
+            }
+            composable<RecipeRoute> {
+                RecipeScreen(onBack = { nav.popBackStack() }, onSaved = { outcome -> nav.finishRecipe(outcome) })
             }
             composable<DescribeRoute> {
                 DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
@@ -380,6 +392,32 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
+}
+
+/** The recipe editor ends back on add food, which opens a new recipe's portion sheet. */
+private fun NavHostController.finishRecipe(outcome: RecipeOutcome) {
+    previousBackStackEntry?.savedStateHandle?.apply {
+        set(RecipeOutcomeKeys.CREATED, outcome.created)
+        set(RecipeOutcomeKeys.FOOD, outcome.foodId)
+    }
+    popBackStack()
+}
+
+private object RecipeOutcomeKeys {
+    const val FOOD = "recipe_food"
+    const val CREATED = "recipe_created"
+}
+
+/** The saved recipe waiting in this entry's saved state, and how to clear it once handled (as for Describe it). */
+@Composable
+private fun NavBackStackEntry.recipeOutcome(): Pair<RecipeOutcome?, () -> Unit> {
+    val handle = savedStateHandle
+    val food by handle.getStateFlow<Long?>(RecipeOutcomeKeys.FOOD, null).collectAsStateWithLifecycle()
+    val outcome = food?.let { RecipeOutcome(it, handle.get<Boolean>(RecipeOutcomeKeys.CREATED) == true) }
+    return outcome to {
+        handle.remove<Long>(RecipeOutcomeKeys.FOOD)
+        handle.remove<Boolean>(RecipeOutcomeKeys.CREATED)
+    }
 }
 
 /** Describe it ends back where it started (add food, or the Food tab's draft), which shows its message. */
