@@ -212,6 +212,7 @@ fun CheckinScreen(onBack: () -> Unit, viewModel: CheckinViewModel = hiltViewMode
                 TextButton(onClick = viewModel::dismissError) { Text("OK") }
             }
             ReviewSections(review)
+            ProgrammeReviewButton(review.weekStart)
         }
     }
 }
