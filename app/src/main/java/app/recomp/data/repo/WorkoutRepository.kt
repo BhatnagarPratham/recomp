@@ -106,9 +106,8 @@ class WorkoutRepository @Inject constructor(
         )
         insertInitialSets(id, exercise.id, sets)
         // Frozen now, so the summary grades against what you were shown (TRD §5.1). A deload waiting on the exercise
-        // (M11) is this workout's target instead, once.
-        val startedAt = workoutDao.session(sessionId)?.startedAt ?: System.currentTimeMillis()
-        val rec = progression.takePendingDeload(exercise.id, sets, repMin, startedAt) ?: progression.recommend(exercise, sets, repMin, repMax)
+        // (M11) is this workout's target instead; *Finish* uses it up.
+        val rec = progression.pendingDeload(exercise.id, sets, repMin) ?: progression.recommend(exercise, sets, repMin, repMax)
         workoutDao.setRecommendation(id, ProgressionRepository.encode(rec))
         return id
     }
@@ -267,6 +266,7 @@ class WorkoutRepository @Inject constructor(
     suspend fun finish(sessionId: Long, endedAt: Long = System.currentTimeMillis()) = db.withTransaction {
         workoutDao.deleteIncompleteSets(sessionId)
         progression.recordPrs(sessionId, endedAt)
+        progression.consumePendingDeloads(sessionId)
         workoutDao.finish(sessionId, endedAt)
     }
 

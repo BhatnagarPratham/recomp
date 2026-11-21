@@ -46,6 +46,7 @@ import app.recomp.data.repo.TargetPreview
 import app.recomp.domain.ai.AiKind
 import app.recomp.domain.ai.AiProviderId
 import app.recomp.domain.coach.Change
+import app.recomp.domain.coach.ProgrammeReport
 import app.recomp.domain.coach.ReportSections
 import app.recomp.ui.components.SectionTitle
 import app.recomp.ui.food.AiText
@@ -70,7 +71,8 @@ data class ProgrammeReviewUi(
     val week: LocalDate,
     val step: ReviewStep = ReviewStep.CHECKLIST,
     val sections: ReportSections = ReportSections(),
-    val preview: String? = null,
+    /** The report as previewed: *Send* sends exactly this, text and refs. */
+    val report: ProgrammeReport? = null,
     val view: ProgrammeReviewView? = null,
     val message: String? = null,
     /** A target suggestion's before and after, waiting for *Save*. */
@@ -100,24 +102,26 @@ class ProgrammeReviewViewModel @Inject constructor(
         if (route.reviewId != 0L) open(route.reviewId)
     }
 
-    fun setSections(sections: ReportSections) = _ui.update { it.copy(sections = sections, preview = null) }
+    fun setSections(sections: ReportSections) = _ui.update { it.copy(sections = sections, report = null) }
 
     /** The full text, exactly as it would be sent. */
     fun preview() = viewModelScope.launch {
         val s = _ui.value.sections
         if (!s.any) return@launch _ui.update { it.copy(message = ProgrammeReviewText.NOTHING_TICKED) }
-        val text = reviews.report(_ui.value.week, s).text
-        _ui.update { it.copy(step = ReviewStep.PREVIEW, preview = text, message = null) }
+        val report = reviews.report(_ui.value.week, s)
+        _ui.update { it.copy(step = ReviewStep.PREVIEW, report = report, message = null) }
     }
 
-    fun back() = _ui.update { it.copy(step = ReviewStep.CHECKLIST, preview = null, message = null) }
+    fun back() = _ui.update { it.copy(step = ReviewStep.CHECKLIST, report = null, message = null) }
 
+    /** Sends the report as previewed, even if the week has changed since. */
     fun send() {
         if (_ui.value.step == ReviewStep.SENDING) return
+        val report = _ui.value.report ?: return
         _ui.update { it.copy(step = ReviewStep.SENDING, message = null) }
         viewModelScope.launch {
             ai.markNoticeSeen(AiKind.COACH)
-            when (val r = reviews.send(_ui.value.week, _ui.value.sections)) {
+            when (val r = reviews.send(_ui.value.week, report)) {
                 is ReviewSendResult.Done -> {
                     _ui.update { it.copy(step = ReviewStep.RESULT, view = reviews.view(r.reviewId)) }
                 }
@@ -141,38 +145,65 @@ class ProgrammeReviewViewModel @Inject constructor(
         _ui.update { it.copy(step = ReviewStep.RESULT, view = reviews.view(id), message = null, undo = null) }
     }
 
-    fun apply(index: Int) = viewModelScope.launch {
-        val view = _ui.value.view ?: return@launch
-        val change = view.suggestions.getOrNull(index)?.change ?: return@launch
+    fun apply(index: Int) {
+        // One answer at a time: a second tap in the same frame does nothing.
+        if (_ui.value.busy) return
+        _ui.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                applyNow(index)
+            } finally {
+                _ui.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    private suspend fun applyNow(index: Int) {
+        val view = _ui.value.view ?: return
+        val change = view.suggestions.getOrNull(index)?.change ?: return
         if (change is Change.Calories || change is Change.Protein) {
             // A target change shows its before and after first, as Settings does.
             reviews.previewTarget(change)?.let { p -> _ui.update { it.copy(target = index to p) } }
-            return@launch
+            return
         }
         commit(index, change)
     }
 
-    fun confirmTarget() = viewModelScope.launch {
-        val (index, _) = _ui.value.target ?: return@launch
-        val change = _ui.value.view?.suggestions?.getOrNull(index)?.change ?: return@launch
-        _ui.update { it.copy(target = null) }
-        commit(index, change)
+    fun confirmTarget() {
+        val (index, _) = _ui.value.target ?: return
+        if (_ui.value.busy) return
+        val change = _ui.value.view?.suggestions?.getOrNull(index)?.change ?: return
+        _ui.update { it.copy(target = null, busy = true) }
+        viewModelScope.launch {
+            try {
+                commit(index, change)
+            } finally {
+                _ui.update { it.copy(busy = false) }
+            }
+        }
     }
 
     fun dismissTarget() = _ui.update { it.copy(target = null) }
 
     private suspend fun commit(index: Int, change: Change) {
         val view = _ui.value.view ?: return
-        _ui.update { it.copy(busy = true) }
         val undo = reviews.apply(view.row.id, index)
-        _ui.update { it.copy(busy = false, undo = undo, view = reviews.view(view.row.id), message = ProgrammeReviewText.applied(change)) }
+        _ui.update { it.copy(undo = undo, view = reviews.view(view.row.id), message = ProgrammeReviewText.applied(change)) }
     }
 
-    fun undo() = viewModelScope.launch {
-        val undo = _ui.value.undo ?: return@launch
-        reviews.undo(undo)
-        val id = _ui.value.view?.row?.id ?: return@launch
-        _ui.update { it.copy(undo = null, view = reviews.view(id), message = ProgrammeReviewText.UNDONE) }
+    fun undo() {
+        val undo = _ui.value.undo ?: return
+        if (_ui.value.busy) return
+        _ui.update { it.copy(undo = null, busy = true) }
+        viewModelScope.launch {
+            try {
+                reviews.undo(undo)
+                val id = _ui.value.view?.row?.id ?: return@launch
+                _ui.update { it.copy(view = reviews.view(id), message = ProgrammeReviewText.UNDONE) }
+            } finally {
+                _ui.update { it.copy(busy = false) }
+            }
+        }
     }
 }
 
@@ -206,7 +237,7 @@ fun ProgrammeReviewScreen(onBack: () -> Unit, viewModel: ProgrammeReviewViewMode
                 ReviewStep.PREVIEW -> {
                     Text("This is everything that's sent:", style = MaterialTheme.typography.titleMedium)
                     Card(Modifier.fillMaxWidth()) {
-                        Text(ui.preview.orEmpty(), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        Text(ui.report?.text.orEmpty(), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                     Text(ProgrammeReviewText.sentTo(provider, sendsKey), color = muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -300,8 +331,8 @@ private fun Result(view: ProgrammeReviewView, ui: ProgrammeReviewUi, viewModel: 
                 if (s.reason.isNotBlank()) Text(s.reason)
                 ProgrammeReviewText.adviceOnly(s)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = muted) }
                 when {
-                    s.change == null -> Unit
                     index in view.applied -> Text(ProgrammeReviewText.APPLIED, color = MaterialTheme.colorScheme.primary)
+                    s.change == null -> Unit
                     else -> Button(onClick = { viewModel.apply(index) }, enabled = !ui.busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Apply") }
                 }
             }

@@ -99,6 +99,9 @@ data class ProgrammeReport(
     val routines: Map<String, Long>,
     /** The per-exercise detail was trimmed to keep the report inside [ProgrammeReports.MAX_CHARS]. */
     val trimmed: Boolean = false,
+    /** What relative targets were stated against, so a reply's % and g/kg convert with the report's own numbers. */
+    val maintenanceKcal: Double? = null,
+    val referenceKg: Double? = null,
 ) {
     val terms: TargetTerms get() = sections.terms
 }
@@ -114,15 +117,24 @@ object ProgrammeReports {
     fun build(facts: ProgrammeFacts, sections: ReportSections): ProgrammeReport {
         val full = build(facts, sections, Detail.FULL)
         if (full.text.length <= MAX_CHARS) return full
-        // Per-exercise detail goes first: the loads, then the library past the muscles the routines train.
+        // Per-exercise detail goes first: the loads, then the library past the muscles the routines train, then as
+        // much of the rest of the library as it takes to fit.
         val lean = build(facts, sections, Detail.NO_LOADS)
         if (lean.text.length <= MAX_CHARS) return lean.copy(trimmed = true)
-        return build(facts, sections, Detail.SHORT_LIBRARY).copy(trimmed = true)
+        var limit = Int.MAX_VALUE
+        while (true) {
+            val short = build(facts, sections, Detail.SHORT_LIBRARY, limit).copy(trimmed = true)
+            val listed = short.exercises.size - routineExercises(facts)
+            if (short.text.length <= MAX_CHARS || listed <= 0) return short
+            limit = listed / 2
+        }
     }
+
+    private fun routineExercises(facts: ProgrammeFacts): Int = facts.training?.routines?.flatMap { r -> r.exercises.map { it.exerciseId } }?.distinct()?.size ?: 0
 
     private enum class Detail { FULL, NO_LOADS, SHORT_LIBRARY }
 
-    private fun build(facts: ProgrammeFacts, sections: ReportSections, detail: Detail): ProgrammeReport {
+    private fun build(facts: ProgrammeFacts, sections: ReportSections, detail: Detail, libraryLimit: Int = Int.MAX_VALUE): ProgrammeReport {
         val exerciseRefs = linkedMapOf<Long, String>()
         val routineRefs = linkedMapOf<Long, String>()
         fun ref(id: Long) = exerciseRefs.getOrPut(id) { "e${exerciseRefs.size + 1}" }
@@ -184,6 +196,7 @@ object ProgrammeReports {
                 val routineMuscles = training.library.filter { it.exerciseId in exerciseRefs }.map { it.muscle }.toSet()
                 val library = training.library.filter { it.exerciseId !in exerciseRefs }
                     .filter { detail != Detail.SHORT_LIBRARY || it.muscle in routineMuscles }
+                    .take(libraryLimit)
                 appendLine("Library exercises that can be added or swapped in (ref name: muscle):")
                 library.forEach { appendLine("  ${ref(it.exerciseId)} ${it.name}: ${it.muscle}") }
             }
@@ -211,6 +224,8 @@ object ProgrammeReports {
             sections = sections,
             exercises = exerciseRefs.entries.associate { (id, r) -> r to id },
             routines = routineRefs.entries.associate { (id, r) -> r to id },
+            maintenanceKcal = facts.goal?.maintenanceKcal,
+            referenceKg = facts.goal?.referenceKg,
         )
     }
 

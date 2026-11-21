@@ -4,6 +4,7 @@ import app.recomp.data.ai.AiCall
 import app.recomp.data.ai.AiEffort
 import app.recomp.data.ai.AnthropicProvider
 import app.recomp.data.ai.CoachSchema
+import app.recomp.data.ai.GeminiProvider
 import app.recomp.data.ai.OpenAiProvider
 import app.recomp.data.repo.AiRepository
 import app.recomp.domain.ai.AiModel
@@ -101,6 +102,25 @@ class CoachRequestTest {
         assertEquals("16000", body.getValue("max_completion_tokens").jsonPrimitive.content)
         assertSchema(body.getValue("response_format").jsonObject.getValue("json_schema").jsonObject.getValue("schema").jsonObject)
         assertEquals(AiStatus.OK, r.status)
+    }
+
+    @Test
+    fun `Gemini gets thinking at MEDIUM and room to answer`() = runBlocking {
+        val gemini = GeminiProvider().apply { baseUrl = "http://127.0.0.1:${server.port}/v1beta"; timeout = Duration.ofSeconds(5) }
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"candidates":[{"content":{"role":"model","parts":[{"text":${Json.encodeToString(reply)}}]},"finishReason":"STOP"}],""" +
+                    """"usageMetadata":{"promptTokenCount":3000,"candidatesTokenCount":900,"totalTokenCount":3900},"modelVersion":"gemini-4-hydrogen"}""",
+            ),
+        )
+        val r = gemini.send(call(AiTarget(AiProviderId.GEMINI, "test-key", "gemini-4-hydrogen")))
+        val body = Json.parseToJsonElement(server.takeRequest(1, TimeUnit.SECONDS)!!.body.readUtf8()).jsonObject
+        val config = body.getValue("generationConfig").jsonObject
+        assertEquals("MEDIUM", config.getValue("thinkingConfig").jsonObject.getValue("thinkingLevel").jsonPrimitive.content)
+        assertEquals("16000", config.getValue("maxOutputTokens").jsonPrimitive.content)
+        assertSchema(config.getValue("responseFormat").jsonObject.getValue("text").jsonObject.getValue("schema").jsonObject)
+        assertEquals(AiStatus.OK, r.status)
+        assertEquals("Good week.", CoachSchema.parse(r.json!!.toString()).summary)
     }
 
     @Test

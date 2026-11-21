@@ -68,6 +68,8 @@ class SuggestionCheckTest {
         assertEquals(AdviceOnly.UNKNOWN_EXERCISE, check("SETS", "r2", "e1", min = 4.0).adviceOnly)
         assertEquals(AdviceOnly.UNKNOWN_EXERCISE, check("ADD", "r9", "e4").adviceOnly)
         assertEquals(AdviceOnly.UNKNOWN_EXERCISE, check("DELOAD_EXERCISE", exercise = "Bench press").adviceOnly)
+        // A library exercise in no routine (e4): a deload mark would sit unseen, so it's advice.
+        assertEquals(AdviceOnly.UNKNOWN_EXERCISE, check("DELOAD_EXERCISE", exercise = "e4").adviceOnly)
         // Changes that don't fit.
         assertEquals(AdviceOnly.DOESNT_FIT, check("SWAP", "r1", "e2", "e1").adviceOnly)
         assertEquals(AdviceOnly.DOESNT_FIT, check("ADD", "r1", "e1").adviceOnly)

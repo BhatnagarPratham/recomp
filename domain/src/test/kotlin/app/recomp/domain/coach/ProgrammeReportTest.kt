@@ -81,6 +81,16 @@ class ProgrammeReportTest {
     }
 
     @Test
+    fun `the cap holds even when the library alone is too long, keeping every routine exercise`() {
+        // Every library exercise trains a routine muscle, so trimming by muscle alone wouldn't be enough.
+        val huge = training.copy(library = training.library + (1..2_000).map { LibraryLine(20_000L + it, "Chest exercise with a long name number $it", "chest") })
+        val report = ProgrammeReports.build(facts.copy(training = huge), ReportSections())
+        assertTrue(report.trimmed)
+        assertTrue(report.text.length.toString(), report.text.length <= ProgrammeReports.MAX_CHARS)
+        listOf("e1 Bench press", "e2 Overhead press", "e3 Squat").forEach { assertTrue(it, it in report.text) }
+    }
+
+    @Test
     fun `nothing personal is in the facts, so it can't be sent`() {
         // ProgrammeFacts has no field for name, sex, age, height or the food log; the text has only these sections.
         val text = ProgrammeReports.build(facts, ReportSections(body = true, note = "left knee hurts on hack squats")).text

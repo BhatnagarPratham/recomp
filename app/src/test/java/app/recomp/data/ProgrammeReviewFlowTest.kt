@@ -3,6 +3,7 @@ package app.recomp.data
 import app.recomp.data.ai.AiEffort
 import app.recomp.data.ai.AiResult
 import app.recomp.data.db.TargetReason
+import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.repo.OnboardingResult
 import app.recomp.data.repo.ProgressionRepository
 import app.recomp.data.repo.ReviewSendResult
@@ -235,7 +236,7 @@ class ProgrammeReviewFlowTest {
     }
 
     @Test
-    fun `a pending deload becomes the next workout's target once`() = runBlocking {
+    fun `a pending deload becomes the next finished workout's target once, and survives a discarded one`() = runBlocking {
         onboard()
         ready()
         workout(week)
@@ -260,20 +261,97 @@ class ProgrammeReviewFlowTest {
         val exercise = app.db.exerciseDao().get(exerciseId)!!
         assertEquals(ProgressionEngine.deloadLoad(exercise.loadType, 40_000, exercise.incrementG, null), rec.loadG)
         assertEquals(List(routine.first().entry.targetSets) { routine.first().entry.repMin }, rec.reps)
-        assertFalse(app.db.exerciseDao().get(exerciseId)!!.deloadPending)
+        // Starting doesn't use it up: a workout started and discarded leaves the deload, and the stall clock, alone.
+        val stallBefore = app.db.exerciseDao().get(exerciseId)!!.stallResetAt
+        assertTrue(app.db.exerciseDao().get(exerciseId)!!.deloadPending)
         app.workouts.discard(session)
+        assertTrue(app.db.exerciseDao().get(exerciseId)!!.deloadPending)
+        assertEquals(stallBefore, app.db.exerciseDao().get(exerciseId)!!.stallResetAt)
+        // The next start still deloads, and finishing it uses the deload up, resetting the stall clock from its start.
+        val started = at(LocalDate.now(), 8)
+        val taken = app.workouts.startRoutine(next.id, started)
+        assertEquals(Action.DELOAD, ProgressionRepository.decode(app.db.workoutDao().sessionExercises(taken).first { it.exercise.id == exerciseId }.entry.recommendationJson)!!.action)
+        app.workouts.finish(taken, started + 3_600_000)
+        assertFalse(app.db.exerciseDao().get(exerciseId)!!.deloadPending)
+        assertEquals(started - 1, app.db.exerciseDao().get(exerciseId)!!.stallResetAt)
         // Once: the next start is the usual target.
-        val again = app.workouts.startRoutine(next.id, at(LocalDate.now(), 8))
+        val again = app.workouts.startRoutine(next.id, at(LocalDate.now(), 10))
         val rec2 = ProgressionRepository.decode(app.db.workoutDao().sessionExercises(again).first { it.exercise.id == exerciseId }.entry.recommendationJson)!!
         assertTrue(rec2.action != Action.DELOAD)
         app.workouts.discard(again)
 
-        // The whole week marks every exercise in the rotation, and undo clears only what it marked.
+        // The whole week marks every exercise in the rotation and counts as the scheduled deload week; undo clears
+        // only what it marked and puts the deload week back.
+        assertNull(app.prefs.deloadWeek.first())
         val undo = reviews.apply(id, 1) as ReviewUndo.Deload
         val rotation = app.db.programmeReviewDao().rotationExercises()
         assertEquals(rotation.toSet(), app.db.programmeReviewDao().pendingDeloads().toSet())
+        assertEquals(WeeklyPlan.weekStart(app.days.today()), app.prefs.deloadWeek.first())
         reviews.undo(undo)
         assertTrue(app.db.programmeReviewDao().pendingDeloads().isEmpty())
+        assertNull(app.prefs.deloadWeek.first())
+    }
+
+    @Test
+    fun `an applied swap, add or remove reads as applied, and a second apply does nothing`() = runBlocking {
+        onboard()
+        ready()
+        val report = reviews.report(week, ReportSections())
+        val push = report.routines.getValue("r1")
+        val pull = report.routines.getValue("r2")
+        val refOf = report.exercises.entries.associate { (ref, id) -> id to ref }
+        val pushRows = app.db.routineDao().exercises(push).map { it.entry }
+        val pullRows = app.db.routineDao().exercises(pull).map { it.entry }
+        val spare = report.exercises.entries.filter { (_, id) -> pushRows.none { it.exerciseId == id } && pullRows.none { it.exerciseId == id } }.map { it.key }
+        reply(
+            """{"summary":"s","suggestions":[${suggestion("SWAP", "r1", refOf.getValue(pushRows[0].exerciseId), spare[0])},""" +
+                """${suggestion("ADD", "r2", spare[1])},${suggestion("REMOVE", "r2", refOf.getValue(pullRows.last().exerciseId))}]}""",
+        )
+        val id = (reviews.send(week, report) as ReviewSendResult.Done).reviewId
+        (0..2).forEach { reviews.apply(id, it) }
+        // A second apply of the add doesn't add it again.
+        assertNull(reviews.apply(id, 1))
+        assertEquals(1, app.db.routineDao().exercises(pull).count { it.entry.exerciseId == report.exercises.getValue(spare[1]) })
+        val view = reviews.view(id)!!
+        assertEquals(setOf(0, 1, 2), view.applied)
+        view.suggestions.forEach { s ->
+            assertNotNull(s.change)
+            assertNull(s.adviceOnly)
+        }
+        assertEquals(Change.Swap(push, pushRows[0].exerciseId, report.exercises.getValue(spare[0])), view.suggestions[0].change)
+    }
+
+    @Test
+    fun `send sends the previewed report, even when the week changed after the preview`() = runBlocking {
+        onboard()
+        ready()
+        reply("""{"summary":"s","suggestions":[]}""")
+        val preview = reviews.report(week, ReportSections())
+        // A workout finishes between the preview and Send.
+        workout(week.plusDays(1))
+        assertTrue(reviews.report(week, ReportSections()).text != preview.text)
+        val id = (reviews.send(week, preview) as ReviewSendResult.Done).reviewId
+        assertEquals(preview.text, app.sender.calls.last().user)
+        assertEquals(preview.text, app.db.programmeReviewDao().get(id)!!.sentText)
+    }
+
+    @Test
+    fun `a relative calorie suggestion converts with the maintenance the report stated`() = runBlocking {
+        onboard()
+        ready()
+        reply("""{"summary":"s","suggestions":[${suggestion("CALORIES", value = -15.0)}]}""")
+        val report = reviews.report(week, ReportSections())
+        val stated = report.maintenanceKcal!!
+        val id = (reviews.send(week, report) as ReviewSendResult.Done).reviewId
+        // A check-in's estimate then moves maintenance.
+        app.db.checkinDao().upsert(
+            WeeklyCheckinEntity(week, computedAt = 1, windowDays = 21, loggedDays = 20, weighIns = 20, tdeeObs = 2_600, tdeePrev = 2_460, tdeeNew = 2_600),
+        )
+        assertEquals(2_600, app.personas.maintenance()!!.kcal)
+        val s = reviews.view(id)!!.suggestions.single()
+        val kcal = (s.change as Change.Calories).kcal
+        assertEquals(Math.round(stated * 0.85 / 10).toInt() * 10, kcal)
+        assertTrue(kcal != Math.round(2_600 * 0.85 / 10).toInt() * 10)
     }
 
     @Test

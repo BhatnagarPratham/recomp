@@ -118,20 +118,32 @@ class ProgressionRepository @Inject constructor(
 
     /**
      * M11: a deload marked for the next workout (`deload_pending`, from the weekly programme review or a scheduled
-     * deload week) becomes the stall card's *Deload 10%*: 90% at the bottom of the range, with stall detection reset
-     * from this workout. It's taken once: the mark is cleared either way. Null when there's no history to deload
-     * from, so the usual target stands.
+     * deload week) becomes this workout's target: the stall card's *Deload 10%*, 90% at the bottom of the range. Nothing
+     * is written here: the mark is used up only when the workout is finished ([consumePendingDeloads]), so a workout
+     * you start and discard leaves it waiting. Null when there's no mark, or no history to deload from.
      */
-    suspend fun takePendingDeload(exerciseId: Long, targetSets: Int, repMin: Int, startedAt: Long): Recommendation? {
+    suspend fun pendingDeload(exerciseId: Long, targetSets: Int, repMin: Int): Recommendation? {
         val exercise = exerciseDao.get(exerciseId)?.takeIf { it.deloadPending } ?: return null
-        val top = history(exercise.id, limit = 1).firstOrNull()?.topLoadG(exercise.loadType)
-        if (top == null) {
-            exerciseDao.update(exercise.copy(deloadPending = false))
-            return null
-        }
-        exerciseDao.update(exercise.copy(deloadPending = false, stallResetAt = startedAt - 1, stallResetKeepsBaseline = false))
+        val top = history(exercise.id, limit = 1).firstOrNull()?.topLoadG(exercise.loadType) ?: return null
         val load = ProgressionEngine.deloadLoad(exercise.loadType, top, exercise.incrementG, bodyWeightFor(exercise))
         return Recommendation(Action.DELOAD, load, List(targetSets) { repMin }, assisted = exercise.loadType == LoadType.ASSISTED)
+    }
+
+    /**
+     * At *Finish*: each exercise of the workout that had a deload waiting has taken it, once. A deload target resets
+     * stall detection from the workout's start, as the stall card's *Deload* does; an exercise that had no history to
+     * deload from just loses the mark.
+     */
+    suspend fun consumePendingDeloads(sessionId: Long) {
+        val session = workoutDao.session(sessionId) ?: return
+        workoutDao.sessionExercises(sessionId).forEach { row ->
+            val exercise = exerciseDao.get(row.exercise.id)?.takeIf { it.deloadPending } ?: return@forEach
+            val deloaded = decode(row.entry.recommendationJson)?.action == Action.DELOAD
+            exerciseDao.update(
+                if (deloaded) exercise.copy(deloadPending = false, stallResetAt = session.startedAt - 1, stallResetKeepsBaseline = false)
+                else exercise.copy(deloadPending = false),
+            )
+        }
     }
 
     /** *Hold*: quiet until another full stall window passes with no gain over today's best. */

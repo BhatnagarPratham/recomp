@@ -51,6 +51,8 @@ import kotlin.math.max
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -79,7 +81,8 @@ sealed interface ReviewSendResult {
 sealed interface ReviewUndo {
     data class Routine(val reviewId: Long, val index: Int, val routineId: Long, val rows: List<RoutineExerciseEntity>) : ReviewUndo
     data class StrengthDays(val reviewId: Long, val index: Int, val days: Int) : ReviewUndo
-    data class Deload(val reviewId: Long, val index: Int, val exerciseIds: List<Long>) : ReviewUndo
+    /** [weekBefore] is the last deload week before a whole-week deload set it, which *Undo* puts back. */
+    data class Deload(val reviewId: Long, val index: Int, val exerciseIds: List<Long>, val setWeek: Boolean = false, val weekBefore: LocalDate? = null) : ReviewUndo
 }
 
 /**
@@ -201,17 +204,20 @@ class ProgrammeReviewRepository @Inject constructor(
 
     // Sending
 
+    /** Builds the report for [weekStart] as ticked and sends it. The screen sends the report it previewed instead. */
+    suspend fun send(weekStart: LocalDate, sections: ReportSections, now: Long = System.currentTimeMillis()): ReviewSendResult =
+        send(weekStart, report(weekStart, sections, days.of(now)), now)
+
     /**
-     * Sends the report for [weekStart] as ticked, exactly as previewed, and keeps what was sent and what came back.
-     * The reply is checked when it's shown, against the app as it is then.
+     * Sends [report] exactly as it was previewed, text and refs, even if the week has changed since, and keeps what
+     * was sent and what came back. The reply is checked when it's shown, against the app as it is then.
      */
-    suspend fun send(weekStart: LocalDate, sections: ReportSections, now: Long = System.currentTimeMillis()): ReviewSendResult {
-        val report = report(weekStart, sections, days.of(now))
+    suspend fun send(weekStart: LocalDate, report: ProgrammeReport, now: Long = System.currentTimeMillis()): ReviewSendResult {
         val sent = ai.coach(CoachPrompt.system(report.terms), report.text, CoachSchema.schema)
         sent.notReady?.let { return ReviewSendResult.NotReady(it) }
         val reply = sent.json?.let { json -> runCatching { CoachSchema.parse(json.toString()) }.getOrNull() }
         if (sent.status == AiStatus.OK && reply == null) sent.requestId?.let { ai.markInvalid(it) }
-        val stored = Stored(reply?.let(::StoredReply), report.exercises, report.routines)
+        val stored = Stored(reply?.let(::StoredReply), report.exercises, report.routines, report.maintenanceKcal, report.referenceKg)
         val id = dao.insert(
             ProgrammeReviewEntity(
                 weekStart = weekStart,
@@ -232,7 +238,10 @@ class ProgrammeReviewRepository @Inject constructor(
         val stored = row.responseJson?.let { runCatching { json.decodeFromString(Stored.serializer(), it) }.getOrNull() }
         val reply = stored?.reply?.toReply()
         val sections = sectionsOf(row.sections)
-        val suggestions = if (reply != null && stored != null) SuggestionCheck.check(reply, context(stored, sections.terms)) else emptyList()
+        val checked = if (reply != null && stored != null) SuggestionCheck.check(reply, context(stored, sections.terms)) else emptyList()
+        // An applied suggestion keeps the change it made: checked again, a swap's old exercise is gone and would read
+        // as an unknown one.
+        val suggestions = checked.mapIndexed { i, s -> stored?.applied?.get(i)?.toChange()?.let { s.copy(change = it, adviceOnly = null) } ?: s }
         val ids = stored?.exercises?.values.orEmpty()
         return ProgrammeReviewView(
             row = row,
@@ -249,6 +258,7 @@ class ProgrammeReviewRepository @Inject constructor(
         val profile = personas.currentProfile()
         val plan = plan(day)
         val maintenance = personas.maintenance()?.kcal?.toDouble() ?: nutritionDao.targetOn(day)?.tdeeEstimate?.toDouble() ?: 0.0
+        // A reply's % and g/kg mean the report's numbers; the guardrails are today's.
         val routineIds = stored.routines.values.toSet()
         val kcalRange = if (profile != null && plan != null && maintenance > 0) {
             val range = CheckinProposal.adjustRange(TargetInputs.from(profile, plan, day), maintenance)
@@ -270,8 +280,8 @@ class ProgrammeReviewRepository @Inject constructor(
             routineRefs = stored.routines.filterValues { id -> routineDao.get(id)?.archived == false },
             routineExercises = routineIds.associateWith { id -> routineDao.exercises(id).map { it.entry.exerciseId } },
             library = exerciseDao.observeActive().first().map { it.id }.toSet(),
-            maintenanceKcal = maintenance,
-            referenceKg = plan?.goalWeightKg ?: profile?.weightKg ?: 0.0,
+            maintenanceKcal = stored.maintenanceKcal ?: maintenance,
+            referenceKg = stored.referenceKg ?: plan?.goalWeightKg ?: profile?.weightKg ?: 0.0,
             kcalRange = kcalRange,
             proteinGPerKg = plan?.goal?.let(GoalPolicy::proteinRange) ?: 0.0..0.0,
         )
@@ -294,9 +304,11 @@ class ProgrammeReviewRepository @Inject constructor(
      * Applies suggestion [index] of review [reviewId] through the usual path, and records it. Returns what *Undo* puts
      * back, or null for a target change (a new target version, undone like any other) or when it no longer applies.
      */
-    suspend fun apply(reviewId: Long, index: Int, now: Long = System.currentTimeMillis()): ReviewUndo? {
-        val view = view(reviewId) ?: return null
-        val change = view.suggestions.getOrNull(index)?.change ?: return null
+    suspend fun apply(reviewId: Long, index: Int, now: Long = System.currentTimeMillis()): ReviewUndo? = applying.withLock {
+        val view = view(reviewId) ?: return@withLock null
+        // Once only, however fast the taps.
+        if (index in view.applied) return@withLock null
+        val change = view.suggestions.getOrNull(index)?.change ?: return@withLock null
         val undo: ReviewUndo? = when (change) {
             is Change.Calories -> {
                 personas.save(overrides = prefs.overrides.first().copy(kcal = change.kcal), now = now, reason = TargetReason.REVIEW)
@@ -327,11 +339,19 @@ class ProgrammeReviewRepository @Inject constructor(
                 ReviewUndo.StrengthDays(reviewId, index, before)
             }
             is Change.DeloadExercise -> deload(reviewId, index, listOf(change.exerciseId))
-            Change.DeloadAll -> deload(reviewId, index, dao.rotationExercises())
+            Change.DeloadAll -> {
+                // A deload week from the review counts for the scheduled card too.
+                val before = prefs.deloadWeek.first()
+                prefs.setDeloadWeek(WeeklyPlan.weekStart(days.of(now)))
+                (deload(reviewId, index, dao.rotationExercises()) as ReviewUndo.Deload).copy(setWeek = true, weekBefore = before)
+            }
         }
-        markApplied(reviewId, index, true)
-        return undo
+        markApplied(reviewId, index, change)
+        undo
     }
+
+    /** Serializes *Apply* and *Undo*, so two taps can't both read a routine before either writes it. */
+    private val applying = Mutex()
 
     private suspend fun routineChange(reviewId: Long, index: Int, routineId: Long, edit: suspend (List<RoutineExerciseEntity>) -> List<RoutineExerciseEntity>): ReviewUndo {
         val before = routineDao.exercises(routineId).map { it.entry }
@@ -347,27 +367,36 @@ class ProgrammeReviewRepository @Inject constructor(
     }
 
     /** Puts back what [undo] says and unmarks the suggestion as applied. */
-    suspend fun undo(undo: ReviewUndo) {
+    suspend fun undo(undo: ReviewUndo) = applying.withLock {
         when (undo) {
             is ReviewUndo.Routine -> {
                 training.saveRoutineExercises(undo.routineId, undo.rows.map { it.copy(id = 0) })
-                markApplied(undo.reviewId, undo.index, false)
+                markApplied(undo.reviewId, undo.index, null)
             }
             is ReviewUndo.StrengthDays -> {
                 prefs.updatePersona { it.copy(strengthDaysPerWeek = undo.days) }
-                markApplied(undo.reviewId, undo.index, false)
+                markApplied(undo.reviewId, undo.index, null)
             }
             is ReviewUndo.Deload -> {
                 if (undo.exerciseIds.isNotEmpty()) dao.clearDeload(undo.exerciseIds)
-                markApplied(undo.reviewId, undo.index, false)
+                if (undo.setWeek) prefs.restoreDeloadWeek(undo.weekBefore)
+                markApplied(undo.reviewId, undo.index, null)
             }
         }
     }
 
-    private suspend fun markApplied(reviewId: Long, index: Int, on: Boolean) = db.withTransaction {
+    /** Records suggestion [index] as applied with the [change] it made, or (null) as undone. */
+    private suspend fun markApplied(reviewId: Long, index: Int, change: Change?) = db.withTransaction {
         val row = dao.get(reviewId) ?: return@withTransaction
-        val applied = applied(row).let { if (on) it + index else it - index }
-        dao.update(row.copy(appliedJson = json.encodeToString(appliedSerializer, applied.sorted())))
+        val applied = applied(row).let { if (change != null) it + index else it - index }
+        val stored = row.responseJson?.let { runCatching { json.decodeFromString(Stored.serializer(), it) }.getOrNull() }
+        val updated = stored?.copy(applied = if (change != null) stored.applied + (index to StoredChange.of(change)) else stored.applied - index)
+        dao.update(
+            row.copy(
+                appliedJson = json.encodeToString(appliedSerializer, applied.sorted()),
+                responseJson = updated?.let { json.encodeToString(Stored.serializer(), it) } ?: row.responseJson,
+            ),
+        )
     }
 
     private fun applied(row: ProgrammeReviewEntity): Set<Int> =
@@ -395,9 +424,53 @@ class ProgrammeReviewRepository @Inject constructor(
 
     // Storage
 
-    /** What `programme_review.response_json` holds: the reply, with the report's refs it names exercises and routines by. */
+    /**
+     * What `programme_review.response_json` holds: the reply, with the report's refs it names exercises and routines
+     * by, the maintenance and reference weight its relative targets were stated against, and each applied
+     * suggestion's change.
+     */
     @Serializable
-    data class Stored(val reply: StoredReply?, val exercises: Map<String, Long>, val routines: Map<String, Long>)
+    data class Stored(
+        val reply: StoredReply?,
+        val exercises: Map<String, Long>,
+        val routines: Map<String, Long>,
+        val maintenanceKcal: Double? = null,
+        val referenceKg: Double? = null,
+        val applied: Map<Int, StoredChange> = emptyMap(),
+    )
+
+    /** A [Change] as stored: [a] and [b] are the numbers (kcal, grams, sets, reps, days), ids 0 where unused. */
+    @Serializable
+    data class StoredChange(val kind: String, val routineId: Long = 0, val exerciseId: Long = 0, val replacementId: Long = 0, val a: Int = 0, val b: Int = 0) {
+        fun toChange(): Change? = when (kind) {
+            "CALORIES" -> Change.Calories(a)
+            "PROTEIN" -> Change.Protein(a)
+            "SWAP" -> Change.Swap(routineId, exerciseId, replacementId)
+            "ADD" -> Change.Add(routineId, exerciseId)
+            "REMOVE" -> Change.Remove(routineId, exerciseId)
+            "SETS" -> Change.Sets(routineId, exerciseId, a)
+            "REP_RANGE" -> Change.RepRange(routineId, exerciseId, a, b)
+            "STRENGTH_DAYS" -> Change.StrengthDays(a)
+            "DELOAD_EXERCISE" -> Change.DeloadExercise(exerciseId)
+            "DELOAD_ALL" -> Change.DeloadAll
+            else -> null
+        }
+
+        companion object {
+            fun of(c: Change): StoredChange = when (c) {
+                is Change.Calories -> StoredChange("CALORIES", a = c.kcal)
+                is Change.Protein -> StoredChange("PROTEIN", a = c.grams)
+                is Change.Swap -> StoredChange("SWAP", c.routineId, c.exerciseId, c.replacementId)
+                is Change.Add -> StoredChange("ADD", c.routineId, c.exerciseId)
+                is Change.Remove -> StoredChange("REMOVE", c.routineId, c.exerciseId)
+                is Change.Sets -> StoredChange("SETS", c.routineId, c.exerciseId, a = c.sets)
+                is Change.RepRange -> StoredChange("REP_RANGE", c.routineId, c.exerciseId, a = c.min, b = c.max)
+                is Change.StrengthDays -> StoredChange("STRENGTH_DAYS", a = c.days)
+                is Change.DeloadExercise -> StoredChange("DELOAD_EXERCISE", exerciseId = c.exerciseId)
+                Change.DeloadAll -> StoredChange("DELOAD_ALL")
+            }
+        }
+    }
 
     @Serializable
     data class StoredSuggestion(val kind: String, val routineRef: String, val exerciseRef: String, val replacementRef: String, val min: Double, val max: Double, val reason: String)

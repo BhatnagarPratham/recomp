@@ -488,6 +488,9 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     suspend fun setDeloadSnoozedUntil(day: LocalDate) = store.edit { it[SettingsKeys.DELOAD_SNOOZED_UNTIL] = day.toString() }
 
+    /** *Undo* of a review's deload week: the last deload week goes back to [day], or to none. */
+    suspend fun restoreDeloadWeek(day: LocalDate?) = store.edit { if (day == null) it.remove(SettingsKeys.DELOAD_WEEK) else it[SettingsKeys.DELOAD_WEEK] = day.toString() }
+
     suspend fun setScanSlot(slot: ScanSlot) = store.edit { prefs ->
         prefs.keepUnreadable()
         prefs[SettingsKeys.SCAN_SLOT] = settingsJson.encodeToString(StoredScanSlot.of(slot))

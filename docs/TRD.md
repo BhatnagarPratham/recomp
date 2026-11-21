@@ -1457,14 +1457,21 @@ Tests cover:
 - **`ProgrammeReport`** (`:domain`, `coach/`) is built only from `ProgrammeFacts`, which has no field for name, sex, age, height or the food log, so those can't be sent.
   - Without *Body trends*, the food averages go as % of target too, not only the targets, since absolute intake also hints at weight.
   - Refs are `r1…` for routines and `e1…` for exercises: the routines' exercises first, then the library's other exercises with their muscle.
-  - Over about 16,000 characters (about 4,000 tokens) the loads go first, then library exercises for muscles the routines don't train.
+  - Over 16,000 characters (about 4,000 tokens) the loads go first, then library exercises for muscles the routines don't train, then as much of the rest of the library as it takes to fit. The routines' exercises always stay.
 - **The request** is `AiKind.COACH` through M7's providers, behind the same gate, cap reservation and log row as a meal. `AiCall` gained `effort`, `timeout` and `maxTokens`, which the adapters send: `medium`, 60 s and 16,000 output tokens for the review, a meal's `low`, 20 s and 8,000 otherwise. The review's upper bound uses the 16,000.
-- **`programme_review.response_json`** holds the reply together with the report's refs, so a review applied days later maps its refs back exactly, even after the routines change. Suggestions are checked again when shown, against the library, routines and guardrails as they are then.
+- **`programme_review.response_json`** holds the reply together with the report's refs, so a review applied days later maps its refs back exactly, even after the routines change. It also holds:
+  - the maintenance and reference weight the report stated, so a reply's % and g/kg convert with the report's own numbers rather than today's;
+  - each applied suggestion's change, so an applied swap still reads as applied once its old exercise has gone.
+
+  Suggestions not yet applied are checked again when shown, against the library, routines and guardrails as they are then.
+- **What's sent is what was previewed.** *Send* sends the report built for the preview, text and refs, even if a workout or a check-in changed the week since.
 - **`SuggestionCheck`** keeps the first 5. Calories must fall in Settings' *Adjust* range (the floor, at most a 25% deficit, at most a 15% surplus), with no deficit at all under BMI 18.5 and none deeper than today's target under 18. Protein must be in the goal's PRD §4.2 range. Sets 1–10, reps 1–50 with min ≤ max, strength days 1–7. A swap or add needs a library exercise, not archived; a remove leaves at least one exercise.
 - **Apply:**
   - A target change shows its before and after, then saves as a calorie or protein override, through `PersonaRepository.save(…, reason = REVIEW)`.
   - Routine changes save the routine's rows and *Undo* puts the old ones back. Strength days and deload marks can be undone too.
-  - `takePendingDeload` runs at each exercise's insert into a workout, so it covers a routine's start and an exercise added mid-workout. An exercise with no history yet just clears the mark.
+  - A pending deload sets the target when an exercise goes into a workout, so it covers a routine's start and an exercise added mid-workout. It's used up only at *Finish*: a workout started and discarded leaves the mark and the stall clock as they were. At *Finish* an exercise with no history yet just loses the mark.
+  - *Deload the whole week* also counts as the scheduled deload week, which *Undo* puts back. A single-exercise deload needs the exercise to be in one of your routines.
+  - *Apply* runs one at a time, and a suggestion applies once.
 - **The scheduled deload card** counts from the last deload week accepted (`deload_week` in the settings store), else the first completed strength workout. *Not now* hides it for 7 days (`deload_snoozed_until`).
 - **The prompt on the check-in card** is one line under its text, shown only with AI on, and the review's button sits at the end of each week's review.
 
@@ -1476,6 +1483,7 @@ Tests cover:
 - `CoachRequestTest`: the request against a mock server for Anthropic and OpenAI (schema, effort, output limit) and parsing.
 - `MigrationTest`: 10 to 11.
 - `ProgrammeReviewTextTest`: the suggestion lines and where the text goes.
+- After PR #16's review: an applied swap, add and remove reading as applied; a second apply doing nothing; *Send* sending the previewed text after the week changed; a relative calorie suggestion converting with the report's maintenance; a pending deload surviving a discarded workout and used up at *Finish*; *Deload the whole week* setting and undoing the deload week; a deload only for a routine exercise; the hard length cap; Gemini's coach request; a v10 backup imported into v11.
 
 | Check | Result |
 |-------|--------|

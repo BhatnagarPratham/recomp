@@ -152,7 +152,9 @@ object SuggestionCheck {
                 val days = single.roundToInt()
                 if (single.isFinite() && days in ctx.strengthDays) ok(Change.StrengthDays(days)) else advice(AdviceOnly.OUTSIDE_GUARDRAILS)
             }
-            SuggestionKind.DELOAD_EXERCISE -> exercise?.let { ok(Change.DeloadExercise(it)) } ?: advice(AdviceOnly.UNKNOWN_EXERCISE)
+            // Only an exercise in one of your routines: a mark on any other would wait, unseen, until it next turns up.
+            SuggestionKind.DELOAD_EXERCISE ->
+                exercise?.takeIf { e -> ctx.routineExercises.values.any { e in it } }?.let { ok(Change.DeloadExercise(it)) } ?: advice(AdviceOnly.UNKNOWN_EXERCISE)
             SuggestionKind.DELOAD_ALL -> ok(Change.DeloadAll)
         }
     }
