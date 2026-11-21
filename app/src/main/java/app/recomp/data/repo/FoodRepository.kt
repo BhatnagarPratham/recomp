@@ -8,7 +8,11 @@ import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.FoodLogEntity
 import app.recomp.data.db.FoodUnitEntity
 import app.recomp.data.prefs.SettingsPrefs
+import app.recomp.domain.food.DescribeParser
 import app.recomp.domain.food.FoodDiet
+import app.recomp.domain.food.FoodIndex
+import app.recomp.domain.food.IndexedFood
+import app.recomp.domain.food.ParsedMeal
 import app.recomp.domain.food.FoodQuery
 import app.recomp.domain.food.FoodSource
 import app.recomp.domain.food.Origin
@@ -75,6 +79,33 @@ class FoodRepository @Inject constructor(
         val prefix = FoodQuery.words(text).joinToString(" ").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return hits(foodDao.search(match, prefix, f.diets, f.region.name, limit))
     }
+
+    /**
+     * The local parser's view of the foods (AI-04, TRD §6.2): whole-word matches over the search index, limited to
+     * unarchived foods your diet and region allow, in search's order, each with its units and the unit you logged
+     * it in last.
+     */
+    suspend fun describeIndex(): FoodIndex {
+        val f = filter.first()
+        val labels = foodDao.unitLabels().map { it.trim().lowercase() }.filter { it.isNotEmpty() && ' ' !in it }.toSet()
+        return object : FoodIndex {
+            override val unitLabels: Set<String> = labels
+
+            override suspend fun lookup(words: List<String>): List<IndexedFood> {
+                val match = FoodQuery.words(words.joinToString(" ")).takeIf { it.isNotEmpty() }?.joinToString(" ") ?: return emptyList()
+                val found = foodDao.search(match, "", f.diets, f.region.name, PARSER_CANDIDATES)
+                val ids = found.map { it.id }
+                val units = foodDao.units(ids).groupBy { it.foodId }
+                val last = foodLogDao.lastUnits(ids).associate { it.foodId to it.unitLabel }
+                return found.map { food ->
+                    IndexedFood(food.id, food.name, food.source, food.per100g, units[food.id].orEmpty().map { it.label to it.grams }, food.useCount, food.caveat, last[food.id])
+                }
+            }
+        }
+    }
+
+    /** Reads a typed meal with the local parser: matched foods with amounts, and the chunks it couldn't find. */
+    suspend fun parseMeal(text: String): ParsedMeal = DescribeParser.parse(text, describeIndex(), household.first())
 
     suspend fun suggestions(limit: Int = 30): Suggestions {
         val f = filter.first()
@@ -207,5 +238,8 @@ class FoodRepository @Inject constructor(
     private companion object {
         /** Foods whose serving you set yourself, so it prefills however big it is: custom foods and recipes (M14). */
         val YOUR_OWN = setOf(FoodSource.CUSTOM, FoodSource.RECIPE)
+
+        /** How many foods the parser weighs for one name. */
+        const val PARSER_CANDIDATES = 20
     }
 }

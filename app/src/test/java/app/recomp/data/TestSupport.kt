@@ -32,6 +32,7 @@ import app.recomp.data.prefs.DayBoundary
 import app.recomp.data.prefs.LegacyTrainingMigration
 import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.AiRepository
+import app.recomp.data.repo.MealDescriber
 import app.recomp.data.repo.BodyRepository
 import app.recomp.data.repo.CheckinRepository
 import app.recomp.data.repo.FoodLogRepository
@@ -134,8 +135,12 @@ class FakeHostResolver : HostResolver {
     val hosts = mutableMapOf<String, List<String>>()
     val lookups = mutableListOf<String>()
 
+    /** A lookup that hangs, like a network whose DNS doesn't answer: the next one waits until a test completes this. */
+    var hang: CompletableDeferred<Unit>? = null
+
     override suspend fun addresses(host: String): List<java.net.InetAddress> {
         lookups += host
+        hang?.also { hang = null }?.await()
         return hosts[host].orEmpty().map { java.net.InetAddress.getByName(it) }
     }
 }
@@ -363,6 +368,8 @@ class TestApp(private val dir: File) {
         private set
     lateinit var ai: AiRepository
         private set
+    lateinit var describer: MealDescriber
+        private set
     lateinit var body: BodyRepository
         private set
     lateinit var backup: BackupManager
@@ -402,6 +409,7 @@ class TestApp(private val dir: File) {
         recipes = RecipeRepository(db)
         foodSeeder = FoodSeeder(db, db.foodDao(), foodFiles, prefs)
         ai = AiRepository(db, db.aiDao(), db.foodDao(), prefs, keys, connectivity, localNetwork, resolver, estimator, sender, foods, clock)
+        describer = MealDescriber(ai, foods)
         backup = BackupManager(context, db, prefs)
         checkins = CheckinRepository(db, db.checkinDao(), db.nutritionDao(), db.foodLogDao(), db.bodyDao(), prefs, days, personas)
         reviews = ReviewRepository(db.reviewDao(), db.nutritionDao(), db.bodyDao(), db.checkinDao(), db.routineDao(), prefs, days, personas, nutrition)

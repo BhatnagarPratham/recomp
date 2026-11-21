@@ -40,6 +40,10 @@ object MealPrompt {
                 "confidence instead. Leave clarifying_question empty unless one answer would change the meal's total by more " +
                 "than about a fifth; then ask that one short question.",
         )
+        appendLine(
+            "The user message may list parts of the meal as already counted from the user's own data. Never return those; " +
+                "return only the other items, and an empty items list when nothing else is left.",
+        )
         appendLine()
         appendLine("Diet: ${dietRule(diet)}")
         appendLine(
@@ -68,10 +72,19 @@ object MealPrompt {
         }
     }.trimEnd()
 
-    /** The meal itself: which origin applies, the description, and, for a re-estimate, the earlier question and your answer. */
-    fun user(text: String, origin: Origin, clarification: Clarification? = null): String = buildString {
+    /**
+     * The meal itself: which origin applies, the description, and, for a re-estimate, the earlier question and your
+     * answer. [counted] lists what the local parser already matched (PRD §12.5): the model gets the whole meal for
+     * context and estimates only the rest.
+     */
+    fun user(text: String, origin: Origin, clarification: Clarification? = null, counted: List<String> = emptyList()): String = buildString {
         appendLine("Origin: ${originName(origin)}")
         appendLine("Meal: ${text.trim()}")
+        if (counted.isNotEmpty()) {
+            appendLine()
+            appendLine("Already counted, do not return these:")
+            counted.forEach { appendLine("- ${it.trim()}") }
+        }
         if (clarification != null) {
             appendLine()
             appendLine("You asked: ${clarification.question.trim()}")

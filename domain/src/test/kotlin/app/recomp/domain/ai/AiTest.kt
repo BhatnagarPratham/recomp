@@ -200,6 +200,12 @@ class AiTest {
     @Test
     fun `the user message carries the origin, the meal and any answer to a clarifying question`() {
         assertEquals("Origin: Ordered\nMeal: 2 phulka, dal", MealPrompt.user("  2 phulka, dal ", Origin.ORDERED))
+        // PRD §12.5: what the local parser matched is listed as already counted, after the whole description.
+        assertEquals(
+            "Origin: Home\nMeal: 2 roti, dal and salad\n\nAlready counted, do not return these:\n- 2 roti = Chapati/Roti, 80 g\n- dal = Dal, 150 g",
+            MealPrompt.user("2 roti, dal and salad", Origin.HOME, counted = listOf("2 roti = Chapati/Roti, 80 g", " dal = Dal, 150 g ")),
+        )
+        assertTrue("already counted" in MealPrompt.system(Diet.VEGAN, FoodRegion.INDIAN, emptyMap(), emptyList()))
         val again = MealPrompt.user("dal", Origin.HOME, Clarification("Was it tempered with ghee?", "yes, a spoon"))
         assertTrue(again.startsWith("Origin: Home\nMeal: dal\n\nYou asked: Was it tempered with ghee?\nThe user answered: yes, a spoon"))
         assertTrue(again.endsWith("don't ask again."))

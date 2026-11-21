@@ -173,7 +173,7 @@ class NudgesTest {
         assertEquals(10.0, Nudges.portion(food(4, "Whey", 400.0, 80.0, 5, usual = 30.0), proteinLeftG = 1, kcalLeft = 700).grams, 0.0)
     }
 
-    // The meal for the time of day (M9's rule, stood in for until it merges)
+    // The meal for the time of day: M9's rule, each slot's usual time range
 
     @Test
     fun `the meal for a time is lunch by day and the last meal in the evening`() {
@@ -195,5 +195,15 @@ class NudgesTest {
         assertEquals("breakfast", MealClock.watched(removed, picked = "lunch", time = LocalTime.of(14, 30))?.key)
         assertEquals("dinner", MealClock.slotAt(removed + MealSlot("old", "Old", removed = true), LocalTime.of(21, 0))?.key)
         assertNull(MealClock.slotAt(emptyList(), LocalTime.of(21, 0)))
+    }
+
+    @Test
+    fun `the meal for a time follows the slots' usual times`() {
+        // The stand-in said lunch until 17:00; with the slot times, 16:30 is Snacks.
+        assertEquals("snacks", MealClock.slotAt(MealSlots.DEFAULT, LocalTime.of(16, 30))?.key)
+        assertEquals("breakfast", MealClock.slotAt(MealSlots.DEFAULT, LocalTime.of(9, 0))?.key)
+        val late = MealSlots.DEFAULT.map { if (it.key == "lunch") it.copy(startMinutes = 13 * 60 + 30) else it }
+        assertEquals("breakfast", MealClock.slotAt(late, LocalTime.of(13, 0))?.key)
+        assertEquals("lunch", MealClock.watched(late, picked = null, time = LocalTime.of(13, 45))?.key)
     }
 }

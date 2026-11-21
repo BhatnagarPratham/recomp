@@ -80,6 +80,9 @@ object AiText {
             "AI is paused until ${day(gate.resumesOn)}: this month's ${usd(gate.capUsd ?: 0.0)} cap is reached. Keep this as a draft for later."
     }
 
+    /** The reason alone, without the draft advice that follows it: for *Will it fit?*, which keeps no drafts. */
+    fun firstSentence(text: String): String = text.substringBefore(". ").removeSuffix(".") + "."
+
     /** Android's local-network permission was refused: said outright, since the request itself would only time out. */
     const val LOCAL_NETWORK_REFUSED =
         "Your AI server is on your local network, and Recomp isn't allowed to reach devices there. Allow it (Android lists it " +
@@ -161,6 +164,9 @@ object AiText {
     }
 
     fun privacy(s: AiSettings): String = privacy(s.provider, s.url?.host)
+
+    /** The same for *Will it fit?* (NU-18), which is its own kind of request and sends the same things. */
+    fun fitPrivacy(s: AiSettings): String = privacy(s).replaceFirst("Describe it sends", "Will it fit? sends")
 
     /** Where the key comes from, per provider. Every key is stored the same way. */
     fun keyHelp(provider: AiProviderId): String = when (provider) {

@@ -192,6 +192,7 @@ private data class FoodForm(val id: Long?, val initial: CustomFood?, val name: S
 fun AddFoodScreen(
     onDone: () -> Unit,
     onDescribe: (LocalDate, String) -> Unit,
+    onFit: (String) -> Unit,
     describeOutcome: DescribeOutcome?,
     onDescribeOutcomeShown: () -> Unit,
     onRecipe: (id: Long?, name: String) -> Unit,
@@ -285,12 +286,16 @@ fun AddFoodScreen(
                 )
             }
             item {
-                val state = gate?.state
-                if (state != null && state != AiState.OFF) {
+                // AI-04: always here. With AI off or not ready the local parser answers.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
                     FilledTonalButton(
                         onClick = { onDescribe(viewModel.date, viewModel.slot) },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(top = 4.dp),
-                    ) { Text(if (state == AiState.READY) "Describe it" else "Describe it · keep a draft") }
+                        modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                    ) { Text("Describe it") }
+                    // NU-18 is about today's numbers, so it's offered when adding to today.
+                    if (viewModel.date == today) {
+                        OutlinedButton(onClick = { onFit(viewModel.slot) }, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("Will it fit?") }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                     OutlinedButton(onClick = { quickAdding = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Quick add") }

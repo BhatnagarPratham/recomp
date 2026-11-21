@@ -41,6 +41,8 @@ import app.recomp.ui.exercises.LibraryScreen
 import app.recomp.ui.food.AddFoodScreen
 import app.recomp.ui.food.DescribeOutcome
 import app.recomp.ui.food.DescribeScreen
+import app.recomp.ui.food.FitScreen
+import app.recomp.ui.food.SnackAllowanceScreen
 import app.recomp.ui.food.FoodScreen
 import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
@@ -120,6 +122,11 @@ import kotlinx.serialization.Serializable
 
 /** Describe it (NU-17) for one meal of one day; [draftId] (0 = none) is a draft to *Estimate now*. */
 @Serializable data class DescribeRoute(val date: String, val slot: String, val draftId: Long = 0)
+
+/** *Will it fit?* (NU-18). [slot] is the meal it was opened from, or empty for the meal for the time of day. */
+@Serializable data class FitRoute(val slot: String = "")
+
+@Serializable data object SnackAllowanceRoute
 
 @Serializable data object MealSlotsRoute
 
@@ -219,6 +226,7 @@ fun RecompNavHost(main: MainViewModel) {
                 FoodScreen(
                     onAdd = { date, slot -> nav.navigate(AddFoodRoute(date.toString(), slot)) },
                     onEstimateDraft = { draft -> nav.navigate(DescribeRoute(draft.logDate.toString(), draft.mealSlot, draft.id)) },
+                    onFit = { nav.navigate(FitRoute()) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
                 )
@@ -229,6 +237,7 @@ fun RecompNavHost(main: MainViewModel) {
                 AddFoodScreen(
                     onDone = { nav.popBackStack() },
                     onDescribe = { date, slot -> nav.navigate(DescribeRoute(date.toString(), slot)) },
+                    onFit = { slot -> nav.navigate(FitRoute(slot)) },
                     describeOutcome = outcome,
                     onDescribeOutcomeShown = shown,
                     onRecipe = { id, name -> nav.navigate(RecipeRoute(id ?: 0, if (id == null) name else "")) },
@@ -242,6 +251,10 @@ fun RecompNavHost(main: MainViewModel) {
             composable<DescribeRoute> {
                 DescribeScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
             }
+            composable<FitRoute> {
+                FitScreen(onBack = { nav.popBackStack() }, onDone = { outcome -> nav.finishDescribe(outcome) })
+            }
+            composable<SnackAllowanceRoute> { SnackAllowanceScreen(onBack = { nav.popBackStack() }) }
             composable<MealSlotsRoute> { MealSlotsScreen(onBack = { nav.popBackStack() }) }
             composable<PortionSizesRoute> { PortionSizesScreen(onBack = { nav.popBackStack() }) }
             composable<HiddenFoodsRoute> { HiddenFoodsScreen(onBack = { nav.popBackStack() }) }
@@ -262,6 +275,7 @@ fun RecompNavHost(main: MainViewModel) {
                         onOpenMeals = { nav.navigate(MealSlotsRoute) },
                         onOpenPortions = { nav.navigate(PortionSizesRoute) },
                         onOpenHidden = { nav.navigate(HiddenFoodsRoute) },
+                        onOpenSnack = { nav.navigate(SnackAllowanceRoute) },
                     )
                 }
             }

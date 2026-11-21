@@ -172,30 +172,56 @@ class AiRepository @Inject constructor(
 
     /** The gate right now, read fresh, for the check just before sending. */
     suspend fun state(): AiState {
+        locate()
+        return stateNow()
+    }
+
+    /**
+     * Finds where the server's name leads, when that matters (see [place]). It can take up to the resolver's
+     * limit on a network whose DNS hangs, so it's never done while holding the send lock.
+     */
+    private suspend fun locate() {
+        localNetwork.refresh()
+        place(prefs.ai.first().url)
+    }
+
+    /** The gate from what's already known, with no name lookup: what the send lock checks. */
+    private suspend fun stateNow(): AiState {
         val s = prefs.ai.first()
         val month = AiGate.monthStart(LocalDate.now(clock))
-        localNetwork.refresh()
-        place(s.url)
         return state(s, keys.stored.first(), aiDao.spendSince(startMs(month)), connectivity.online.first(), localNetwork.allowed.value, lookedUp.value)
     }
 
     /**
      * Estimates one meal (NU-17). The request always runs to completion, even if the caller stops waiting
      * (*Cancel*), so its spend is logged; the caller then just ignores the result.
+     *
+     * [kind] is what it's for: a meal to log, or *Will it fit?* (NU-18). [counted] lists what the local parser
+     * already matched (PRD §12.5): the model gets the whole description and returns only the rest, so with a
+     * counted list a reply with no items is a fine answer, not an unreadable one.
      */
-    suspend fun estimate(text: String, origin: Origin, clarification: Clarification? = null, draft: DraftPlan? = null): EstimateResult = withContext(NonCancellable) {
+    suspend fun estimate(
+        text: String,
+        origin: Origin,
+        clarification: Clarification? = null,
+        draft: DraftPlan? = null,
+        kind: AiKind = AiKind.MEAL_TEXT,
+        counted: List<String> = emptyList(),
+    ): EstimateResult = withContext(NonCancellable) {
+        // The name lookup first, outside the lock: a hanging DNS then holds up this estimate only.
+        locate()
         // Check the gate and reserve the request's cost in one step, so requests made at the same time each see the
         // others' reservations and the cap holds (AI-03).
         val (request, pending) = sending.withLock {
-            val state = state()
+            val state = stateNow()
             if (state != AiState.READY) return@withContext EstimateResult.NotReady(state)
             val s = prefs.ai.first()
             // The key of the provider in use, and only over https: a server reached over plain http is never sent one.
             // A compatible server gets its key only if it's the server the key was entered for.
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
             val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
-            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification))
-            request to reserve(request)
+            val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification, counted))
+            request to reserve(kind, request.target, request.upperBound)
         }
         val reply = try {
             estimator.estimate(request)
@@ -204,7 +230,8 @@ class AiRepository @Inject constructor(
             EstimatorReply(AiStatus.UNEXPECTED, null, request.model, emptyList(), latencyMs = 0, responseText = null, detail = e.javaClass.simpleName)
         }
         val checked = reply.estimate?.takeIf { reply.status == AiStatus.OK }?.let(MealCheck::check)
-        val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty()) AiStatus.INVALID else reply.status
+        val nothingNew = checked != null && checked.items.isEmpty() && checked.rejected.isEmpty() && counted.isNotEmpty()
+        val status = if (reply.status == AiStatus.OK && checked?.items.isNullOrEmpty() && !nothingNew) AiStatus.INVALID else reply.status
         aiDao.updateRequest(
             pending.copy(
                 model = reply.servedBy,
@@ -232,8 +259,10 @@ class AiRepository @Inject constructor(
      * upper bound. Like a meal, it runs to completion even if the caller stops waiting, so its spend is logged.
      */
     suspend fun coach(system: String, user: String, schema: AiSchema): CoachSent = withContext(NonCancellable) {
+        // As for a meal: the name lookup outside the lock, so a hanging DNS never holds up other requests.
+        locate()
         val (call, pending) = sending.withLock {
-            val state = state()
+            val state = stateNow()
             if (state != AiState.READY) return@withContext CoachSent(AiStatus.UNEXPECTED, null, null, null, notReady = state)
             val s = prefs.ai.first()
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext CoachSent(AiStatus.AUTH, null, null, null, notReady = AiState.NO_KEY) else null
@@ -271,7 +300,6 @@ class AiRepository @Inject constructor(
     /** Serializes the gate check with the reservation it leads to. */
     private val sending = Mutex()
 
-    private suspend fun reserve(request: MealRequest): AiRequestLogEntity = reserve(AiKind.MEAL_TEXT, request.target, request.upperBound)
 
     /**
      * Logs the request as PENDING at its upper-bound cost before it's sent. Monthly spend counts it at once, and
