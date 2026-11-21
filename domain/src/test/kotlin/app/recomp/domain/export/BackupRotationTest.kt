@@ -32,4 +32,13 @@ class BackupRotationTest {
         assertEquals(LocalDateTime.of(2026, 11, 22, 22, 0), BackupRotation.nextRun(LocalDateTime.of(2026, 11, 22, 21, 59)))
         assertEquals(LocalDateTime.of(2026, 11, 29, 22, 0), BackupRotation.nextRun(LocalDateTime.of(2026, 11, 22, 22, 0)))
     }
+
+    @Test
+    fun `a part file being written is never counted or deleted as a backup`() {
+        val part = BackupRotation.partName(BackupRotation.fileName(LocalDate.of(2026, 11, 22)))
+        assertEquals("recomp-backup-2026-11-22.zip.part", part)
+        assertNull(BackupRotation.dateOf(part))
+        val files = (1..9).map { "recomp-backup-2026-11-0$it.zip" } + part
+        assertEquals(listOf("recomp-backup-2026-11-01.zip"), BackupRotation.toDelete(files, { it }))
+    }
 }

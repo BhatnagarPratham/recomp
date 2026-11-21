@@ -424,8 +424,6 @@ internal object SettingsKeys {
     /** AR-01: the daily step goal, 2,000 to 20,000; absent is 8,000. Steps are on while the STEPS feature is. */
     val STEPS_GOAL = intPreferencesKey("steps_goal")
 
-    /** DA-04: Settings → Health Connect → Share with other apps. Absent is off. */
-    val HEALTH_SHARE = booleanPreferencesKey("health_share")
 
     /** AR-02: Settings → Body data → Track sleep. Absent is off. */
     val TRACK_SLEEP = booleanPreferencesKey("track_sleep")
@@ -630,7 +628,6 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
             if (wrongType(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD, Double::class)) add(SettingsKeys.AI_COMPATIBLE_OUTPUT_USD.name)
             if (wrongType(SettingsKeys.STEPS_GOAL, Int::class)) add(SettingsKeys.STEPS_GOAL.name)
             if (wrongType(SettingsKeys.TRACK_SLEEP, Boolean::class)) add(SettingsKeys.TRACK_SLEEP.name)
-            if (wrongType(SettingsKeys.HEALTH_SHARE, Boolean::class)) add(SettingsKeys.HEALTH_SHARE.name)
             if (values[SettingsKeys.HEALTH_FEATURES.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.HEALTH_FEATURES.name)
             if (values[SettingsKeys.AI_NOTICES_SEEN.name]?.let { it !is Set<*> || it.any { v -> v !is String } } == true) add(SettingsKeys.AI_NOTICES_SEEN.name)
             // Decoding checks the stored classes' own rules; converting checks what the screens will do with them.
@@ -771,10 +768,6 @@ class SettingsPrefs @Inject constructor(@SettingsStore private val store: DataSt
 
     suspend fun setTrackSleep(on: Boolean) = store.edit { it[SettingsKeys.TRACK_SLEEP] = on }
 
-    /** DA-04: whether Recomp writes your workouts, meals and weigh-ins to Health Connect. Off until you turn it on. */
-    val healthShare: Flow<Boolean> = store.data.map { it[SettingsKeys.HEALTH_SHARE] ?: false }.distinctUntilChanged()
-
-    suspend fun setHealthShare(on: Boolean) = store.edit { it[SettingsKeys.HEALTH_SHARE] = on }
 
     inner class SettingsEditor internal constructor(private val prefs: MutablePreferences) {
         var persona: StoredPersona

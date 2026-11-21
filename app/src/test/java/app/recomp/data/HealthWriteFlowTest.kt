@@ -46,13 +46,16 @@ import org.robolectric.RobolectricTestRunner
 /** Health Connect, as a list: what was written, with its version, and what was deleted. */
 class FakeHealthWriter : HealthWriter {
     var allowed = true
+    var installed = true
     var failNext: Exception? = null
     val records = linkedMapOf<String, Pair<OutRecord, Long>>()
     val upserts = mutableListOf<List<String>>()
     val deletes = mutableListOf<String>()
     val deletedAll = mutableListOf<OutKind>()
 
-    override suspend fun canWrite() = allowed
+    override fun available() = installed
+
+    override suspend fun canWrite() = allowed && installed
 
     override suspend fun upsert(records: List<OutRecord>, version: Long) {
         failNext?.let { failNext = null; throw it }
@@ -132,7 +135,7 @@ class HealthWriteFlowTest {
     fun `nothing is written until sharing is turned on`() = runBlocking {
         workout()
         lunch()
-        assertFalse(app.prefs.healthShare.first())
+        assertFalse(app.device.shareOn.first())
         assertEquals(ShareResult.Off, writes.sync())
         assertTrue(hc.records.isEmpty())
     }
@@ -228,6 +231,10 @@ class HealthWriteFlowTest {
         assertEquals(ShareResult.NotAllowed, writes.sync())
         assertTrue(hc.records.isEmpty())
         assertEquals(HealthWriteRepository.NOT_ALLOWED, app.device.healthShare.first().error)
+        // Health Connect missing or out of date says that, not "give it permission".
+        hc.installed = false
+        assertEquals(ShareResult.NotAllowed, writes.sync())
+        assertEquals(HealthWriteRepository.NOT_AVAILABLE, app.device.healthShare.first().error)
     }
 
     @Test
@@ -273,13 +280,23 @@ class HealthWriteFlowTest {
     }
 
     @Test
-    fun `the share switch is a setting that's exported, and what was written is device state that isn't`() = runBlocking {
+    fun `the share switch is device state, so an import or the safety copy can never turn sharing back on`() = runBlocking {
         writes.setShare(true)
         workout()
         writes.sync()
-        assertTrue(app.prefs.exportable().asMap().keys.any { it.name == "health_share" })
+        val backupOn = java.io.ByteArrayOutputStream().also { app.backup.export(it) }.toByteArray()
+        assertTrue(app.prefs.exportable().asMap().keys.none { it.name.contains("share") || it.name.startsWith("hc_") })
         assertTrue(app.device.written().isNotEmpty())
         assertFalse(File(tmp.root, "app/settings.preferences_pb").readBytes().decodeToString().contains("recomp-workout-"))
+
+        // Turned off, then a backup taken while it was on is imported: sharing stays off and nothing is written.
+        writes.setShare(false)
+        hc.upserts.clear()
+        app.backup.restore(app.backup.prepare(java.io.ByteArrayInputStream(backupOn)))
+        assertFalse(app.device.shareOn.first())
+        lunch()
+        assertEquals(ShareResult.Off, writes.sync())
+        assertTrue(hc.upserts.isEmpty())
     }
 
     @Test
@@ -306,5 +323,22 @@ class HealthWriteFlowTest {
         app.clock.instant = app.clock.instant.plusSeconds(60)
         assertEquals(1, (writes.sync() as ShareResult.Done).deleted)
         assertFalse("recomp-workout-$strength" in hc.records)
+    }
+
+    @Test
+    fun `a resync that fails after its deletes is repaired by the next sync`() = runBlocking {
+        workout()
+        lunch()
+        writes.setShare(true)
+        writes.sync()
+        assertEquals(2, hc.records.size)
+        // Everything of Recomp's is deleted, then the writes fail (a rate limit, a killed process).
+        hc.failNext = java.io.IOException("Rate limited")
+        assertTrue(writes.sync(everything = true) is ShareResult.Failed)
+        assertTrue(hc.records.isEmpty())
+        // The next ordinary sync doesn't trust the old hashes: the window is written again.
+        app.clock.instant = app.clock.instant.plusSeconds(60)
+        assertEquals(2, (writes.sync() as ShareResult.Done).written)
+        assertEquals(2, hc.records.size)
     }
 }

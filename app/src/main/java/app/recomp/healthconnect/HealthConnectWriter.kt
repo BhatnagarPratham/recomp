@@ -37,6 +37,8 @@ import kotlin.reflect.KClass
 class HealthConnectWriter @Inject constructor(@ApplicationContext private val context: Context) : HealthWriter {
     private val client by lazy { HealthConnectClient.getOrCreate(context) }
 
+    override fun available(): Boolean = HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
+
     override suspend fun canWrite(): Boolean =
         HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE &&
             client.permissionController.getGrantedPermissions().containsAll(PERMISSIONS)
@@ -78,7 +80,7 @@ class HealthConnectWriter @Inject constructor(@ApplicationContext private val co
                 startTime = record.start, startZoneOffset = offset(record.start),
                 endTime = record.end, endZoneOffset = offset(record.end),
                 metadata = metadata,
-                exerciseType = exerciseType(record.sessionKind),
+                exerciseType = exerciseType(record.sessionKind, record.title),
                 title = record.title,
                 notes = record.notes,
             )
@@ -114,12 +116,17 @@ class HealthConnectWriter @Inject constructor(@ApplicationContext private val co
             HealthPermission.getWritePermission(WeightRecord::class),
         )
 
-        /** Recomp's kinds as Health Connect's types: strength training, yoga, stretching, and "other" for the rest. */
-        fun exerciseType(kind: SessionKind): Int = when (kind) {
+        /**
+         * Recomp's kinds as Health Connect's types: strength training, yoga, stretching, and for cardio and sport the
+         * activity its style names when M13's table knows it ("Walk", "Badminton"), else "other workout".
+         */
+        fun exerciseType(kind: SessionKind, title: String = ""): Int = when (kind) {
             SessionKind.STRENGTH -> ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING
             SessionKind.YOGA -> ExerciseSessionRecord.EXERCISE_TYPE_YOGA
             SessionKind.MOBILITY -> ExerciseSessionRecord.EXERCISE_TYPE_STRETCHING
-            SessionKind.CARDIO, SessionKind.SPORT -> ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT
+            SessionKind.CARDIO, SessionKind.SPORT ->
+                app.recomp.data.health.ExerciseTypes.typeFor(title)?.takeIf { app.recomp.data.health.ExerciseTypes.kind(it) == kind }
+                    ?: ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT
         }
     }
 }

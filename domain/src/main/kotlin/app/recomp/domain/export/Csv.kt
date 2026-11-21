@@ -35,6 +35,7 @@ object Csv {
     /**
      * One field. Text that a spreadsheet would run as a formula (starting with `=`, `+`, `-`, `@`, a tab or a carriage
      * return) gets a leading apostrophe, so a food named "=HYPERLINK(…)" stays text (OWASP's CSV injection advice).
+     * The price is that a note starting with "-" or "+" ("- felt good") shows the apostrophe too.
      */
     fun field(cell: Cell): String = when (cell) {
         Cell.Empty -> ""

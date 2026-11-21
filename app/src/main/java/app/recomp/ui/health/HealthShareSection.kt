@@ -18,7 +18,6 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.health.HealthWriter
 import app.recomp.data.prefs.DevicePrefs
 import app.recomp.data.prefs.HealthShareState
-import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.HealthWriteRepository
 import app.recomp.data.repo.ShareResult
 import app.recomp.healthconnect.HealthConnectWriter
@@ -33,12 +32,11 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class HealthShareViewModel @Inject constructor(
-    prefs: SettingsPrefs,
     device: DevicePrefs,
     private val writes: HealthWriteRepository,
     private val writer: HealthWriter,
 ) : ViewModel() {
-    val on: StateFlow<Boolean> = prefs.healthShare.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val on: StateFlow<Boolean> = device.shareOn.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     val status: StateFlow<HealthShareState> = device.healthShare.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HealthShareState())
 
     private val _note = MutableStateFlow<String?>(null)
@@ -68,7 +66,7 @@ class HealthShareViewModel @Inject constructor(
         try {
             when (val r = block()) {
                 is ShareResult.Failed -> _note.value = "Couldn't write to Health Connect (${r.reason})."
-                ShareResult.NotAllowed -> _note.value = HealthWriteRepository.NOT_ALLOWED
+                ShareResult.NotAllowed -> _note.value = if (writer.available()) HealthWriteRepository.NOT_ALLOWED else HealthWriteRepository.NOT_AVAILABLE
                 else -> Unit
             }
         } finally {

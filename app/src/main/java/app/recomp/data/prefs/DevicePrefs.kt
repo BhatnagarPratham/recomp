@@ -78,6 +78,12 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
 
         /** DA-04: the records written to Health Connect in the sync window, as `id → date|hash` JSON. */
         val HC_WRITTEN = stringPreferencesKey("hc_written")
+
+        /**
+         * DA-04's switch: Settings → Health Connect → *Share with other apps*. Device state, not a setting, so a
+         * backup or the safety copy can never turn it back on: sharing always starts with your own tap here.
+         */
+        val HC_SHARE = booleanPreferencesKey("hc_share")
         val HC_LAST_WRITE_AT = longPreferencesKey("hc_last_write_at")
         val HC_WRITE_ERROR = stringPreferencesKey("hc_write_error")
 
@@ -90,6 +96,11 @@ class DevicePrefs @Inject constructor(@DeviceStore private val store: DataStore<
     }
 
     // Health Connect writes (M16, DA-04)
+
+    /** Whether Recomp writes to Health Connect. Off until you turn it on on this phone. */
+    val shareOn: Flow<Boolean> = store.data.map { it[Keys.HC_SHARE] ?: false }.distinctUntilChanged()
+
+    suspend fun setShareOn(on: Boolean) = store.edit { it[Keys.HC_SHARE] = on }
 
     val healthShare: Flow<HealthShareState> = store.data.map { HealthShareState(it[Keys.HC_LAST_WRITE_AT], it[Keys.HC_WRITE_ERROR]) }.distinctUntilChanged()
 

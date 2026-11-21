@@ -8,7 +8,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.recomp.data.db.AppDatabase
-import app.recomp.data.prefs.SettingsPrefs
 import app.recomp.data.repo.HealthWriteRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -50,13 +49,16 @@ class HealthWriteWorker @AssistedInject constructor(
 class HealthWriteSync @Inject constructor(
     @ApplicationContext private val context: Context,
     private val db: AppDatabase,
-    private val prefs: SettingsPrefs,
+    private val device: app.recomp.data.prefs.DevicePrefs,
     private val writes: HealthWriteRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
 
-    /** The tables the records are built from. */
+    /**
+     * The tables the records are built from. Settings aren't watched: renaming a meal (its record's name) or changing
+     * "day starts at" (its time) is written at the next launch, the daily run or the next change to these tables.
+     */
     fun changes(): Flow<Set<String>> = db.invalidationTracker.createFlow(*TABLES, emitInitialState = false)
 
     @OptIn(FlowPreview::class)
@@ -66,7 +68,7 @@ class HealthWriteSync @Inject constructor(
         started = true
         scope.launch { runCatching { writes.sync() } }
         scope.launch {
-            prefs.healthShare.collect { on ->
+            device.shareOn.collect { on ->
                 runCatching { schedule(on) }
                 if (on) runCatching { writes.sync() }
             }

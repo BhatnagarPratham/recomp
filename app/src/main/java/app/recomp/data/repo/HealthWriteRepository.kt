@@ -55,10 +55,10 @@ class HealthWriteRepository @Inject constructor(
 
     /** Writes what changed in the window. With [everything], deletes all Recomp's records there and writes every one again. */
     suspend fun sync(everything: Boolean = false): ShareResult = mutex.withLock {
-        if (!prefs.healthShare.first()) return ShareResult.Off
+        if (!device.shareOn.first()) return ShareResult.Off
         try {
             if (!writer.canWrite()) {
-                device.setWriteError(NOT_ALLOWED)
+                device.setWriteError(if (writer.available()) NOT_ALLOWED else NOT_AVAILABLE)
                 return ShareResult.NotAllowed
             }
             val now = clock.millis()
@@ -66,7 +66,12 @@ class HealthWriteRepository @Inject constructor(
             val windowStart = HealthWrites.windowStart(today)
             val from = if (everything) null else windowStart
             val current = records(from)
-            if (everything) OutKind.entries.forEach { writer.deleteAll(it) }
+            if (everything) {
+                // Forgotten first: if a write below fails after the deletes, the next sync writes the window again
+                // instead of trusting hashes of records that are no longer there.
+                device.clearWritten()
+                OutKind.entries.forEach { writer.deleteAll(it) }
+            }
             val plan = HealthWrites.plan(current, if (everything) emptyMap() else device.written(), from, everything)
             plan.deletes.groupBy({ it.first }, { it.second }).forEach { (kind, ids) -> writer.delete(kind, ids) }
             if (plan.upserts.isNotEmpty()) writer.upsert(plan.upserts, version = now)
@@ -83,7 +88,7 @@ class HealthWriteRepository @Inject constructor(
 
     /** Turning sharing on writes the last 30 days; turning it off stops writing and forgets what was written. */
     suspend fun setShare(on: Boolean) {
-        prefs.setHealthShare(on)
+        device.setShareOn(on)
         if (!on) device.clearWritten()
     }
 
@@ -119,6 +124,8 @@ class HealthWriteRepository @Inject constructor(
     private fun Cursor.stringOrNull(i: Int) = if (isNull(i)) null else getString(i)
 
     companion object {
+        const val NOT_AVAILABLE = "Health Connect isn't on this phone, or needs an update from the Play Store. Nothing is written until it's there."
+
         const val NOT_ALLOWED = "Health Connect isn't allowing Recomp to write. Turn sharing off and on again to give it permission."
 
         fun title(kind: SessionKind): String = when (kind) {

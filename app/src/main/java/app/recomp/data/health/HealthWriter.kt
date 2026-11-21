@@ -8,6 +8,9 @@ import app.recomp.domain.export.OutRecord
  * writes and deletes go by `clientRecordId`, and a delete by time range removes only this app's records.
  */
 interface HealthWriter {
+    /** Health Connect is there and up to date. */
+    fun available(): Boolean = true
+
     /** Health Connect is there and every write permission is granted. */
     suspend fun canWrite(): Boolean
 

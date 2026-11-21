@@ -148,8 +148,8 @@ class AutoBackupScheduler @Inject constructor(
     /** At launch: scheduled if there's a target, and kept as it is when it already is. */
     suspend fun ensureScheduled() = schedule(ExistingPeriodicWorkPolicy.KEEP)
 
-    /** After the target changes: rescheduled from now. */
-    suspend fun reschedule() = schedule(ExistingPeriodicWorkPolicy.UPDATE)
+    /** After the target changes: rescheduled from now, so the next run is the coming Sunday night again. */
+    suspend fun reschedule() = schedule(ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE)
 
     private suspend fun schedule(policy: ExistingPeriodicWorkPolicy) {
         val work = WorkManager.getInstance(context)
@@ -204,22 +204,53 @@ class SafBackupStorage @Inject constructor(@ApplicationContext private val conte
         } ?: throw FileNotFoundException("The folder can't be read")
     }
 
+    /**
+     * In a folder, the backup is written to `<name>.part`, checked, and only then renamed over the day's file, so a
+     * write that fails or is cut short never destroys the backup already there. A provider that can't rename gets
+     * the file written in place. The single file (Google Drive) can't be renamed, so it's overwritten in place and
+     * its size checked afterwards; a cut-short write is reported, and the next run writes it again.
+     */
     override suspend fun write(target: BackupTarget, name: String?, bytes: ByteArray) = withContext(Dispatchers.IO) {
         if (name == null) {
-            open(Uri.parse(target.uri)).use { it.write(bytes) }
+            val uri = Uri.parse(target.uri)
+            open(uri).use { it.write(bytes) }
+            check(uri, bytes.size.toLong())
             return@withContext
         }
-        val existing = files(target).firstOrNull { it.name == name }?.let { Uri.parse(it.uri) }
-        val created = existing == null
-        val uri = existing ?: DocumentsContract.createDocument(resolver, folderDocument(target), "application/zip", name)
+        val before = files(target)
+        // A part left by an earlier run that didn't finish goes first.
+        before.filter { it.name == BackupRotation.partName(name) }.forEach { runCatching { delete(it) } }
+        val part = DocumentsContract.createDocument(resolver, folderDocument(target), "application/octet-stream", BackupRotation.partName(name))
             ?: throw IOException("The folder didn't take a new file")
         try {
-            open(uri).use { it.write(bytes) }
+            open(part).use { it.write(bytes) }
+            check(part, bytes.size.toLong())
         } catch (e: Exception) {
-            // A file this run created and couldn't fill isn't left behind with a backup's name.
-            if (created) runCatching { DocumentsContract.deleteDocument(resolver, uri) }
+            runCatching { DocumentsContract.deleteDocument(resolver, part) }
             throw e
         }
+        val existing = before.firstOrNull { it.name == name }?.let { Uri.parse(it.uri) }
+        val renamed = runCatching {
+            existing?.let { DocumentsContract.deleteDocument(resolver, it) }
+            DocumentsContract.renameDocument(resolver, part, name)
+        }.getOrNull()
+        if (renamed == null) {
+            // No rename here: write the day's file in place, as before, and drop the part.
+            runCatching { DocumentsContract.deleteDocument(resolver, part) }
+            val uri = (if (existing != null && runCatching { resolver.openFileDescriptor(existing, "r")?.close() }.isSuccess) existing else null)
+                ?: DocumentsContract.createDocument(resolver, folderDocument(target), "application/zip", name)
+                ?: throw IOException("The folder didn't take a new file")
+            open(uri).use { it.write(bytes) }
+            check(uri, bytes.size.toLong())
+        }
+    }
+
+    /** The provider's size for the file, where it reports one, must be what was written. */
+    private fun check(uri: Uri, expected: Long) {
+        val size = runCatching {
+            resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+        }.getOrNull()
+        if (size != null && size != expected) throw IOException("The backup was cut short ($size of $expected bytes written)")
     }
 
     override suspend fun delete(file: StoredFile) {

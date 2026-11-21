@@ -26,6 +26,9 @@ object BackupRotation {
 
     fun fileName(date: LocalDate) = "recomp-backup-$date.zip"
 
+    /** Where a backup is written before it replaces [name]. Not a backup name, so rotation never counts it. */
+    fun partName(name: String) = "$name.part"
+
     /** The date in one of Recomp's backup names, or null for any other file, which is never touched. */
     fun dateOf(name: String): LocalDate? = NAME.matchEntire(name)?.let { runCatching { LocalDate.parse(it.groupValues[1]) }.getOrNull() }
 
