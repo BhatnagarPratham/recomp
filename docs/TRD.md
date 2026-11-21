@@ -1432,6 +1432,37 @@ Tests cover:
 - **Risks:** the parser can pick the wrong dish ("dal" for "dal makhani"). It prefers your own foods and exact names, and shows its pick for review.
 - **Parallel:** with M10.
 
+**M9 results (2026-11-21; no Room change, on main with M7 and M8).** Built to PRD §12.5 and the block above; §6.2's **Local describe parser** and **Describe it and Will it fit? with the parser**, and §6.4's slot times and snack allowance, describe what was built. Where the spec was silent, PRD §12.5's **As built** lists the readings: the parser answers when AI is on but not ready, with *Save draft* kept; a failed request after a partial match reviews the matched items and keeps no draft; matched foods change their amount only; Will it fit? is about today and goes parser-first unless *Ordered*; the default meal times; and the allowance at the current setting on any day.
+
+Also in M9, the two nits from M7's review re-check (pr12-review.md, R1 and R2): a usage with only one of its two counts takes the upper bound for the other, and the name lookup keeps its 3 s limit and runs outside the send lock.
+
+Tests cover (every food and phrase invented; the AI is a fake):
+- `:domain`:
+  - the parser's corpus (`DescribeParserTest`): fractions in every form, numbers in words, "and" inside and between amounts, "with" in a dish's own name, weights, the amount after the name, units and their spellings, synonyms and plurals, exact and own names first, no dropped words ("dal makhani" never becomes dal), a unit word that is part of the name, unit fallbacks, the last-logged unit, confidence, the diet filter, unknown and empty chunks, separators, and the length limits;
+  - amounts alone (`QuantitiesTest`), including junk;
+  - merging without counting anything twice (`DescribeMergeTest`), by any of a food's names;
+  - slot times (`MealTimesTest`): defaults, a time before the first start, starts you set, removed meals, ties, ranges;
+  - Will it fit's before and after for each goal's main number, the ramp and the baseline week (`FitCheckTest`);
+  - the allowance inside the target (`SnackAllowanceTest`);
+  - the already-counted block in the prompt (`AiTest`).
+- Over the real database (`ParserFlowTest`):
+  - AI off: matched foods with their sources and food ids, nothing sent, and the review saved as `LOCAL_PARSE` rows linked to their foods, a quick add for an unknown part, and *Undo* taking back the use counts;
+  - an amount change on a matched food, and a picked food logged as `MANUAL`, with no AI-learned copy;
+  - the diet filter, whole words and a hidden food over the real FTS index; the last-logged unit and calibrated measures;
+  - AI on: everything matched sends nothing; otherwise one request with the whole meal and the counted items, the repeat dropped, and the rows `LOCAL_PARSE` and `AI_TEXT` with the request id, saved to My meals; an empty reply with counted items is `OK`; *Ordered* goes straight to the AI; a failure after a match reviews the match with no draft, and with no match keeps the draft; not ready answers from the parser with *Save draft* still there;
+  - Will it fit?: nothing logged by checking, `FIT_CHECK` logged, *Log it* into the meal for the time of day with the request id kept, the meal it was opened from, slot times you set, and with AI off or failing the parser's answer with no draft;
+  - the allowance on the day and its meal, with the same target and "left" as without it.
+- Screens (`DescribeFlowTest`): the M3c flows on the new pipeline, and *Save draft* after the parser's answer when AI isn't ready.
+- Wording (`FitTextTest`): Will it fit's lines for every goal, the baseline week and past the target; the allowance lines; meal ranges; provenance; the review's notices.
+- Settings (`SettingsPrefsTest`): meal slots stored before M9 read with no start, a start kept and one outside the day refused; the allowance off by default, only offered amounts kept, refused on import otherwise, and exported.
+- R1 (`HttpProvidersTest`): a prompt-only or reply-only usage takes the upper bound for the missing count, on OpenAI and Gemini; both present are not padded.
+- R2 (`AiFlowTest`): a hanging lookup holds up its own estimate while a second one completes; the resolver gives up at its limit on a lookup that ignores interrupts, and returns addresses or nothing otherwise.
+
+| Check | Result |
+|-------|--------|
+| Upgrade from M8 (release over the real data, 2026-11-21, reference phone on Android 15) | ✅ Installed over M8's release with no crash; no schema change, so no backup was needed. The Food tab shows *Will it fit?* on today; the add-food screen shows *Describe it* and *Will it fit?* side by side; Describe it (AI on, no key yet) says the parser still answers, with *Estimate* and *Save draft*; Settings → Food has *Snack allowance* (off), and Meals shows each meal's usual time (05:00–12:00 and so on). Nothing was typed, logged or changed in the real app. |
+| Parser, allowance and Will it fit? with invented data (dev install `app.recomp.m9dev`, AI off, with the real INDB build; uninstalled afterwards) | ✅ "2 phulka, 1 katori rajma masala and cucumber salad, zorple pie" matched Chapati/Roti (*Database*, high), an invented Rajma masala (*Your food*, high) and a cucumber salad (*Database*, low), and listed "Couldn't find: zorple pie" with *Search*, *Quick add* and *Leave out*. A quick add for it joined the review, and *Save* logged all four into Lunch. A 150 kcal allowance showed "includes a 150 kcal snack allowance" under the target and "0 of 150 kcal" on Snacks. Will it fit? "1 bowl dal makhani" showed "Protein left 80 g → 68 g" and "Calories 928 left → 666 left" without logging; *Log it* at 11:30 went to Breakfast, with *Undo*. |
+
 #### M10: Training history
 
 *WL-10, PO-09, PO-10; PRD §12.6; no Room change.*
