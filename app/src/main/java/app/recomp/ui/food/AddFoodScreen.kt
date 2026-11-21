@@ -167,10 +167,7 @@ class AddFoodViewModel @Inject constructor(
     suspend fun update(id: Long, food: CustomFood) = foods.updateCustom(id, food).also { refresh() }
 
     /** A custom food as the form edits it: per 100 g, with its serving unit. */
-    suspend fun custom(id: Long): CustomFood? {
-        val f = foods.food(id)?.takeIf { it.source == FoodSource.CUSTOM } ?: return null
-        return CustomFood(f.name, f.brand, f.per100g, f.diet, foods.serving(id)?.let { it.label to it.grams })
-    }
+    suspend fun custom(id: Long): CustomFood? = foods.editable(id)
 
     fun renameMeal(id: Long, name: String) = viewModelScope.launch { log.renameMeal(id, name) }
 
@@ -315,7 +312,7 @@ fun AddFoodScreen(
                     FoodRow(
                         hit,
                         onOpen = { open(hit.food.id) },
-                        onEdit = if (hit.food.source == FoodSource.CUSTOM) {
+                        onEdit = if (hit.food.source in FoodRepository.EDITABLE) {
                             { scope.launch { form = FoodForm(hit.food.id, viewModel.custom(hit.food.id), hit.food.name, hit.food.diet) } }
                         } else {
                             null
@@ -445,6 +442,8 @@ private fun FoodRow(hit: FoodHit, onOpen: () -> Unit, onEdit: (() -> Unit)?, onH
         Column(Modifier.weight(1f).heightIn(min = 56.dp).clickable(onClickLabel = "Log ${food.name}", onClick = onOpen).padding(vertical = 8.dp)) {
             val mark = when (food.source) {
                 FoodSource.CUSTOM -> " · yours"
+                FoodSource.LABEL_OCR -> " · yours, from a label"
+                FoodSource.OFF -> " · Open Food Facts"
                 FoodSource.AI -> " · AI-learned"
                 else -> ""
             }
