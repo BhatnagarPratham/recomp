@@ -27,6 +27,18 @@ import kotlinx.coroutines.withContext
  */
 data class PhotoItem(val photo: ProgressPhotoEntity, val file: File?, val present: Boolean, val rotation: Int = 0)
 
+/** How deleting a photo ended. */
+enum class PhotoDelete {
+    /** Gone from the phone, and from the safety copy if it was in one. */
+    DELETED,
+
+    /** The file couldn't be removed, so the row stays to delete again. */
+    FILE_KEPT,
+
+    /** Gone from the phone, but the safety copy from before the last import still holds it (M17 review R1). */
+    SAFETY_COPY_KEPT,
+}
+
 /**
  * Progress photos (BM-04, PRD §12.13). Images live only in app-private `files/photos/`: never in the gallery,
  * never in Android's own backup (its rules are include-only), and never sent to AI. They leave the phone only
@@ -74,9 +86,12 @@ class PhotoRepository @Inject constructor(
     /**
      * Records a capture once the camera has written [file]. A cancelled or empty capture leaves no row and no file.
      * The camera's location tags are removed. A retake replaces the same pose's photo from the same day, which
-     * the screen asks about first, so the grid always shows every photo. Returns the new row's id, or null.
+     * the screen asks about first, so the grid always shows every photo. The day is the save's log date: the
+     * replace happens only when that's the day the screen checked ([checkedFor]), so a capture saved after the day
+     * changed never deletes a photo you weren't asked about (M17 review R2). Null [checkedFor] is the save's own
+     * day. Returns the new row's id, or null.
      */
-    suspend fun saveCapture(file: File, pose: PhotoPose, takenAt: Long = System.currentTimeMillis()): Long? = withContext(Dispatchers.IO) {
+    suspend fun saveCapture(file: File, pose: PhotoPose, takenAt: Long = System.currentTimeMillis(), checkedFor: LocalDate? = null): Long? = withContext(Dispatchers.IO) {
         if (!file.isFile || file.length() == 0L) {
             file.delete()
             return@withContext null
@@ -84,7 +99,7 @@ class PhotoRepository @Inject constructor(
         require(inside(file) && PhotoPaths.NAME.matches(file.name)) { "Photos are only stored in $PHOTO_DIR" }
         stripLocation(file)
         val date = days.of(takenAt)
-        val replaced = dao.all().filter { it.logDate == date && it.pose == pose }
+        val replaced = if (checkedFor == null || checkedFor == date) dao.all().filter { it.logDate == date && it.pose == pose } else emptyList()
         val id = dao.insert(ProgressPhotoEntity(logDate = date, takenAt = takenAt, pose = pose, filePath = "$PHOTO_DIR/${file.name}"))
         replaced.forEach { delete(it.id) }
         id
@@ -95,15 +110,15 @@ class PhotoRepository @Inject constructor(
 
     /**
      * Deletes the photo: its file first, so a file that can't be removed keeps its row (and stays visible to
-     * delete again), then the row, then its copy in the safety copy. Returns false when the file couldn't go.
+     * delete again), then the row, then its copy in the safety copy. Says which of those didn't happen, so the
+     * screen can tell you (a full disk can stop the safety copy being rewritten).
      */
-    suspend fun delete(id: Long): Boolean = withContext(Dispatchers.IO) {
-        val photo = dao.get(id) ?: return@withContext true
+    suspend fun delete(id: Long): PhotoDelete = withContext(Dispatchers.IO) {
+        val photo = dao.get(id) ?: return@withContext PhotoDelete.DELETED
         val file = fileOf(photo)
-        if (file != null && file.exists() && !file.delete()) return@withContext false
+        if (file != null && file.exists() && !file.delete()) return@withContext PhotoDelete.FILE_KEPT
         dao.delete(photo)
-        runCatching { backup.dropFromSafetyCopy(photo.filePath) }
-        true
+        if (runCatching { backup.dropFromSafetyCopy(photo.filePath) }.isSuccess) PhotoDelete.DELETED else PhotoDelete.SAFETY_COPY_KEPT
     }
 
     /**

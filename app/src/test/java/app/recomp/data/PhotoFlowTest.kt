@@ -5,6 +5,7 @@ import app.recomp.data.db.PhotoPose
 import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.ui.body.tiles
 import java.util.Base64
+import app.recomp.data.repo.PhotoDelete
 import app.recomp.data.repo.PhotoRepository
 import java.io.File
 import java.time.LocalDate
@@ -110,7 +111,7 @@ class PhotoFlowTest {
             val row = app.db.photoDao().get(id)!!
             assertNull(photos.fileOf(row))
             assertFalse(photos.items(listOf(row)).single().present)
-            assertTrue(photos.delete(id))
+            assertEquals(PhotoDelete.DELETED, photos.delete(id))
             assertNull(app.db.photoDao().get(id))
             assertEquals(path, "keep", canary.readText())
         }
@@ -124,11 +125,65 @@ class PhotoFlowTest {
         val file = photos.fileOf(row)!!
         file.delete()
         File(file, "stuck").apply { parentFile!!.mkdirs(); writeText("x") }
-        assertFalse(photos.delete(id))
+        assertEquals(PhotoDelete.FILE_KEPT, photos.delete(id))
         assertEquals(id, app.db.photoDao().get(id)?.id)
         File(file, "stuck").delete()
-        assertTrue(photos.delete(id))
+        assertEquals(PhotoDelete.DELETED, photos.delete(id))
         assertNull(app.db.photoDao().get(id))
+    }
+
+    /** The first millisecond of the log day after [t]'s, found by halving (the day can start at any hour). */
+    private suspend fun nextDayStart(t: Long): Long {
+        val day = app.days.of(t)
+        var lo = t
+        var hi = t + 25 * 60 * 60 * 1000L
+        while (hi - lo > 1) {
+            val mid = (lo + hi) / 2
+            if (app.days.of(mid) == day) lo = mid else hi = mid
+        }
+        return hi
+    }
+
+    @Test
+    fun `a retake checked before the day changed and saved after it replaces nothing`() = runBlocking {
+        val midnight = nextDayStart(10L * 24 * 60 * 60 * 1000)
+        val before = midnight - 60_000
+        val after = midnight + 60_000
+        val dayOne = app.days.of(before)
+        val dayTwo = app.days.of(after)
+        assertTrue(dayOne != dayTwo)
+        // A front photo on each day: one from late on day one, and one already taken just after the change.
+        val late = capture(PhotoPose.FRONT, before - 60_000).also { photos.saveCapture(it, PhotoPose.FRONT, takenAt = before - 60_000) }
+        val early = capture(PhotoPose.FRONT, midnight).also { photos.saveCapture(it, PhotoPose.FRONT, takenAt = midnight) }
+        // The screen asked "Replace today's front photo?" on day one; the camera came back on day two.
+        val retake = capture(PhotoPose.FRONT, after)
+        photos.saveCapture(retake, PhotoPose.FRONT, takenAt = after, checkedFor = dayOne)
+        val rows = photos.observe().first()
+        assertEquals(setOf(late, early, retake).map { "photos/${it.name}" }.toSet(), rows.map { it.filePath }.toSet())
+        assertEquals("filed under the save's day", dayTwo, rows.single { it.filePath == "photos/${retake.name}" }.logDate)
+        assertTrue(late.exists() && early.exists())
+
+        // Checked and saved on the same day, the retake replaces that day's photo as asked.
+        val again = capture(PhotoPose.FRONT, after + 60_000)
+        photos.saveCapture(again, PhotoPose.FRONT, takenAt = after + 60_000, checkedFor = dayTwo)
+        assertEquals(setOf(late, again).map { "photos/${it.name}" }.toSet(), photos.observe().first().map { it.filePath }.toSet())
+        assertFalse(early.exists() || retake.exists())
+    }
+
+    @Test
+    fun `a delete that can't update the safety copy says so, and the photo is still gone from the phone`() = runBlocking {
+        val file = capture(PhotoPose.SIDE, 2_000)
+        val id = photos.saveCapture(file, PhotoPose.SIDE, takenAt = 2_000)!!
+        // A safety copy that can't be rewritten (here, unreadable; on a phone, a full disk).
+        app.backup.safetyCopyFile.apply { parentFile?.mkdirs() }.writeBytes(byteArrayOf(1, 2, 3))
+        assertEquals(PhotoDelete.SAFETY_COPY_KEPT, photos.delete(id))
+        assertNull(app.db.photoDao().get(id))
+        assertFalse(file.exists())
+
+        // Without a safety copy, or with one it can update, it's a plain delete.
+        app.backup.safetyCopyFile.delete()
+        val other = photos.saveCapture(capture(PhotoPose.BACK, 3_000), PhotoPose.BACK, takenAt = 3_000)!!
+        assertEquals(PhotoDelete.DELETED, photos.delete(other))
     }
 
     @Test
