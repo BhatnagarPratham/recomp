@@ -1,5 +1,7 @@
 package app.recomp.ui.body
 
+import app.recomp.data.repo.TrainingRepository
+import app.recomp.domain.body.MobilityMarker
 import kotlinx.coroutines.flow.map
 import app.recomp.domain.body.TapeSite
 import app.recomp.domain.body.TapeReading
@@ -124,7 +126,21 @@ class BodyEntries(private val body: BodyRepository, private val health: HealthRe
 }
 
 @HiltViewModel
-class BodyViewModel @Inject constructor(private val body: BodyRepository, private val health: HealthRepository, days: DayBoundary) : ViewModel() {
+class BodyViewModel @Inject constructor(
+    private val body: BodyRepository,
+    private val health: HealthRepository,
+    days: DayBoundary,
+    training: TrainingRepository,
+) : ViewModel() {
+    /** YG-04: the mobility card, while Settings → Training → *Mobility markers* is on. */
+    val mobilityOn: StateFlow<Boolean> = body.observeMobilityOn(training.observeExtras().map { rows -> rows.map { it.kind } })
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val mobility: StateFlow<Map<MobilityMarker, List<MeasurementEntity>>> =
+        body.observeMobility().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun save(d: MobilityDraft) = viewModelScope.launch { body.logMobility(d.values(), d.at) }
+
     val entries = BodyEntries(body, health)
 
     /** InBody measurements waiting for muscle and visceral fat (IB-07). */
@@ -188,6 +204,9 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
     var weighIn by remember { mutableStateOf<WeighInDraft?>(null) }
     var waistDraft by remember { mutableStateOf<WaistDraft?>(null) }
     var tapeDraft by remember { mutableStateOf<TapeDraft?>(null) }
+    var mobilitySheet by remember { mutableStateOf(false) }
+    val mobilityOn by viewModel.mobilityOn.collectAsStateWithLifecycle()
+    val mobility by viewModel.mobility.collectAsStateWithLifecycle()
     val tape by viewModel.tape.collectAsStateWithLifecycle()
     var allWeighIns by remember { mutableStateOf(false) }
 
@@ -243,6 +262,15 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
                     SectionTitle("Waist")
                     WaistCard(waist, today, onLog = { scope.launch { tapeDraft = viewModel.entries.newMeasurements() } }, onEdit = { waistDraft = viewModel.entries.edit(it) })
                     TapeCard(tape)
+                }
+            }
+
+            if (mobilityOn) {
+                item {
+                    Column {
+                        SectionTitle("Mobility")
+                        MobilityCard(mobility, today, onLog = { mobilitySheet = true })
+                    }
                 }
             }
 
@@ -305,6 +333,12 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, onOpenDraft: (Long) -> Unit, viewMod
         ) { saved ->
             weighIn = null
             viewModel.save(saved)
+        }
+    }
+    if (mobilitySheet) {
+        MobilitySheet(mobility[MobilityMarker.SIT_AND_REACH]?.firstOrNull()?.value, onDismiss = { mobilitySheet = false }) { d ->
+            mobilitySheet = false
+            viewModel.save(d)
         }
     }
     tapeDraft?.let { d ->

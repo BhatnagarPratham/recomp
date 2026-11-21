@@ -143,4 +143,13 @@ object BodyText {
 
     /** Typed numbers accept "80,4" as well as "80.4". */
     fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+
+    /** A number that may be negative, typed with a hyphen or a minus sign (YG-04's sit-and-reach). */
+    fun parseSigned(text: String): Double? = parse(text.trim().replace('\u2212', '-'))
+
+    /** "+3.5 cm", "−4 cm", "0 cm". */
+    fun signedCm(value: Double): String = if (value == 0.0) "0 cm" else signed(value, "cm")
+
+    /** "45 s", "1:05". */
+    fun minutesSeconds(seconds: Int): String = if (seconds < 60) "$seconds s" else "%d:%02d".format(seconds / 60, seconds % 60)
 }
