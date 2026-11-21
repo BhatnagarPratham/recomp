@@ -59,6 +59,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import app.recomp.data.prefs.TrainingSettings
+import app.recomp.domain.units.UnitStyle
+import app.recomp.domain.units.UnitMath
 
 /** A review as its screen shows it: what was sent, and the reply's suggestions checked against the app as it is now. */
 data class ProgrammeReviewView(
@@ -116,11 +118,14 @@ class ProgrammeReviewRepository @Inject constructor(
     suspend fun facts(weekStart: LocalDate, today: LocalDate? = null): ProgrammeFacts {
         val day = today ?: days.today()
         val week = reviews.week(weekStart, day)
-        return ProgrammeFacts(goal = goalFacts(day), food = foodFacts(week), training = trainingFacts(weekStart, week), body = bodyFacts(week))
+        return ProgrammeFacts(goal = goalFacts(day), food = foodFacts(week), training = trainingFacts(weekStart, week), body = bodyFacts(week, reportStyle()))
     }
 
     suspend fun report(weekStart: LocalDate, sections: ReportSections, today: LocalDate? = null): ProgrammeReport =
-        ProgrammeReports.build(facts(weekStart, today), sections)
+        ProgrammeReports.build(facts(weekStart, today), sections, reportStyle())
+
+    /** The report is in the person's units (PR-05), with a "." decimal mark for the AI. */
+    private suspend fun reportStyle(): UnitStyle = UnitStyle(prefs.currentPersona().units)
 
     private suspend fun plan(day: LocalDate): GoalPlan? {
         val stored = prefs.currentPersona().goal?.toPlan() ?: return null
@@ -202,10 +207,10 @@ class ProgrammeReviewRepository @Inject constructor(
         )
     }
 
-    private fun bodyFacts(week: WeekReview): BodyFacts {
+    private fun bodyFacts(week: WeekReview, style: UnitStyle): BodyFacts {
         val b = week.body
         val scan = b.scan?.change?.let { c ->
-            "muscle ${signed(c.muscleKg)} kg" + (if (c.muscleWithinNoise) " (within noise)" else "") +
+            "muscle ${signed(UnitMath.weightOf(c.muscleKg, style.units))} ${style.weight}" + (if (c.muscleWithinNoise) " (within noise)" else "") +
                 ", body fat ${signed(c.bodyFatPct)} points" + (if (c.bodyFatWithinNoise) " (within noise)" else "")
         }
         return BodyFacts(b.changeKg, b.changePct, b.waistChangeCm, listOfNotNull(scan))

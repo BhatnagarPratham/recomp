@@ -15,6 +15,8 @@ import app.recomp.data.repo.BodyTrend
 import app.recomp.data.repo.toScanPoint
 import app.recomp.domain.body.ScanPoint
 import app.recomp.domain.body.ScanTrends
+import app.recomp.domain.units.UnitMath
+import app.recomp.ui.components.LocalUnitStyle
 import app.recomp.ui.components.Chart
 import app.recomp.ui.components.ChartDots
 import app.recomp.ui.components.ChartPoint
@@ -44,6 +46,9 @@ fun BodyCompositionChart(
         ?: listOfNotNull(points.minOfOrNull { it.date }, trend.points.firstOrNull()?.date, waist.minOfOrNull { it.logDate }).minOrNull()
         ?: today
     val colors = MaterialTheme.colorScheme
+    val style = LocalUnitStyle.current
+    // Series in the display units, so the axis labels read in them too (PR-05).
+    fun mass(kg: Double) = UnitMath.weightOf(kg, style.units)
     val muscle = colors.primary
     val fat = colors.tertiary
     val shown = ScanTrends.since(points, from)
@@ -58,7 +63,7 @@ fun BodyCompositionChart(
             Text("● Fat mass", color = fat, style = MaterialTheme.typography.labelLarge)
         }
         Chart(
-            series = series({ it.muscleKg }, muscle) + series({ it.fatKg }, fat),
+            series = series({ mass(it.muscleKg) }, muscle) + series({ mass(it.fatKg) }, fat),
             from = from,
             to = today,
             description = "Muscle and fat mass from ${shown.size} ${if (shown.size == 1) "scan" else "scans"}",
@@ -66,19 +71,19 @@ fun BodyCompositionChart(
         )
         Text("Trend weight", style = MaterialTheme.typography.labelLarge)
         Chart(
-            series = listOf(ChartSeries(trend.points.map { ChartPoint(it.date, it.trendKg) }, colors.secondary, line = true, dots = ChartDots.NONE)),
+            series = listOf(ChartSeries(trend.points.map { ChartPoint(it.date, mass(it.trendKg)) }, colors.secondary, line = true, dots = ChartDots.NONE)),
             from = from,
             to = today,
-            description = "Trend weight" + (trend.trendKg?.let { ", ${BodyText.kg(it)}" } ?: ""),
+            description = "Trend weight" + (trend.trendKg?.let { ", ${BodyText.weight(it, style)}" } ?: ""),
             height = 100.dp,
         )
         if (waist.any { !it.logDate.isBefore(from) }) {
             Text("Waist", style = MaterialTheme.typography.labelLarge)
             Chart(
-                series = listOf(ChartSeries(waist.map { ChartPoint(it.logDate, it.value) }, colors.secondary, line = true)),
+                series = listOf(ChartSeries(waist.map { ChartPoint(it.logDate, UnitMath.lengthOf(it.value, style.units)) }, colors.secondary, line = true)),
                 from = from,
                 to = today,
-                description = "Waist" + (waist.lastOrNull()?.let { ", ${BodyText.cm(it.value)}" } ?: ""),
+                description = "Waist" + (waist.lastOrNull()?.let { ", ${BodyText.length(it.value, style)}" } ?: ""),
                 height = 100.dp,
             )
         }
@@ -88,10 +93,10 @@ fun BodyCompositionChart(
             color = colors.onSurfaceVariant,
         )
         ScanTrends.changes(shown).takeLast(CHANGES_SHOWN).asReversed().forEach { c ->
-            Text("${BodyText.shortDate(c.from.date)} → ${BodyText.shortDate(c.to.date)}: ${BodyText.scanChange(c)}", style = MaterialTheme.typography.bodyMedium)
+            Text("${BodyText.shortDate(c.from.date)} → ${BodyText.shortDate(c.to.date)}: ${BodyText.scanChange(c, style)}", style = MaterialTheme.typography.bodyMedium)
         }
         ScanTrends.slopes(shown)?.let {
-            Text(BodyText.scanSlopes(it) + ", " + BodyText.slopeFrom(ScanTrends.onProtocol(shown).size, weeks), style = MaterialTheme.typography.bodyMedium)
+            Text(BodyText.scanSlopes(it, style) + ", " + BodyText.slopeFrom(ScanTrends.onProtocol(shown).size, weeks), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

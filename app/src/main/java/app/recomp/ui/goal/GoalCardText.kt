@@ -6,6 +6,7 @@ import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.GoalStatus
 import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.MaintenanceBreak
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.onboarding.GoalText
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -24,9 +25,9 @@ object GoalCardText {
         Goal.LEAN_BULK -> "lean bulk"
     }
 
-    /** "You reached 78 kg on the trend". Weights go through the shared formatter, so M20 changes units in one place. */
-    fun reached(plan: GoalPlan): String = when (val line = plan.finishLine) {
-        FinishLine.GoalWeight -> plan.goalWeightKg?.let { "You reached ${GoalText.d(it)} kg on the trend" } ?: "You reached your goal weight on the trend"
+    /** "You reached 78 kg on the trend", or in lb (PR-05). */
+    fun reached(plan: GoalPlan, style: UnitStyle): String = when (val line = plan.finishLine) {
+        FinishLine.GoalWeight -> plan.goalWeightKg?.let { "You reached ${GoalText.weight(it, style)} on the trend" } ?: "You reached your goal weight on the trend"
         is FinishLine.BodyFat -> "You reached ${GoalText.d(line.pct)}% body fat"
         is FinishLine.ByDate -> "You reached your finish date, ${day(line.date)}"
         null -> "You reached your finish line"

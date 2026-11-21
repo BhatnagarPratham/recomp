@@ -29,6 +29,7 @@ import app.recomp.ui.components.SectionTitle
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 import java.util.Locale
+import app.recomp.ui.components.LocalUnitStyle
 
 /**
  * The weekly review's sections (HM-03, HM-04, PRD §12.4), after the check-in's headline, verdict and proposal: Food,
@@ -36,6 +37,7 @@ import java.util.Locale
  */
 @Composable
 fun ReviewSections(r: WeekReview) {
+    val style = LocalUnitStyle.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val locale = LocalConfiguration.current.locales[0]
 
@@ -54,10 +56,10 @@ fun ReviewSections(r: WeekReview) {
     if (r.training.stalled.isNotEmpty()) Text(ReviewText.stalled(r.training.stalled), color = muted)
 
     SectionTitle("Body")
-    Text(ReviewText.trend(r.body), style = MaterialTheme.typography.bodyLarge)
+    Text(ReviewText.trend(r.body, style), style = MaterialTheme.typography.bodyLarge)
     ReviewText.earlierPlan(r.plan)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = muted) }
-    ReviewText.waist(r.body)?.let { Text(it) }
-    r.body.scan?.let { Text(ReviewText.scan(it)) }
+    ReviewText.waist(r.body, style)?.let { Text(it) }
+    r.body.scan?.let { Text(ReviewText.scan(it, style)) }
     r.activity?.let { a ->
         ReviewText.steps(a)?.let { Text(it) }
         ReviewText.sleep(a)?.let { Text(it) }
@@ -65,7 +67,7 @@ fun ReviewSections(r: WeekReview) {
 
     r.outlook?.let {
         SectionTitle("Finish line")
-        Text(ReviewText.outlook(it), style = MaterialTheme.typography.bodyLarge)
+        Text(ReviewText.outlook(it, style), style = MaterialTheme.typography.bodyLarge)
     }
 
     SectionTitle(r.month.month.getDisplayName(TextStyle.FULL, locale) + " ${r.month.year}")

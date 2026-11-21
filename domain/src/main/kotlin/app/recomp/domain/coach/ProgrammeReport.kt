@@ -2,6 +2,8 @@ package app.recomp.domain.coach
 
 import app.recomp.domain.nutrition.Goal
 import kotlin.math.roundToInt
+import app.recomp.domain.units.UnitStyle
+import app.recomp.domain.units.UnitMath
 
 /** The checklist (PRD §12.7): what the weekly programme review sends. Body trends are off by default. */
 data class ReportSections(
@@ -114,16 +116,20 @@ object ProgrammeReports {
     /** About 4,000 tokens at about four characters a token. */
     const val MAX_CHARS = 16_000
 
-    fun build(facts: ProgrammeFacts, sections: ReportSections): ProgrammeReport {
-        val full = build(facts, sections, Detail.FULL)
+    /**
+     * [style] is the person's units (PR-05): body weights and lengths are sent in them, said once at the top, so the
+     * reply's reasons echo the numbers they see. Protein stays in g per kg.
+     */
+    fun build(facts: ProgrammeFacts, sections: ReportSections, style: UnitStyle): ProgrammeReport {
+        val full = build(facts, sections, style, Detail.FULL)
         if (full.text.length <= MAX_CHARS) return full
         // Per-exercise detail goes first: the loads, then the library past the muscles the routines train, then as
         // much of the rest of the library as it takes to fit.
-        val lean = build(facts, sections, Detail.NO_LOADS)
+        val lean = build(facts, sections, style, Detail.NO_LOADS)
         if (lean.text.length <= MAX_CHARS) return lean.copy(trimmed = true)
         var limit = Int.MAX_VALUE
         while (true) {
-            val short = build(facts, sections, Detail.SHORT_LIBRARY, limit).copy(trimmed = true)
+            val short = build(facts, sections, style, Detail.SHORT_LIBRARY, limit).copy(trimmed = true)
             val listed = short.exercises.size - routineExercises(facts)
             if (short.text.length <= MAX_CHARS || listed <= 0) return short
             limit = listed / 2
@@ -134,13 +140,14 @@ object ProgrammeReports {
 
     private enum class Detail { FULL, NO_LOADS, SHORT_LIBRARY }
 
-    private fun build(facts: ProgrammeFacts, sections: ReportSections, detail: Detail, libraryLimit: Int = Int.MAX_VALUE): ProgrammeReport {
+    private fun build(facts: ProgrammeFacts, sections: ReportSections, style: UnitStyle, detail: Detail, libraryLimit: Int = Int.MAX_VALUE): ProgrammeReport {
         val exerciseRefs = linkedMapOf<Long, String>()
         val routineRefs = linkedMapOf<Long, String>()
         fun ref(id: Long) = exerciseRefs.getOrPut(id) { "e${exerciseRefs.size + 1}" }
         val terms = sections.terms
         val text = buildString {
             appendLine("Weekly programme review. Only what the person ticked is below.")
+            appendLine(unitsLine(style))
             val goal = facts.goal
             if (sections.goal && goal != null) {
                 appendLine()
@@ -207,10 +214,10 @@ object ProgrammeReports {
                 appendLine(
                     "Trend weight: " + when {
                         body.trendChangeKg == null -> "no rate this week"
-                        else -> "${signed(body.trendChangeKg)} kg this week" + (body.trendChangePct?.let { " (${signedPct(it)})" } ?: "")
+                        else -> "${signed(UnitMath.weightOf(body.trendChangeKg, style.units))} ${style.weight} this week" + (body.trendChangePct?.let { " (${signedPct(it)})" } ?: "")
                     },
                 )
-                body.waistChangeCm?.let { appendLine("Waist: ${signed(it)} cm") }
+                body.waistChangeCm?.let { appendLine("Waist: ${signed(UnitMath.lengthOf(it, style.units))} ${style.length}") }
                 body.scanChanges.forEach { appendLine("Scan: $it") }
             }
             if (sections.note.isNotBlank()) {
@@ -228,6 +235,9 @@ object ProgrammeReports {
             referenceKg = facts.goal?.referenceKg,
         )
     }
+
+    /** The report's units, stated once at the top: "Weights in lb, lengths in inches." */
+    fun unitsLine(style: UnitStyle): String = if (style.imperial) "Weights in lb, lengths in inches." else "Weights in kg, lengths in cm."
 
     /** Calories against maintenance, in %: −20 is a 20% deficit. */
     fun relativeKcal(kcal: Int, maintenanceKcal: Double): Double = (kcal - maintenanceKcal) / maintenanceKcal * 100

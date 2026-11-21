@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.recomp.ui.components.LocalUnitStyle
 
 /**
  * Opens the goal flow (Settings → Goal) for *Choose a new goal*. The nav host provides it around Today and the
@@ -111,7 +112,7 @@ fun GoalStatusCard(checkinWeek: LocalDate? = null, onChanged: () -> Unit = {}, v
 
     when (val s = status) {
         GoalStatus.None -> Unit
-        is GoalStatus.Reached -> GoalCardFrame("Goal reached", GoalCardText.reached(s.plan), error) {
+        is GoalStatus.Reached -> GoalCardFrame("Goal reached", GoalCardText.reached(s.plan, LocalUnitStyle.current), error) {
             Text(GoalCardText.next(s), color = MaterialTheme.colorScheme.onSecondaryContainer)
             if (s.offerMaintenance) {
                 Button(onClick = { viewModel.startBreak(MaintenanceBreak.REACHED_WEEKS, onChanged) }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {

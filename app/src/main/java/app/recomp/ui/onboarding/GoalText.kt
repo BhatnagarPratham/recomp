@@ -9,6 +9,8 @@ import app.recomp.domain.persona.Expectation
 import app.recomp.domain.persona.Intent
 import app.recomp.domain.persona.GoalAdvice
 import app.recomp.domain.persona.GuardrailNote
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.Labels
 import java.text.NumberFormat
 import java.time.LocalDate
@@ -27,6 +29,16 @@ object GoalText {
     /** Up to two decimals, without trailing zeros: 0.25, 1.6, 78. */
     fun d(value: Double): String = java.math.BigDecimal(value).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
+    /**
+     * A goal or reference weight from kg, in the style's unit to 0.1 without trailing zeros: "78 kg", "77.5 kg",
+     * "172 lb" (PR-05). Body weights you log use [app.recomp.ui.body.BodyText.weight], which always shows the decimal.
+     */
+    fun weight(kg: Double, style: UnitStyle): String = "${weightNumber(kg, style)} ${style.weight}"
+
+    /** [weight]'s number alone. */
+    fun weightNumber(kg: Double, style: UnitStyle): String =
+        style.mark(java.math.BigDecimal(UnitMath.weightOf(kg, style.units)).setScale(1, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString())
+
     fun cardTitle(goal: Goal) = when (goal) {
         Goal.FAT_LOSS -> "Lose fat"
         Goal.RECOMP -> "Lose fat and build muscle (Recomp)"
@@ -42,8 +54,8 @@ object GoalText {
     }
 
     /** The body-fat finish line's goal weight, from the scan's lean mass (IB-05). */
-    fun bodyFatGoal(leanKg: Double, pct: Double): String =
-        "Lean mass ${d(leanKg)} kg from your scan, so ${d(pct)}% body fat is about ${d(app.recomp.domain.persona.GoalWeights.forBodyFat(leanKg, pct))} kg."
+    fun bodyFatGoal(leanKg: Double, pct: Double, style: UnitStyle): String =
+        "Lean mass ${weight(leanKg, style)} from your scan, so ${d(pct)}% body fat is about ${weight(app.recomp.domain.persona.GoalWeights.forBodyFat(leanKg, pct), style)}."
 
     fun advice(a: GoalAdvice): String {
         val fat = a.basis.bodyFatPct?.let { "body fat around ${d(it)}%" } ?: "a BMI of ${d(a.basis.bmi)}"
@@ -91,16 +103,22 @@ object GoalText {
 
     // Goal switch (PS-04)
 
-    /** *What to expect*: one line on what the scale does after this change of goal. */
-    fun expect(e: Expectation): String = when (e) {
-        Expectation.DEFICIT_TO_SURPLUS -> "The scale will jump 1–2 kg in the first two weeks as water and glycogen come back; judge from week 3."
-        Expectation.DEFICIT_TO_MAINTENANCE -> "The scale may rise about 1 kg in the first two weeks as water and glycogen come back. That isn't fat; judge from week 3."
-        Expectation.MAINTENANCE_TO_SURPLUS -> "Expect a quick 0.5–1 kg in the first two weeks from more food and water, then a slow climb; judge from week 3."
-        Expectation.SURPLUS_TO_DEFICIT -> "The scale will drop 1–2 kg in the first two weeks, mostly water and glycogen; judge fat loss from week 3."
-        Expectation.MAINTENANCE_TO_DEFICIT -> "The first week or two often drop faster than your pace, mostly water; judge from week 3."
-        Expectation.SURPLUS_TO_MAINTENANCE -> "The scale may drop about 1 kg in the first two weeks as water settles, then hold steady."
-        Expectation.GENTLER_DEFICIT -> "A gentler deficit: the scale moves more slowly now, so watch your waist and your lifts as well."
-        Expectation.LARGER_DEFICIT -> "A larger deficit: the scale should fall faster now. Holding your lifts steady is the win."
+    /** *What to expect*: one line on what the scale does after this change of goal, in round numbers of the style's unit. */
+    fun expect(e: Expectation, style: UnitStyle): String {
+        val lb = style.imperial
+        val oneToTwo = if (lb) "2–4 lb" else "1–2 kg"
+        val aboutOne = if (lb) "about 2 lb" else "about 1 kg"
+        val halfToOne = if (lb) style.mark("1–2 lb") else style.mark("0.5–1 kg")
+        return when (e) {
+            Expectation.DEFICIT_TO_SURPLUS -> "The scale will jump $oneToTwo in the first two weeks as water and glycogen come back; judge from week 3."
+            Expectation.DEFICIT_TO_MAINTENANCE -> "The scale may rise $aboutOne in the first two weeks as water and glycogen come back. That isn't fat; judge from week 3."
+            Expectation.MAINTENANCE_TO_SURPLUS -> "Expect a quick $halfToOne in the first two weeks from more food and water, then a slow climb; judge from week 3."
+            Expectation.SURPLUS_TO_DEFICIT -> "The scale will drop $oneToTwo in the first two weeks, mostly water and glycogen; judge fat loss from week 3."
+            Expectation.MAINTENANCE_TO_DEFICIT -> "The first week or two often drop faster than your pace, mostly water; judge from week 3."
+            Expectation.SURPLUS_TO_MAINTENANCE -> "The scale may drop $aboutOne in the first two weeks as water settles, then hold steady."
+            Expectation.GENTLER_DEFICIT -> "A gentler deficit: the scale moves more slowly now, so watch your waist and your lifts as well."
+            Expectation.LARGER_DEFICIT -> "A larger deficit: the scale should fall faster now. Holding your lifts steady is the win."
+        }
     }
 
     const val FRESH_START = "Comparisons start again from today: \"since you started\", the weekly review and the 12-week count. Your history stays."
@@ -129,11 +147,12 @@ object GoalText {
     const val NOT_MEDICAL_ADVICE =
         "Not medical advice. If you have a medical condition, are pregnant or breastfeeding, check these targets with a professional."
 
-    /** "≈0.5 kg a week" for a pace card. */
-    fun perWeek(kgPerWeek: Double): String {
+    /** "≈0.5 kg a week" (up to 2 decimals) or "≈1.1 lb a week" (one decimal) for a pace card. */
+    fun perWeek(kgPerWeek: Double, style: UnitStyle): String {
         if (kgPerWeek == 0.0) return "Weight stays about the same"
         val sign = if (kgPerWeek < 0) "−" else "+"
-        return "≈$sign${"%.2f".format(abs(kgPerWeek)).trimEnd('0').trimEnd('.')} kg a week"
+        val value = java.math.BigDecimal(abs(UnitMath.weightOf(kgPerWeek, style.units))).setScale(if (style.imperial) 1 else 2, java.math.RoundingMode.HALF_UP)
+        return "≈$sign${style.mark(value.stripTrailingZeros().toPlainString())} ${style.weight} a week"
     }
 
     /** "mid-March 2027": the projection is approximate, so it never names a day. */
@@ -147,12 +166,12 @@ object GoalText {
     }
 
     /** What the pace step and finish line say for one rate. */
-    fun projection(kgPerWeek: Double, weeksToGoal: Double?, goalDate: LocalDate?, today: LocalDate, finishByDate: LocalDate?): String {
-        val rate = perWeek(kgPerWeek)
+    fun projection(kgPerWeek: Double, weeksToGoal: Double?, goalDate: LocalDate?, today: LocalDate, finishByDate: LocalDate?, style: UnitStyle): String {
+        val rate = perWeek(kgPerWeek, style)
         return when {
             finishByDate != null -> {
                 val change = kgPerWeek * java.time.temporal.ChronoUnit.DAYS.between(today, finishByDate) / 7
-                "$rate, about ${if (change < 0) "−" else "+"}${d((abs(change) * 10).roundToInt() / 10.0)} kg by ${around(finishByDate)}"
+                "$rate, about ${if (change < 0) "−" else "+"}${weight(abs(change), style)} by ${around(finishByDate)}"
             }
             weeksToGoal == 0.0 -> "$rate. You're at your goal weight already."
             weeksToGoal != null && goalDate != null -> "$rate, goal weight around ${around(goalDate)}"
@@ -203,24 +222,25 @@ object GoalText {
         return base + goal + floor + " Training is already counted, so workouts never add food."
     }
 
-    fun protein(t: NutritionTargets): String {
+    /** Protein stays in g per kg; the reference weight shows in the style's unit (PRD §12.16). */
+    fun protein(t: NutritionTargets, style: UnitStyle): String {
         if (t.overrides.proteinG != null) return "Set by you. Shown first everywhere, because it's what keeps your muscle."
         val ref = if (t.referenceIsGoalWeight) "your goal weight" else "your current weight"
-        return "${d(t.proteinGPerKg)} g per kg of $ref (${d(t.referenceKg)} kg). Shown first everywhere, because it's what keeps your muscle."
+        return "${d(t.proteinGPerKg)} g per kg of $ref (${weight(t.referenceKg, style)}). Shown first everywhere, because it's what keeps your muscle."
     }
 
-    fun fat(t: NutritionTargets): String = when {
+    fun fat(t: NutritionTargets, style: UnitStyle): String = when {
         t.overrides.fatG != null -> "Set by you."
-        t.fatFromBodyWeight -> "Your floor of 0.6 g per kg (${d(t.referenceKg)} kg), which is more than a quarter of your calories."
+        t.fatFromBodyWeight -> "Your floor of 0.6 g per kg (${weight(t.referenceKg, style)}), which is more than a quarter of your calories."
         else -> "A quarter of your calories. It never goes below 0.6 g per kg."
     }
 
     const val CARBS = "What's left of your calories after protein and fat. Fiber is shown, not targeted."
 
-    fun goalSummary(goal: Goal, pacePolicy: GoalPolicy, paceLabel: String, goalWeightKg: Double?): String = buildString {
+    fun goalSummary(goal: Goal, pacePolicy: GoalPolicy, paceLabel: String, goalWeightKg: Double?, style: UnitStyle): String = buildString {
         append(Labels.goal(goal))
         if (goal != Goal.MAINTAIN) append(" · $paceLabel")
-        if (goalWeightKg != null) append(" · goal weight ${d(goalWeightKg)} kg")
+        if (goalWeightKg != null) append(" · goal weight ${weight(goalWeightKg, style)}")
         if (goal != Goal.MAINTAIN && paceLabel == "Custom") append(" (${rateLabel(pacePolicy)})")
     }
 }

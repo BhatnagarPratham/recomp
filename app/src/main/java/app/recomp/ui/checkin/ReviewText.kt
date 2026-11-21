@@ -11,6 +11,8 @@ import app.recomp.domain.model.LoadType
 import app.recomp.domain.review.FinishOutlook
 import app.recomp.domain.review.OriginShares
 import app.recomp.domain.review.WeeklyReview
+import app.recomp.domain.units.UnitMath
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.body.BodyText
 import app.recomp.ui.components.Labels
 import app.recomp.ui.onboarding.GoalText
@@ -73,14 +75,14 @@ object ReviewText {
 
     // Body
 
-    fun trend(b: BodyWeek): String {
+    fun trend(b: BodyWeek, style: UnitStyle): String {
         val kg = b.trendKg ?: return BodyText.NO_TREND
         val change = b.changeKg
-        return "Trend ${BodyText.kg(kg)} · " +
+        return "Trend ${BodyText.weight(kg, style)} · " +
             when {
                 change == null -> "no weigh-in this week"
-                BodyText.roundsToZero(change) -> "no change this week"
-                else -> "${BodyText.signed(change, "kg")} this week (${CheckinText.pct(b.changePct ?: 0.0)})"
+                BodyText.roundsToZero(UnitMath.weightOf(change, style.units)) -> "no change this week"
+                else -> "${BodyText.signedWeight(change, style)} this week (${CheckinText.pct(b.changePct ?: 0.0)})"
             } +
             (b.pace?.let { ", ${BodyText.pace(it)}" } ?: "") +
             (if (b.atMaintenance) MAINTENANCE_WEEK else "")
@@ -90,10 +92,10 @@ object ReviewText {
     const val MAINTENANCE_WEEK = ", at maintenance on a break"
 
     /** The week's waist and its change against a reading at most 4 weeks older, named by that reading's date. */
-    fun waist(b: BodyWeek): String? {
+    fun waist(b: BodyWeek, style: UnitStyle): String? {
         val cm = b.waistCm ?: return null
         val since = b.waistSince
-        return "Waist ${BodyText.cm(cm)}" + (b.waistChangeCm?.takeIf { since != null }?.let { " (${BodyText.signed(it, "cm")} since ${BodyText.shortDate(since!!)})" } ?: "")
+        return "Waist ${BodyText.length(cm, style)}" + (b.waistChangeCm?.takeIf { since != null }?.let { " (${BodyText.signedLength(it, style)} since ${BodyText.shortDate(since!!)})" } ?: "")
     }
 
     /** Why a week before the current plan has no pace or finish line (PRD §12.4). Null for the current plan's weeks. */
@@ -105,12 +107,12 @@ object ReviewText {
             "This week was before your current plan from ${BodyText.shortDate(p.since)}. The plan then isn't kept, so there's no pace or finish line for it."
     }
 
-    fun scan(s: WeekScan): String {
+    fun scan(s: WeekScan, style: UnitStyle): String {
         val change = s.change
         return "Scan ${BodyText.shortDate(s.scan.date)}: " + when {
             !s.scan.onProtocol -> "off protocol, so it isn't compared"
             change == null -> "the first on-protocol scan, nothing to compare yet"
-            else -> BodyText.scanChange(change)
+            else -> BodyText.scanChange(change, style)
         }
     }
 
@@ -122,14 +124,14 @@ object ReviewText {
 
     // The finish line (TRD §5.8)
 
-    fun outlook(o: FinishOutlook): String = when (o) {
+    fun outlook(o: FinishOutlook, style: UnitStyle): String = when (o) {
         is FinishOutlook.Around ->
-            "At this rate: around ${GoalText.around(o.date)} (goal " + (if (o.bodyFat) "${GoalText.d(o.goal)}% body fat" else "${GoalText.d(o.goal)} kg") + ")"
-        is FinishOutlook.Reached -> if (o.bodyFat) "You've reached your body-fat goal (${GoalText.d(o.goal)}%)" else "You've reached your goal weight (${GoalText.d(o.goal)} kg)"
+            "At this rate: around ${GoalText.around(o.date)} (goal " + (if (o.bodyFat) "${GoalText.d(o.goal)}% body fat" else GoalText.weight(o.goal, style)) + ")"
+        is FinishOutlook.Reached -> if (o.bodyFat) "You've reached your body-fat goal (${GoalText.d(o.goal)}%)" else "You've reached your goal weight (${GoalText.weight(o.goal, style)})"
         FinishOutlook.MovingAway -> "Moving away from your goal"
         FinishOutlook.Steady -> "Holding steady, so there's no date at this rate"
         FinishOutlook.FarOff -> "More than two years away at this rate"
-        is FinishOutlook.ByDate -> "At this rate: ${BodyText.signed(o.changeKg, "kg")} by ${BodyText.shortDate(o.date)}"
+        is FinishOutlook.ByDate -> "At this rate: ${BodyText.signedWeight(o.changeKg, style)} by ${BodyText.shortDate(o.date)}"
         is FinishOutlook.NeedsData -> when {
             o.bodyFat -> "The date appears from three on-protocol scans"
             o.newPlan -> "The date appears once your plan is a week old"

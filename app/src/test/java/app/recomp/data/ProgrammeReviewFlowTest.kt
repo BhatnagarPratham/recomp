@@ -47,6 +47,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import app.recomp.domain.persona.Units
 
 /** HM-06, TRD §10 M11: the weekly programme review end to end, on invented data, with a scripted provider. */
 @RunWith(RobolectricTestRunner::class)
@@ -119,6 +120,12 @@ class ProgrammeReviewFlowTest {
         val body = reviews.report(week, ReportSections(body = true))
         assertTrue("## Body trends" in body.text)
         assertTrue(" kcal a day" in body.text)
+        assertEquals("Weights in kg, lengths in cm.", body.text.lines()[1])
+
+        // In lb and in (PR-05) the report says so at the top, and protein stays per kg.
+        app.personas.setUnits(Units.IMPERIAL)
+        assertEquals("Weights in lb, lengths in inches.", reviews.report(week, ReportSections(body = true)).text.lines()[1])
+        assertTrue("g per kg" in reviews.report(week, ReportSections()).text)
     }
 
     @Test
