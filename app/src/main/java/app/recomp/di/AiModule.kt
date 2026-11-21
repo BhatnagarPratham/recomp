@@ -10,7 +10,9 @@ import app.recomp.data.ai.AndroidLocalNetwork
 import app.recomp.data.ai.DnsHostResolver
 import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
+import app.recomp.data.ai.AiSender
 import app.recomp.data.ai.ProviderMealEstimator
+import app.recomp.data.ai.ProviderSender
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.SecretCipher
 import app.recomp.data.ai.TinkSecretCipher
@@ -38,6 +40,9 @@ annotation class SecretsStore
 abstract class AiModule {
     @Binds
     abstract fun bindEstimator(estimator: ProviderMealEstimator): MealEstimator
+
+    @Binds
+    abstract fun bindSender(sender: ProviderSender): AiSender
 
     @Binds
     abstract fun bindLocalNetwork(localNetwork: AndroidLocalNetwork): LocalNetwork

@@ -863,6 +863,11 @@ These rules hold for every block:
 - **The progression engine stays plain rules.** AI never sets a set's weight or reps, and nothing changes without your tap.
 - **History:** each past review keeps what was sent, what came back and what you applied.
 - With AI off, the weekly review shows the numbers only.
+- ◆ **Built (M11):**
+  - Without *Body trends*, the week's food averages also go as % of target, not in kcal and grams.
+  - A suggestion is checked again whenever it's shown, so one that no longer fits (an exercise since archived) shows as advice.
+  - Calorie suggestions stay within Settings' *Adjust* range, with no deficit under BMI 18.5. Protein stays in the goal's range.
+  - Train's deload card offers *Deload next workouts* or *Not now*, which hides it for a week.
 
 ### 12.8 M12: Nudges, reminders and the widget (RM-01, NU-23, GL-08 nudges, PO-11, IB-06, HM-05)
 
@@ -895,6 +900,16 @@ These rules hold for every block:
   - It's 4×1, and resizes to 2×2.
   - Tapping it opens Today; *Log food* opens the Food tab.
   - It updates when you log food, finish a workout or change targets, and at the day boundary.
+- ◆ **Decided in M12 (2026-11-21),** where the above left room:
+  - Reminder times are clock times on calendar weekdays; the cap of 2 counts per log day ("day starts at"), so one set after midnight comes last in the day before.
+  - A reminder the phone slept through by more than 90 minutes is dropped, not sent late. One turned on after its time today starts tomorrow.
+  - A reminder that's skipped, or can't be shown (notifications off, its channel off), never uses up the cap.
+  - The scan reminder needs a usual scan slot. The workout reminder needs at least one weekday; Settings says so.
+  - Lean bulk's nudge fires when more than 10% of the day's calories are still to eat. Steps use the protein rule (a quarter of the goal left) against 8,000 until M13 adds the step goal; the steps line is hidden until steps are tracked.
+  - The protein suggestions come from your 15 most-logged foods that your diet allows, with at least 5 g protein per 100 kcal. A portion covers the protein left, but at most twice what you usually have (and never over 500 g), and within the calories left though never under half your usual portion (with no calories left, or over, it's that half portion); in the unit you logged it with last, in ½-unit or 10 g steps, never rounded over those limits.
+  - "The meal for the time of day" uses a stand-in until M9's slot ranges land: Lunch by day (05:00–17:00), and the last meal from the evening until the small hours.
+  - The widget shows *Workout in progress* during a workout. Before onboarding it asks you to finish setting up. Resized to 2×1 or 3×1 it shows the main number and *Log food*.
+  - The notification permission is asked when you turn on a reminder, once per visit to the screen. If it's refused, Settings → Reminders says so with a button to the phone's notification settings, and says the same when the *Reminders* or *Weekly check-in* notifications are switched off.
 
 ### 12.9 M13: Health Connect: steps, sleep, other workouts and InBody import (AR-01, AR-02, AR-04, IB-07)
 

@@ -1,6 +1,11 @@
 package app.recomp.data.repo
 
+import app.recomp.data.ai.AiCall
+import app.recomp.data.ai.AiEffort
 import app.recomp.data.ai.AiKeyStore
+import app.recomp.data.ai.AiResult
+import app.recomp.data.ai.AiSchema
+import app.recomp.data.ai.AiSender
 import app.recomp.data.ai.Connectivity
 import app.recomp.data.ai.HostResolver
 import app.recomp.data.ai.LocalNetwork
@@ -51,6 +56,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 
 /**
  * The gate as screens show it: the state, plus the cap and the day a reached cap lifts (PRD §7.7 *Not ready*),
@@ -60,6 +66,12 @@ data class AiGateView(val state: AiState, val capUsd: Double?, val resumesOn: Lo
 
 /** This month's AI spend for Settings (AI-03). */
 data class AiSpend(val month: LocalDate, val costUsd: Double, val requests: Int)
+
+/**
+ * How a weekly programme review's request ended (M11). [json] is the reply, set only when [status] is OK; the
+ * request was logged and costed whatever happened ([requestId], null only when the gate stopped it first).
+ */
+data class CoachSent(val status: AiStatus, val json: JsonObject?, val text: String?, val requestId: Long?, val notReady: AiState? = null)
 
 /** How an estimate ended. Only [Estimated] carries items; a [Failed] request was still logged and costed. */
 sealed interface EstimateResult {
@@ -93,6 +105,7 @@ class AiRepository @Inject constructor(
     private val localNetwork: LocalNetwork,
     private val resolver: HostResolver,
     private val estimator: MealEstimator,
+    private val sender: AiSender,
     private val foods: FoodRepository,
     /** Spend counts toward this clock's local calendar month. */
     private val clock: Clock,
@@ -208,7 +221,7 @@ class AiRepository @Inject constructor(
             val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext EstimateResult.NotReady(AiState.NO_KEY) else null
             val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
             val request = MealRequest(target, systemPrompt(), MealPrompt.user(text, origin, clarification, counted))
-            request to reserve(request, kind)
+            request to reserve(kind, request.target, request.upperBound)
         }
         val reply = try {
             estimator.estimate(request)
@@ -240,20 +253,62 @@ class AiRepository @Inject constructor(
         }
     }
 
+    /**
+     * The weekly programme review's request (HM-06, TRD §10 M11), through the provider in use with the same gate,
+     * cap reservation and log row as a meal, as [AiKind.COACH], at effort `medium` with a 60 s timeout and its own
+     * upper bound. Like a meal, it runs to completion even if the caller stops waiting, so its spend is logged.
+     */
+    suspend fun coach(system: String, user: String, schema: AiSchema): CoachSent = withContext(NonCancellable) {
+        val (call, pending) = sending.withLock {
+            val state = state()
+            if (state != AiState.READY) return@withContext CoachSent(AiStatus.UNEXPECTED, null, null, null, notReady = state)
+            val s = prefs.ai.first()
+            val key = if (s.needsKey) keys.key(s.provider, s.url) ?: return@withContext CoachSent(AiStatus.AUTH, null, null, null, notReady = AiState.NO_KEY) else null
+            val target = AiTarget(s.provider, key, s.modelId, serverFallback = s.model?.serverFallback == true, baseUrl = s.url, rates = s.typedRates)
+            val bound = AiPricing.upperBound(target.model, system.length + user.length, COACH_MAX_TOKENS, rates = target.rates)
+            val call = AiCall(target, system, user, schema, bound, effort = AiEffort.MEDIUM, timeout = COACH_TIMEOUT, maxTokens = COACH_MAX_TOKENS)
+            call to reserve(AiKind.COACH, target, bound)
+        }
+        val reply = try {
+            sender.send(call)
+        } catch (e: Exception) {
+            AiResult(AiStatus.UNEXPECTED, null, null, call.target.model, emptyList(), 0, e.javaClass.simpleName)
+        }
+        aiDao.updateRequest(
+            pending.copy(
+                model = reply.servedBy,
+                inputTokens = reply.attempts.sumOf { it.inputTokens },
+                outputTokens = reply.attempts.sumOf { it.outputTokens },
+                cacheReadTokens = reply.attempts.sumOf { it.cacheReadTokens },
+                cacheWriteTokens = reply.attempts.sumOf { it.cacheWriteTokens },
+                costUsd = AiPricing.cost(reply.attempts, LocalDate.now(clock)),
+                status = reply.status,
+                latencyMs = reply.latencyMs,
+                responseJson = reply.text,
+            ),
+        )
+        CoachSent(reply.status, reply.json?.takeIf { reply.status == AiStatus.OK }, reply.text, pending.id)
+    }
+
+    /** Settles a coach request whose reply didn't fit the schema: it was billed, so only its status changes. */
+    suspend fun markInvalid(requestId: Long) {
+        aiDao.request(requestId)?.let { aiDao.updateRequest(it.copy(status = AiStatus.INVALID)) }
+    }
+
     /** Serializes the gate check with the reservation it leads to. */
     private val sending = Mutex()
+
 
     /**
      * Logs the request as PENDING at its upper-bound cost before it's sent. Monthly spend counts it at once, and
      * if the app dies mid-request the row stays, so a request the server may have billed is never missing.
      */
-    private suspend fun reserve(request: MealRequest, kind: AiKind): AiRequestLogEntity {
-        val bound = request.upperBound
+    private suspend fun reserve(kind: AiKind, target: AiTarget, bound: app.recomp.domain.ai.TokenUsage): AiRequestLogEntity {
         val row = AiRequestLogEntity(
             createdAt = clock.millis(),
             kind = kind,
-            provider = request.target.provider,
-            model = request.model,
+            provider = target.provider,
+            model = target.model,
             inputTokens = bound.inputTokens,
             outputTokens = bound.outputTokens,
             cacheReadTokens = 0,
@@ -356,4 +411,10 @@ class AiRepository @Inject constructor(
 
     /** The notice for [kind] was shown for the provider in use (and, for a compatible server, its host). */
     suspend fun markNoticeSeen(kind: AiKind = AiKind.MEAL_TEXT) = prefs.setAiNoticeSeen(prefs.ai.first().notice(kind))
+
+    companion object {
+        /** The programme review thinks at `medium` and writes more than a meal: a minute, and room to answer (TRD §10 M11). */
+        val COACH_TIMEOUT: java.time.Duration = java.time.Duration.ofSeconds(60)
+        const val COACH_MAX_TOKENS = 16_000L
+    }
 }

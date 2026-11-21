@@ -86,10 +86,10 @@ class OpenAiProvider @Inject constructor() : HttpProvider() {
                 }
             }
             if (compatible) {
-                put("max_tokens", MAX_TOKENS)
+                put("max_tokens", call.maxTokens)
             } else {
-                put("max_completion_tokens", MAX_TOKENS)
-                put("reasoning_effort", "low")
+                put("max_completion_tokens", call.maxTokens)
+                put("reasoning_effort", call.effort.wire)
             }
         }
         return WireRequest("${base(call)}/chat/completions", if (sendKey) mapOf("Authorization" to "Bearer $key") else emptyMap(), body)

@@ -35,8 +35,9 @@ import kotlinx.serialization.json.Json
         MeasurementEntity::class,
         WeeklyCheckinEntity::class,
         DailyActivityEntity::class,
+        ProgrammeReviewEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -52,7 +53,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bodyDao(): BodyDao
     abstract fun checkinDao(): CheckinDao
     abstract fun reviewDao(): ReviewDao
+    abstract fun programmeReviewDao(): ProgrammeReviewDao
     abstract fun backupCheckDao(): BackupCheckDao
+    abstract fun nudgeDao(): NudgeDao
 
     companion object {
         const val NAME = "recomp.db"
@@ -66,6 +69,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_7_8,
             Migrations.MIGRATION_8_9,
             Migrations.MIGRATION_9_10,
+            Migrations.MIGRATION_10_11,
         )
     }
 }

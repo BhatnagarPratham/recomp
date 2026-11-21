@@ -240,4 +240,17 @@ object Migrations {
             db.execSQL("ALTER TABLE `ai_request_log` ADD COLUMN `provider` TEXT NOT NULL DEFAULT 'ANTHROPIC'")
         }
     }
+
+    /** M11, the weekly programme review: its history, and a deload the next workout starts. SQL from schemas/11.json. */
+    val MIGRATION_10_11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `exercise` ADD COLUMN `deload_pending` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `programme_review` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`week_start` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `sections` TEXT NOT NULL, `sent_text` TEXT NOT NULL, " +
+                    "`ai_request_id` INTEGER, `response_json` TEXT, `applied_json` TEXT NOT NULL DEFAULT '[]')",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_programme_review_week_start` ON `programme_review` (`week_start`)")
+        }
+    }
 }

@@ -15,7 +15,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 
 /** Why a target version was written (TRD §4). MANUAL is any change you made in onboarding's review or Settings. */
-enum class TargetReason { INITIAL, CHECKIN, MANUAL }
+enum class TargetReason { INITIAL, CHECKIN, MANUAL, REVIEW }
 
 /**
  * A version of the daily targets (PS-02), in force from [effectiveFrom] until the next one. One per day:

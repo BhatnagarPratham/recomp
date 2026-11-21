@@ -43,8 +43,8 @@ enum class WireMode {
  * could hold a header.
  */
 abstract class HttpProvider : AiProvider {
-    /** Tests shorten the timeout. */
-    internal var timeout: Duration = AiWire.TIMEOUT
+    /** Tests shorten the timeout; otherwise it's the call's. */
+    internal var timeout: Duration? = null
 
     protected open fun firstMode(call: AiCall): WireMode = WireMode.SCHEMA
 
@@ -65,7 +65,10 @@ abstract class HttpProvider : AiProvider {
     /** Maps a 2xx reply onto the shared result: stop reason first, then the text, then its tokens. */
     protected abstract fun read(call: AiCall, body: JsonObject, latencyMs: Long): AiResult
 
-    private fun client(): OkHttpClient = shared.newBuilder().callTimeout(timeout).readTimeout(timeout).writeTimeout(timeout).build()
+    private fun client(call: AiCall): OkHttpClient {
+        val t = timeout ?: call.timeout
+        return shared.newBuilder().callTimeout(t).readTimeout(t).writeTimeout(t).build()
+    }
 
     override suspend fun send(call: AiCall): AiResult = withContext(Dispatchers.IO) {
         val started = System.nanoTime()
@@ -74,7 +77,7 @@ abstract class HttpProvider : AiProvider {
             AiResult(status, null, null, call.target.model, if (maybeBilled) listOf(call.upperBound) else emptyList(), elapsedMs(), detail)
 
         try {
-            val client = client()
+            val client = client(call)
             var mode = firstMode(call)
             var attempt = 1
             while (true) {

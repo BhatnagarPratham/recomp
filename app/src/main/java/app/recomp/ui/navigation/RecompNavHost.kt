@@ -33,6 +33,8 @@ import app.recomp.ui.body.BodyScreen
 import app.recomp.ui.body.ScanScreen
 import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
+import app.recomp.ui.checkin.LocalOpenProgrammeReview
+import app.recomp.ui.checkin.ProgrammeReviewScreen
 import app.recomp.ui.dev.DevScreen
 import app.recomp.ui.exercises.ExerciseHistoryScreen
 import app.recomp.ui.exercises.ExerciseScreen
@@ -47,6 +49,8 @@ import app.recomp.ui.food.HiddenFoodsScreen
 import app.recomp.ui.food.MealSlotsScreen
 import app.recomp.ui.food.PortionSizesScreen
 import app.recomp.ui.onboarding.OnboardingScreen
+import app.recomp.ui.reminders.LocalOpenReminders
+import app.recomp.ui.reminders.RemindersScreen
 import app.recomp.ui.routines.RoutineScreen
 import app.recomp.ui.settings.SettingsScreen
 import app.recomp.ui.setup.SetupScreen
@@ -74,6 +78,9 @@ import kotlinx.serialization.Serializable
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
+
+/** M11's weekly programme review for a week; [reviewId] opens a past one. */
+@Serializable data class ProgrammeReviewRoute(val weekStart: String, val reviewId: Long = 0)
 
 @Serializable data object SettingsRoute
 
@@ -113,6 +120,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object HiddenFoodsRoute
 
+/** Settings → Reminders (RM-01). */
+@Serializable data object RemindersRoute
+
 private data class TopLevel(val label: String, val glyph: String, val route: Any)
 
 private val topLevel = listOf(
@@ -139,6 +149,13 @@ fun RecompNavHost(main: MainViewModel) {
             when (event) {
                 is AppNav.Workout -> nav.openWorkout(event.sessionId)
                 is AppNav.Summary -> nav.navigate(SummaryRoute(event.sessionId)) { launchSingleTop = true }
+                AppNav.Today -> nav.openTopLevel(TodayRoute)
+                AppNav.Food -> nav.openTopLevel(FoodRoute)
+                AppNav.Body -> nav.openTopLevel(BodyRoute)
+                is AppNav.Checkin -> {
+                    nav.openTopLevel(TodayRoute)
+                    nav.openCheckin(event.weekStart)
+                }
             }
         }
     }
@@ -182,7 +199,12 @@ fun RecompNavHost(main: MainViewModel) {
                     )
                 }
             }
-            composable<CheckinRoute> { CheckinScreen(onBack = { nav.popBackStack() }) }
+            composable<CheckinRoute> {
+                CompositionLocalProvider(LocalOpenProgrammeReview provides { week -> nav.navigate(ProgrammeReviewRoute(week.toString())) }) {
+                    CheckinScreen(onBack = { nav.popBackStack() })
+                }
+            }
+            composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
             composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
             composable<FoodRoute> { entry ->
@@ -223,7 +245,7 @@ fun RecompNavHost(main: MainViewModel) {
                 )
             }
             composable<SettingsRoute> {
-                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin) {
+                CompositionLocalProvider(LocalOpenCheckin provides nav::openCheckin, LocalOpenReminders provides { nav.navigate(RemindersRoute) }) {
                     SettingsScreen(
                         onOpenGoal = { nav.navigate(OnboardingRoute(goalOnly = true)) },
                         onOpenTraining = { nav.navigate(SetupRoute) },
@@ -235,6 +257,7 @@ fun RecompNavHost(main: MainViewModel) {
                     )
                 }
             }
+            composable<RemindersRoute> { RemindersScreen(onBack = { nav.popBackStack() }) }
             composable<DevRoute> { DevScreen() }
             composable<SetupRoute> { SetupScreen(onDone = { nav.popBackStack() }) }
             composable<LibraryRoute> { LibraryScreen(onBack = { nav.popBackStack() }, onOpenExercise = { nav.navigate(ExerciseRoute(it)) }) }
@@ -299,6 +322,7 @@ private fun UnreadableDialog(keys: List<String>, onDismiss: () -> Unit) {
             "meal_slots" -> "your meal names"
             "portion_sizes" -> "your portion sizes"
             "scan_slot" -> "your usual scan slot"
+            "reminders" -> "your reminders"
             else -> it
         }
     }

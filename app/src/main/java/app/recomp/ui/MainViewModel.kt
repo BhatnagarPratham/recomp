@@ -35,6 +35,12 @@ data class ResumePrompt(
 sealed interface AppNav {
     data class Workout(val sessionId: Long) : AppNav
     data class Summary(val sessionId: Long) : AppNav
+
+    /** A reminder or the widget opened the app on a tab (PRD §12.8). */
+    data object Today : AppNav
+    data object Food : AppNav
+    data object Body : AppNav
+    data class Checkin(val weekStart: java.time.LocalDate) : AppNav
 }
 
 /**
@@ -49,7 +55,8 @@ class MainViewModel @Inject constructor(
     personas: PersonaRepository,
     foodSeeder: FoodSeeder,
     backups: BackupManager,
-    checkins: CheckinRepository,
+    private val checkins: CheckinRepository,
+    reminders: app.recomp.reminders.ReminderScheduler,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -86,6 +93,27 @@ class MainViewModel @Inject constructor(
         }
         viewModelScope.launch { training.ensureLibrarySeeded() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
+        // M12: the reminder alarm and the widget follow the app from its first screen (TRD §6.6).
+        reminders.start()
+    }
+
+    /**
+     * Opens the screen a reminder or the widget points at. Nothing happens before onboarding, which has no tabs;
+     * a check-in reminder with no check-in to show opens Today.
+     */
+    fun open(action: String?) {
+        if (action !in OPEN_ACTIONS) return
+        viewModelScope.launch {
+            if (onboarded.first { it != null } != true) return@launch
+            _nav.send(
+                when (action) {
+                    app.recomp.MainActivity.ACTION_OPEN_FOOD -> AppNav.Food
+                    app.recomp.MainActivity.ACTION_OPEN_BODY -> AppNav.Body
+                    app.recomp.MainActivity.ACTION_OPEN_CHECKIN -> checkins.observeLatest().first()?.let { AppNav.Checkin(it.weekStart) } ?: AppNav.Today
+                    else -> AppNav.Today
+                },
+            )
+        }
     }
 
     /** Runs once per process: an ACTIVE session found at launch means the app was killed mid-workout. */
@@ -153,5 +181,12 @@ class MainViewModel @Inject constructor(
 
     companion object {
         const val STALE_AFTER_MS = 4 * 60 * 60 * 1000L
+
+        private val OPEN_ACTIONS = setOf(
+            app.recomp.MainActivity.ACTION_OPEN_TODAY,
+            app.recomp.MainActivity.ACTION_OPEN_FOOD,
+            app.recomp.MainActivity.ACTION_OPEN_BODY,
+            app.recomp.MainActivity.ACTION_OPEN_CHECKIN,
+        )
     }
 }

@@ -31,6 +31,7 @@ import androidx.lifecycle.viewModelScope
 import app.recomp.data.db.RoutineEntity
 import app.recomp.data.prefs.TrainingSettings
 import app.recomp.data.repo.TrainingRepository
+import app.recomp.ui.checkin.ScheduledDeloadCard
 import app.recomp.ui.components.Labels
 import app.recomp.ui.components.MenuItem
 import app.recomp.ui.components.OverflowMenu
@@ -92,6 +93,7 @@ fun TrainScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Train", style = MaterialTheme.typography.headlineMedium)
+        ScheduledDeloadCard()
 
         Card(Modifier.fillMaxWidth().clickable(onClick = onOpenSetup)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

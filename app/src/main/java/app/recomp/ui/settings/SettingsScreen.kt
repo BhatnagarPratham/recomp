@@ -317,6 +317,9 @@ fun SettingsScreen(
         SettingRow("Usual scan slot", ui.scanSlot?.let(BodyText::slot) ?: "Set by your first scan") { editing = Editing.Slot }
         SettingRow("Units", Labels.units(ui.stored.units) + " (lb and in arrive later)", onClick = null)
 
+        SectionTitle("Reminders")
+        app.recomp.ui.reminders.RemindersSettingsRow() // M12: its screen lives in ui/reminders
+
         SectionTitle("Days")
         SettingRow("Day starts at", formatDayStart(ui.dayStart)) { editing = Editing.DayStart }
 
