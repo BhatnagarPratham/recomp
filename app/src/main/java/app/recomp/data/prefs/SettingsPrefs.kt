@@ -189,11 +189,13 @@ data class StoredProfile(
     val activity: ActivityLevel = ActivityLevel.MODERATE,
     /** GL-09 (M19): pregnant or breastfeeding. Body data, so it lives here and never in the persona. */
     val pregnant: Boolean = false,
+    /** R4: the day the switch last went off; absent before it ever has. */
+    @Serializable(with = LocalDateIso::class) val pregnantUntil: LocalDate? = null,
 ) {
-    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity, pregnant)
+    fun toProfile() = Profile(sex, birthDate, heightCm, weightKg, activity, pregnant, pregnantUntil)
 
     companion object {
-        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity, p.pregnant)
+        fun of(p: Profile) = StoredProfile(p.sex, p.birthDate, p.heightCm, p.weightKg, p.activity, p.pregnant, p.pregnantUntil)
     }
 }
 

@@ -193,7 +193,16 @@ class PersonaRepository @Inject constructor(
     suspend fun preview(plan: GoalPlan? = null, profile: Profile? = null, overrides: TargetOverrides? = null, now: Long = System.currentTimeMillis()): TargetPreview {
         val today = days.of(now)
         val stored = prefs.currentPersona()
-        val newProfile = withTrend(profile ?: requireNotNull(prefs.profile.first()) { "No profile before onboarding" })
+        val old = prefs.profile.first()
+        // R4: switching pregnancy off records the day, so the check-ins after it stay quiet while their window holds it.
+        val chosen = (profile ?: requireNotNull(old) { "No profile before onboarding" }).let { p ->
+            when {
+                p.pregnant -> p.copy(pregnantUntil = null)
+                old?.pregnant == true -> p.copy(pregnantUntil = today)
+                else -> p.copy(pregnantUntil = p.pregnantUntil ?: old?.pregnantUntil)
+            }
+        }
+        val newProfile = withTrend(chosen)
         val current = stored.goal?.toPlan()
         val guarded = Guardrails.apply(newProfile, plan ?: requireNotNull(current), today)
         // A goal-flow save settles against the stored goal (PS-04); anything else keeps the goal unless a guardrail moved it.

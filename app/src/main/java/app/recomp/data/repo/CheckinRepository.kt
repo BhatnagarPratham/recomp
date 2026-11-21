@@ -87,6 +87,8 @@ data class CheckinView(
      * and no proposal. The estimate is still shown, but never lowers a target.
      */
     val pregnant: Boolean = false,
+    /** The switch is on now; [pregnant] without it is the weeks just after it went off (R4). */
+    val pregnantNow: Boolean = false,
 )
 
 /**
@@ -316,11 +318,12 @@ class CheckinRepository @Inject constructor(
         // GL-09: pregnancy gain isn't stored energy, so while it's on the estimate never falls below the formula's TDEE.
         // Nothing biased is carried into the chain for when it's switched off (M19 review R1).
         val formulaTdee = NutritionCalculator.startingTargets(basis.inputs).tdeeKcal
-        val tdeeNew = (if (basis.profile.pregnant) maxOf(estimate.new, formulaTdee) else estimate.new).roundToInt()
+        val pregnancy = Guardrails.pregnancyQuiet(basis.profile, end)
+        val tdeeNew = (if (pregnancy) maxOf(estimate.new, formulaTdee) else estimate.new).roundToInt()
         // During a break, and until the flag's window is back on the goal, the estimate updates but nothing is flagged.
         // While pregnant or breastfeeding the scale isn't judged either (GL-09): a gain would read as drift, and the
         // estimate as a lower maintenance.
-        val quiet = MaintenanceBreak.flagsQuiet(basis.plan, end) || basis.profile.pregnant
+        val quiet = MaintenanceBreak.flagsQuiet(basis.plan, end) || pregnancy
         val flag = if (quiet) null else CheckinFlags.evaluate(basis.plan.policy, points, waist(), end).flag
         val current = nutritionDao.targetOn(today)
         val proposal = if (propose && current != null) {
@@ -352,7 +355,7 @@ class CheckinRepository @Inject constructor(
         val status = when {
             row.flag != null -> CheckinStatus.FLAGGED
             // Not judged this week (GL-06): the screen says so rather than asking for data it wouldn't use.
-            MaintenanceBreak.flagsQuiet(basis.plan, row.weekEnd) || basis.profile.pregnant -> CheckinStatus.ON_TRACK
+            MaintenanceBreak.flagsQuiet(basis.plan, row.weekEnd) || Guardrails.pregnancyQuiet(basis.profile, row.weekEnd) -> CheckinStatus.ON_TRACK
             evaluation.status == CheckinStatus.FLAGGED -> CheckinStatus.ON_TRACK
             else -> evaluation.status
         }
@@ -373,7 +376,8 @@ class CheckinRepository @Inject constructor(
             written = written,
             decidedOn = written?.effectiveFrom ?: row.decidedAt?.let { days.of(it) },
             quiet = row.flag == null && MaintenanceBreak.flagsQuiet(basis.plan, row.weekEnd),
-            pregnant = basis.profile.pregnant,
+            pregnant = row.flag == null && Guardrails.pregnancyQuiet(basis.profile, row.weekEnd),
+            pregnantNow = basis.profile.pregnant,
         )
     }
 

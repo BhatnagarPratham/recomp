@@ -103,6 +103,8 @@ data class Profile(
     val activity: ActivityLevel = ActivityLevel.MODERATE,
     /** Pregnant or breastfeeding (GL-09): deficits are unavailable while it's on. Body data, never sent to AI. */
     val pregnant: Boolean = false,
+    /** The day the switch last went off (M19 review R4): the check-in stays quiet until its window is past it. */
+    val pregnantUntil: LocalDate? = null,
 ) {
     fun ageOn(date: LocalDate): Int = Period.between(birthDate, date).years
 

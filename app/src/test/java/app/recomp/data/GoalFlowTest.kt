@@ -20,6 +20,7 @@ import app.recomp.domain.persona.FinishLine
 import app.recomp.domain.persona.GoalPlan
 import app.recomp.domain.persona.GoalProgress
 import app.recomp.domain.persona.GoalStatus
+import app.recomp.domain.persona.Guardrails
 import app.recomp.domain.persona.GuardrailNote
 import app.recomp.domain.persona.Presets
 import app.recomp.domain.persona.Profile
@@ -523,6 +524,40 @@ class GoalFlowTest {
         // Switched off (R1), nothing the pregnancy dragged down comes back: the targets don't drop.
         val off = app.personas.preview(profile = woman.copy(heightCm = 165.5, pregnant = false))
         assertTrue("${off.after.kcal} vs ${start.kcal}", off.after.kcal >= start.kcal)
+    }
+
+    @Test
+    fun `switching pregnancy off proposes no cut while the estimate still holds the pregnancy (R4)`() = runBlocking {
+        // Invented: the same pregnancy gain as B1's test, switched off on day 98, then losing 0.3 kg a week on the same food.
+        val woman = Profile(Sex.FEMALE, LocalDate.of(1994, 3, 1), heightCm = 165.0, weightKg = 62.0, pregnant = true)
+        onboard(Goal.MAINTAIN, who = woman)
+        val start = targets.targetOn(date(0))!!
+        fun kg(d: Int) = if (d < 98) 62.0 + 0.4 / 7 * d else 62.0 + 0.4 / 7 * 98 - 0.3 / 7 * (d - 98)
+        (0..140).forEach { weigh(it, kg(it)); eat(it, start.kcal.toDouble()) }
+        app.checkins.catchUp(date(98), at(98, 9))
+        app.personas.save(profile = woman.copy(pregnant = false), now = at(98))
+        assertEquals(date(98), app.prefs.profile.first()!!.pregnantUntil)
+        assertTrue(targets.all().last().kcal >= start.kcal)
+
+        // The next three check-ins, and the last pending week's final recompute: quiet, floored, no lower target.
+        for (monday in listOf(105, 112, 119)) {
+            app.checkins.catchUp(date(monday), at(monday))
+            val week = checkinDao.latest()!!
+            assertNull("week of ${week.weekStart}", week.flag)
+            assertNull("week of ${week.weekStart}", week.proposedKcal)
+            val view = app.checkins.open(week.weekStart, at(monday, 13))!!
+            assertTrue(view.pregnant)
+            assertFalse(view.pregnantNow)
+            assertEquals(CheckinText.AFTER_PREGNANCY_VERDICT, CheckinText.verdict(view))
+        }
+        assertTrue(checkinDao.all().none { it.flag != null || it.proposedKcal != null })
+        assertTrue(targets.all().none { it.reason == TargetReason.CHECKIN })
+        // Once the window starts on or after the switch, the check-in judges the scale again.
+        assertFalse(Guardrails.pregnancyQuiet(app.prefs.profile.first()!!, date(98 + 27)))
+        assertTrue(Guardrails.pregnancyQuiet(app.prefs.profile.first()!!, date(98 + 26)))
+        // Switched on again, the day is cleared.
+        app.personas.save(profile = app.prefs.profile.first()!!.copy(pregnant = true), now = at(126))
+        assertNull(app.prefs.profile.first()!!.pregnantUntil)
     }
 
     @Test

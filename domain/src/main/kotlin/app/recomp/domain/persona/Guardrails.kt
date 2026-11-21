@@ -1,5 +1,6 @@
 package app.recomp.domain.persona
 
+import app.recomp.domain.checkin.AdaptiveTdee
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
 import app.recomp.domain.nutrition.KcalRounding
@@ -47,6 +48,14 @@ object Guardrails {
         profile.bmi < MIN_DEFICIT_BMI -> GuardrailNote.LOW_BMI_MAINTAIN
         else -> null
     }
+
+    /**
+     * The check-in doesn't judge the week ending [weekEnd] (GL-09): while pregnant or breastfeeding, and afterwards until
+     * the estimate's longest window (28 days) starts on or after the day it was switched off, since until then it still
+     * holds the pregnancy's gain. Its estimate is floored at the formula's TDEE for those weeks too.
+     */
+    fun pregnancyQuiet(profile: Profile, weekEnd: LocalDate): Boolean =
+        profile.pregnant || profile.pregnantUntil?.let { weekEnd.minusDays(AdaptiveTdee.WEEKLY_WINDOW_DAYS - 1L).isBefore(it) } == true
 
     /**
      * Your own calorie target as the guardrails allow it (GL-09): while pregnant or breastfeeding, one below
