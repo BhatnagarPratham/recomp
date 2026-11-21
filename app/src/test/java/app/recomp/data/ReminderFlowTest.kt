@@ -196,8 +196,9 @@ class ReminderFlowTest {
     @Test
     fun `turning a reminder on after its time waits for tomorrow`() = runBlocking {
         onboard()
+        val before = runner.inputs()
         turnOn(ReminderKind.LUNCH)
-        runner.settingsChanged(at(0, 15), zone)
+        runner.settingsChanged(before, runner.inputs(), at(0, 15), zone)
         assertTrue(run(0, 15).isEmpty())
         assertEquals(Instant.ofEpochMilli(at(1, 14, 30)), runner.nextWake(at(0, 15), zone))
         assertEquals(listOf(ReminderKind.LUNCH), run(1, 14, 31))

@@ -21,6 +21,8 @@ data class ReminderContent(
     val title: String,
     val text: String,
     val suggestions: List<Suggestion> = emptyList(),
+    /** The log day the content is about, so a button tapped after it has ended doesn't log into the next one. */
+    val date: java.time.LocalDate? = null,
 )
 
 /** The words of reminders and the evening nudge (PRD §12.8), shared by notifications and Today's card. */
@@ -92,7 +94,7 @@ object ReminderText {
         }
         ReminderKind.EVENING -> nudge.lines.takeIf { it.isNotEmpty() }?.let { lines ->
             val rest = lines.drop(1).map(::line) + nudge.suggestions.map(::suggestion)
-            ReminderContent(kind, line(lines.first()), rest.joinToString("\n").ifEmpty { "Open Today to see what's left." }, nudge.suggestions)
+            ReminderContent(kind, line(lines.first()), rest.joinToString("\n").ifEmpty { "Open Today to see what's left." }, nudge.suggestions, snapshot.date)
         }
         ReminderKind.WORKOUT -> snapshot.nextRoutine?.takeIf { !snapshot.strengthDone && !snapshot.workoutActive }?.let {
             ReminderContent(kind, "$it is next", liftsDue(snapshot.liftsDue))

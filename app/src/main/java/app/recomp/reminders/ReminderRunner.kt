@@ -9,13 +9,19 @@ import app.recomp.data.repo.TodaySnapshotRepository
 import app.recomp.domain.nudge.ReminderDay
 import app.recomp.domain.nudge.ReminderKind
 import app.recomp.domain.nudge.ReminderSchedule
+import app.recomp.domain.body.ScanSlot
+import app.recomp.domain.nudge.Reminders
 import java.time.Instant
+import java.time.LocalTime
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** The settings the reminders' times depend on. */
+data class ReminderInputs(val reminders: Reminders, val dayStart: LocalTime, val scanSlot: ScanSlot?)
 
 /** Where reminders are shown. Android's notifications in the app; a list in tests. */
 interface ReminderNotifier {
@@ -76,11 +82,24 @@ class ReminderRunner @Inject constructor(
         return kinds.mapNotNull { kind -> ReminderText.content(kind, snapshot, nudge, reminders, slots, scanSlot)?.let { kind to it } }.toMap()
     }
 
-    /** After a reminder, "day starts at" or the scan slot changes: a time already past doesn't ring today. */
-    suspend fun settingsChanged(now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()) = mutex.withLock {
+    /** What the reminders' times depend on, as read now. */
+    suspend fun inputs(): ReminderInputs = ReminderInputs(prefs.reminders.first(), prefs.currentDayStart(), prefs.scanSlot.first())
+
+    /**
+     * After the reminders, "day starts at" or the scan slot change from [before] to [after]: a reminder whose ring
+     * today the change added or moved to a time already past doesn't ring today. Other rings already due are left
+     * alone, so an inexact alarm that's a few minutes late still sends them (review S1).
+     */
+    suspend fun settingsChanged(
+        before: ReminderInputs,
+        after: ReminderInputs,
+        now: Long = System.currentTimeMillis(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ) = mutex.withLock {
         val today = days.of(now)
-        val rings = ReminderSchedule.forDay(today, prefs.currentDayStart(), zone, timed())
-        device.setLedger(ReminderDay.skipPast(device.ledger(), today, Instant.ofEpochMilli(now), rings))
+        val old = ReminderSchedule.forDay(today, before.dayStart, zone, ReminderSchedule.timed(before.reminders, before.scanSlot))
+        val new = ReminderSchedule.forDay(today, after.dayStart, zone, ReminderSchedule.timed(after.reminders, after.scanSlot))
+        device.setLedger(ReminderDay.skipChanged(device.ledger(), today, Instant.ofEpochMilli(now), old, new))
     }
 
     /** When the alarm should next fire for a reminder; null when none is on. */

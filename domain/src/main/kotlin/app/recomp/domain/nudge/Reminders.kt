@@ -182,7 +182,14 @@ object ReminderDay {
         return Step(send, ReminderLedger(logDate, sent, handled))
     }
 
-    /** A changed setting never rings for a time already past: those rings count as handled, unsent. */
-    fun skipPast(ledger: ReminderLedger?, logDate: LocalDate, now: Instant, occurrences: List<Occurrence>): ReminderLedger =
-        step(ledger, logDate, now, occurrences, canNotify = false) { false }.ledger
+    /**
+     * After a settings change: a reminder whose ring today it added or moved to a time already past doesn't ring
+     * today, so it's marked handled. Only those: a ring that was due before the change and is still due (the inexact
+     * alarm just hasn't fired yet) is left for the next wake.
+     */
+    fun skipChanged(ledger: ReminderLedger?, logDate: LocalDate, now: Instant, before: List<Occurrence>, after: List<Occurrence>): ReminderLedger {
+        val start = ledger?.takeIf { it.date == logDate } ?: ReminderLedger(logDate)
+        val moved = after.filter { ring -> !ring.at.isAfter(now) && ring !in before }.map { it.kind }
+        return start.copy(handled = start.handled + moved)
+    }
 }

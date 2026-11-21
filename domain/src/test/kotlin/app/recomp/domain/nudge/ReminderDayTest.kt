@@ -149,10 +149,29 @@ class ReminderDayTest {
     @Test
     fun `turning a reminder on after its time doesn't ring it today`() {
         val rings = ReminderSchedule.forDay(monday, dayStart, zone, ReminderSchedule.timed(all, slot))
-        val ledger = ReminderDay.skipPast(null, monday, at(monday, 15), rings)
+        val ledger = ReminderDay.skipChanged(null, monday, at(monday, 15), before = emptyList(), after = rings)
         assertTrue(ledger.sent.isEmpty())
         assertEquals(ReminderKind.entries.toSet() - ReminderKind.EVENING, ledger.handled)
         assertEquals(at(monday, 20, 30), ReminderSchedule.nextWake(at(monday, 15), monday, dayStart, zone, ReminderSchedule.timed(all, slot), ledger.handled))
+    }
+
+    @Test
+    fun `a settings change leaves a due ring alone unless it moved that ring`() {
+        // Review S1: the evening ring is due at 20:30 and the inexact alarm hasn't fired by 20:33.
+        val before = Reminders(weighIn = Reminder(true, LocalTime.of(7, 30)), evening = Reminder(true, LocalTime.of(20, 30)))
+        val sent = ReminderLedger(monday, sent = listOf(ReminderKind.WEIGH_IN), handled = setOf(ReminderKind.WEIGH_IN))
+        fun rings(r: Reminders) = ReminderSchedule.forDay(monday, dayStart, zone, ReminderSchedule.timed(r, slot))
+        val now = at(monday, 20, 33)
+        // Turning on the lunch reminder (14:30, past) skips lunch only.
+        val after = before.copy(lunch = Reminder(true, LocalTime.of(14, 30)))
+        val ledger = ReminderDay.skipChanged(sent, monday, now, rings(before), rings(after))
+        assertEquals(setOf(ReminderKind.WEIGH_IN, ReminderKind.LUNCH), ledger.handled)
+        assertEquals(listOf(ReminderKind.EVENING), ReminderDay.step(ledger, monday, now, rings(after)) { true }.send)
+        // Picking the lunch reminder's meal, or a workout weekday, moves no ring at all.
+        assertEquals(sent, ReminderDay.skipChanged(sent, monday, now, rings(before), rings(before.copy(lunchSlot = "snacks", workoutDays = setOf(DayOfWeek.FRIDAY)))))
+        // Moving the evening reminder to 20:00 (past) does skip it; moving it later leaves it to ring then.
+        assertTrue(ReminderKind.EVENING in ReminderDay.skipChanged(sent, monday, now, rings(before), rings(before.with(ReminderKind.EVENING, LocalTime.of(20, 0)))).handled)
+        assertTrue(ReminderKind.EVENING !in ReminderDay.skipChanged(sent, monday, now, rings(before), rings(before.with(ReminderKind.EVENING, LocalTime.of(21, 0)))).handled)
     }
 
     // Reminder times across the day boundary

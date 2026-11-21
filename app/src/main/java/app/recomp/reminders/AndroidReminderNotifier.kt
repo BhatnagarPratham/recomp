@@ -20,7 +20,7 @@ import javax.inject.Singleton
 
 /** Reminders as notifications (TRD §6.6): one per kind, replaced in place, each opening the screen it's about. */
 @Singleton
-class AndroidReminderNotifier @Inject constructor(@ApplicationContext private val context: Context) : ReminderNotifier {
+class AndroidReminderNotifier @Inject constructor(@ApplicationContext private val context: Context) : ReminderNotifier, NudgeMessages {
     private val manager get() = NotificationManagerCompat.from(context)
 
     override fun canNotify(): Boolean = permitted(context)
@@ -32,19 +32,20 @@ class AndroidReminderNotifier @Inject constructor(@ApplicationContext private va
         if (!canNotify()) return
         val builder = base(content.kind, content.title, content.text)
         // NU-23: one tap logs a suggestion. Android shows three actions at most.
+        val tapKey = "${content.kind}-${System.currentTimeMillis()}"
         content.suggestions.take(MAX_ACTIONS).forEachIndexed { i, s ->
-            builder.addAction(0, ReminderText.suggestionAction(s), NudgeActionReceiver.logIntent(context, i, s))
+            builder.addAction(0, ReminderText.suggestionAction(s), NudgeActionReceiver.logIntent(context, i, s, content.date, tapKey))
         }
         notify(content.kind, builder)
     }
 
     /** After a suggestion is logged from the notification: says where it went, with *Undo*. */
-    fun showLogged(text: String, entryId: Long) {
+    override fun logged(text: String, entryId: Long) {
         if (!canNotify()) return
         notify(ReminderKind.EVENING, base(ReminderKind.EVENING, "Logged", text).addAction(0, "Undo", NudgeActionReceiver.undoIntent(context, entryId)).setSilent(true))
     }
 
-    fun showMessage(title: String, text: String) {
+    override fun message(title: String, text: String) {
         if (!canNotify()) return
         notify(ReminderKind.EVENING, base(ReminderKind.EVENING, title, text).setSilent(true))
     }

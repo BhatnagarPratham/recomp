@@ -32,6 +32,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /** Today's food against its targets. Null on the snapshot before onboarding has written a target. */
 data class SnapshotFood(
@@ -99,7 +104,21 @@ class TodaySnapshotRepository @Inject constructor(
     private val foodLog: FoodLogRepository,
     private val nudgeDao: NudgeDao,
 ) {
+    /** How many snapshots have been built, so a test can see the shared flow builds one per change. */
+    @Volatile
+    var loads = 0
+        private set
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * The snapshot every live reader shares (review N8): Today's evening card and the widget's updater build it once
+     * per change between them, not once each.
+     */
+    val shared: Flow<TodaySnapshot> by lazy { observe().shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1) }
+
     suspend fun load(now: Long = System.currentTimeMillis()): TodaySnapshot {
+        loads++
         val today = days.of(now)
         val settings = training.settings.first()
         val week = workouts.observeWeek(today).first()
@@ -166,10 +185,14 @@ class TodaySnapshotRepository @Inject constructor(
         return LoggedSuggestion(id, suggestion, slot)
     }
 
-    /** *Undo*: the entry goes, and so does the use it added. */
-    suspend fun undo(logged: LoggedSuggestion) = undo(logged.entryId)
+    /** *Undo*: the entry goes, and so does the use it added. False when it was already gone. */
+    suspend fun undo(logged: LoggedSuggestion): Boolean = undo(logged.entryId)
 
-    suspend fun undo(entryId: Long) = foodLog.undoInsert(listOf(entryId))
+    suspend fun undo(entryId: Long): Boolean {
+        if (foodLog.entry(entryId) == null) return false
+        foodLog.undoInsert(listOf(entryId))
+        return true
+    }
 
     companion object {
         fun timeOf(epochMs: Long, zone: ZoneId): LocalTime = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalTime()

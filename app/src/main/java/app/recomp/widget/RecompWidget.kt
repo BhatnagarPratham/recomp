@@ -3,9 +3,6 @@ package app.recomp.widget
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,20 +63,20 @@ interface WidgetEntryPoint {
  * opens the Food tab. It reads the same `TodaySnapshot` as the reminders.
  */
 class RecompWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Responsive(setOf(SQUARE, WIDE))
+    override val sizeMode = SizeMode.Responsive(setOf(NARROW, WIDE, SQUARE))
 
+    /**
+     * Draws the state [WidgetUpdater] last computed from the shared snapshot, or builds it once when there's none
+     * yet. The updater redraws the widget on every change, so the session doesn't follow the data itself (N8).
+     */
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshots = EntryPointAccessors.fromApplication(context.applicationContext, WidgetEntryPoint::class.java).snapshots()
-        val initial = withContext(Dispatchers.IO) { runCatching { WidgetState.of(snapshots.load()) }.getOrDefault(WidgetState.SETUP) }
-        provideContent {
-            // While this session is alive the widget follows the data directly; WidgetUpdater restarts it afterwards.
-            val live = remember { snapshots.observe().map(WidgetState::of).distinctUntilChanged() }
-            val state by live.collectAsState(initial)
-            GlanceTheme { WidgetContent(state) }
-        }
+        val state = WidgetUpdater.latest ?: withContext(Dispatchers.IO) { runCatching { WidgetState.of(snapshots.load()) }.getOrDefault(WidgetState.SETUP) }
+        provideContent { GlanceTheme { WidgetContent(state) } }
     }
 
     companion object {
+        val NARROW = DpSize(110.dp, 40.dp)
         val WIDE = DpSize(250.dp, 40.dp)
         val SQUARE = DpSize(110.dp, 110.dp)
     }
@@ -91,11 +88,12 @@ private fun open(context: Context, action: String) =
 @Composable
 private fun WidgetContent(state: WidgetState) {
     val context = LocalContext.current
-    val wide = LocalSize.current.width >= RecompWidget.WIDE.width
+    val size = LocalSize.current
+    val layout = WidgetLayout.of(size.width.value, size.height.value)
     val frame = GlanceModifier.fillMaxSize().background(GlanceTheme.colors.widgetBackground).cornerRadius(16.dp)
         .clickable(open(context, MainActivity.ACTION_OPEN_TODAY))
     val label = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 12.sp)
-    val value = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = if (wide) 22.sp else 26.sp, fontWeight = FontWeight.Bold)
+    val value = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = if (layout == WidgetLayout.SQUARE) 26.sp else 22.sp, fontWeight = FontWeight.Bold)
     val body = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 13.sp)
 
     if (!state.ready) {
@@ -105,7 +103,16 @@ private fun WidgetContent(state: WidgetState) {
         }
         return
     }
-    if (wide) {
+    if (layout == WidgetLayout.NARROW) {
+        // 2×1 or 3×1: the main number and *Log food* only.
+        Row(frame.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(GlanceModifier.defaultWeight()) {
+                Text(state.mainLabel, style = label, maxLines = 1)
+                Text(state.mainValue, style = value, maxLines = 1)
+            }
+            Button("Log food", onClick = open(context, MainActivity.ACTION_OPEN_FOOD), maxLines = 1)
+        }
+    } else if (layout == WidgetLayout.WIDE) {
         Row(frame.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text(state.mainLabel, style = label, maxLines = 1)
@@ -168,13 +175,28 @@ class WidgetUpdater @Inject constructor(
 ) {
     suspend fun any(): Boolean = runCatching { GlanceAppWidgetManager(context).getGlanceIds(RecompWidget::class.java).isNotEmpty() }.getOrDefault(false)
 
+    /** Builds the state afresh and redraws: after a notification button, and at the alarm (the day boundary). */
     suspend fun update() {
-        if (any()) RecompWidget().updateAll(context)
+        if (!any()) return
+        latest = runCatching { WidgetState.of(snapshots.load()) }.getOrNull()
+        RecompWidget().updateAll(context)
     }
 
+    /** While the app is alive: redraws from the shared snapshot each time what the widget shows changes. */
     fun start(scope: CoroutineScope) {
         scope.launch {
-            runCatching { snapshots.observe().map(WidgetState::of).distinctUntilChanged().collect { runCatching { update() } } }
+            runCatching {
+                snapshots.shared.map(WidgetState::of).distinctUntilChanged().collect { state ->
+                    latest = state
+                    runCatching { if (any()) RecompWidget().updateAll(context) }
+                }
+            }
         }
+    }
+
+    companion object {
+        /** The state last computed, which the widget draws. */
+        @Volatile
+        var latest: WidgetState? = null
     }
 }

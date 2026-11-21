@@ -54,3 +54,16 @@ data class WidgetState(
         }
     }
 }
+
+/** Which layout fits the widget's size (review N6): one row at 4×1, a compact row when narrower, a block at 2×2. */
+enum class WidgetLayout {
+    NARROW, WIDE, SQUARE;
+
+    companion object {
+        fun of(widthDp: Float, heightDp: Float): WidgetLayout = when {
+            heightDp >= 110f -> SQUARE
+            widthDp >= 250f -> WIDE
+            else -> NARROW
+        }
+    }
+}

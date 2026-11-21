@@ -136,8 +136,28 @@ class NudgesTest {
         assertTrue(tight.kcal <= 660)
         // 50 kcal left would be 19 g: half the usual instead.
         assertEquals(50.0, Nudges.portion(paneer, proteinLeftG = 40, kcalLeft = 50).grams, 0.0)
-        // Over on calories already: sized by protein alone.
-        assertEquals(200.0, Nudges.portion(paneer, proteinLeftG = 40, kcalLeft = -200).grams, 0.0)
+        // Review S3: with no calories left, or over, the smallest portion (half the usual), never the largest.
+        val curd = food(8, "Curd", kcal = 100.0, protein = 10.0, uses = 9, usual = 150.0)
+        assertEquals(70.0, Nudges.portion(curd, proteinLeftG = 60, kcalLeft = 1).grams, 0.0)
+        assertEquals(70.0, Nudges.portion(curd, proteinLeftG = 60, kcalLeft = 0).grams, 0.0)
+        assertEquals(70.0, Nudges.portion(curd, proteinLeftG = 60, kcalLeft = -300).grams, 0.0)
+        assertEquals(50.0, Nudges.portion(paneer, proteinLeftG = 40, kcalLeft = -200).grams, 0.0)
+    }
+
+    @Test
+    fun `rounding never breaks the portion's own limits`() {
+        // Review N1: a 400 g bowl capped at 500 g used to round to 1½ bowls (600 g).
+        val bowl = food(9, "Dal", kcal = 120.0, protein = 9.0, uses = 10, unit = PortionUnit("bowl", 400.0, PortionUnit.Kind.OWN), usual = 400.0)
+        val big = Nudges.portion(bowl, proteinLeftG = 200, kcalLeft = 5_000)
+        assertEquals(1.0, big.quantity, 0.0)
+        assertTrue(big.grams <= Portions.MAX_UNIT_GRAMS)
+        // Protein decides at 95.2 g, but only 97 kcal are left: 100 g would be 100 kcal, so it's 90 g.
+        val tofu = food(10, "Tofu", kcal = 100.0, protein = 21.0, uses = 7, usual = 100.0)
+        val p = Nudges.portion(tofu, proteinLeftG = 20, kcalLeft = 97)
+        assertEquals(90.0, p.grams, 0.0)
+        assertTrue(p.kcal <= 97)
+        // One step at least, even when a step is over the bound.
+        assertEquals(0.5, Nudges.portion(bowl.copy(usualGrams = 100.0), proteinLeftG = 50, kcalLeft = 0).quantity, 0.0)
     }
 
     @Test

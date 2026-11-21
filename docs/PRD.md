@@ -891,9 +891,10 @@ These rules hold for every block:
   - A reminder that's skipped, or can't be shown (notifications off, its channel off), never uses up the cap.
   - The scan reminder needs a usual scan slot. The workout reminder needs at least one weekday; Settings says so.
   - Lean bulk's nudge fires when more than 10% of the day's calories are still to eat. Steps use the protein rule (a quarter of the goal left) against 8,000 until M13 adds the step goal; the steps line is hidden until steps are tracked.
-  - The protein suggestions come from your 15 most-logged foods that your diet allows, with at least 5 g protein per 100 kcal. A portion covers the protein left, but at most twice what you usually have (and never over 500 g), and within the calories left though never under half your usual portion; in the unit you logged it with last, in ½-unit or 10 g steps.
+  - The protein suggestions come from your 15 most-logged foods that your diet allows, with at least 5 g protein per 100 kcal. A portion covers the protein left, but at most twice what you usually have (and never over 500 g), and within the calories left though never under half your usual portion (with no calories left, or over, it's that half portion); in the unit you logged it with last, in ½-unit or 10 g steps, never rounded over those limits.
   - "The meal for the time of day" uses a stand-in until M9's slot ranges land: Lunch by day (05:00–17:00), and the last meal from the evening until the small hours.
-  - The widget shows *Workout in progress* during a workout. Before onboarding it asks you to finish setting up.
+  - The widget shows *Workout in progress* during a workout. Before onboarding it asks you to finish setting up. Resized to 2×1 or 3×1 it shows the main number and *Log food*.
+  - The notification permission is asked when you turn on a reminder, once per visit to the screen. If it's refused, Settings → Reminders says so with a button to the phone's notification settings, and says the same when the *Reminders* or *Weekly check-in* notifications are switched off.
 
 ### 12.9 M13: Health Connect: steps, sleep, other workouts and InBody import (AR-01, AR-02, AR-04, IB-07)
 

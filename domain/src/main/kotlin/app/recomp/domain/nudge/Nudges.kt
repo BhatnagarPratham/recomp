@@ -5,7 +5,6 @@ import app.recomp.domain.food.PortionUnit
 import app.recomp.domain.food.Portions
 import app.recomp.domain.nutrition.Goal
 import app.recomp.domain.nutrition.GoalPolicy
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -130,25 +129,22 @@ object Nudges {
     }
 
     /**
-     * A portion that fits what's left: enough to cover the protein left, but no more than twice what you usually
-     * have (or [Portions.MAX_UNIT_GRAMS]), and within the calories left when there are some, though never under
-     * half your usual portion. Rounded to the unit's step (½ a unit, or 10 g), down where the calories decide it.
+     * A portion that fits what's left (NU-23, PRD §12.8). It covers the protein left, but never goes over an upper
+     * bound: twice what you usually have, [Portions.MAX_UNIT_GRAMS], and the calories left, though the calories never
+     * push it under half your usual portion. With no calories left (or over), that half portion is the bound.
+     * Rounded to the nearest step of the unit (½ a unit, or 10 g), then stepped down while it's over the bound,
+     * keeping one step at least.
      */
     fun portion(food: NudgeFood, proteinLeftG: Int, kcalLeft: Int): Suggestion {
         val per = food.per100g
         val usual = food.usualGrams.takeIf { it > 0 } ?: 100.0
-        var grams = min(proteinLeftG / per.proteinG * 100.0, min(usual * 2, Portions.MAX_UNIT_GRAMS))
-        // Where the calories left decide the size, the step rounds down, so the portion never goes over them.
-        var roundDown = false
-        if (kcalLeft > 0 && per.kcal > 0) {
-            val byKcal = kcalLeft / per.kcal * 100.0
-            if (byKcal < grams && byKcal >= usual / 2) roundDown = true
-            grams = min(grams, max(byKcal, usual / 2))
-        }
+        var upper = min(usual * 2, Portions.MAX_UNIT_GRAMS)
+        if (per.kcal > 0) upper = min(upper, if (kcalLeft > 0) max(kcalLeft / per.kcal * 100.0, usual / 2) else usual / 2)
+        val grams = min(proteinLeftG / per.proteinG * 100.0, upper)
         val unit = food.unit.takeIf { it.grams > 0 } ?: PortionUnit(Portions.GRAMS, 1.0, PortionUnit.Kind.GRAMS)
         val step = Portions.step(unit.label)
-        val steps = grams / unit.grams / step
-        val quantity = max(step, (if (roundDown) floor(steps + 1e-9) else steps.roundToInt().toDouble()) * step)
+        var quantity = max(step, (grams / unit.grams / step).roundToInt() * step)
+        while (quantity > step && quantity * unit.grams > upper + 1e-9) quantity -= step
         val rounded = quantity * unit.grams
         val macros = per.forGrams(rounded)
         return Suggestion(food.id, food.name, quantity, unit, rounded, macros.proteinG.roundToInt(), macros.kcal.roundToInt())

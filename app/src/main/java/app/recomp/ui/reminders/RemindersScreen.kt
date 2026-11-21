@@ -1,6 +1,9 @@
 package app.recomp.ui.reminders
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +20,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -55,6 +60,7 @@ import app.recomp.ui.components.DayChips
 import app.recomp.ui.components.TimeDialog
 import app.recomp.ui.onboarding.SwitchRow
 import app.recomp.ui.settings.SettingRow
+import app.recomp.workout.NotificationChannels
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.DayOfWeek
 import java.time.LocalTime
@@ -96,6 +102,16 @@ class RemindersViewModel @Inject constructor(private val prefs: SettingsPrefs) :
     fun watch(slot: String) = edit { it.copy(lunchSlot = slot) }
 }
 
+/** Why reminders that are on can't be sent (review N5): the permission, or a channel switched off. Null when they can. */
+fun blockedNotice(anyOn: Boolean, permitted: Boolean, checkinOn: Boolean, remindersChannelOff: Boolean, checkinChannelOff: Boolean): String? = when {
+    !anyOn -> null
+    !permitted -> "Notifications are off for Recomp, so nothing can be sent. Today's evening card still shows."
+    remindersChannelOff && checkinChannelOff -> "The Reminders and Weekly check-in notifications are switched off for Recomp, so nothing is sent."
+    remindersChannelOff -> "The Reminders notifications are switched off for Recomp, so only the weekly check-in can be sent."
+    checkinOn && checkinChannelOff -> "The Weekly check-in notifications are switched off for Recomp, so that reminder isn't sent."
+    else -> null
+}
+
 /** The Settings row: "Reminders · 2 on". */
 @Composable
 fun RemindersSettingsRow(viewModel: RemindersViewModel = hiltViewModel()) {
@@ -115,17 +131,24 @@ fun RemindersScreen(onBack: () -> Unit, viewModel: RemindersViewModel = hiltView
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0]
     var permitted by remember { mutableStateOf(AndroidReminderNotifier.permitted(context)) }
-    // Coming back from the system's settings may have changed it.
+    var channelsOff by remember { mutableStateOf(channelsOff(context)) }
+    // Coming back from the system's settings may have changed them.
     LifecycleResumeEffect(Unit) {
         permitted = AndroidReminderNotifier.permitted(context)
+        channelsOff = channelsOff(context)
         onPauseOrDispose { }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permitted = AndroidReminderNotifier.permitted(context) }
+    // Asked once per visit: the first reminder turned on asks, and a refusal isn't asked again straight away (N5).
+    var asked by rememberSaveable { mutableStateOf(false) }
     var picking by remember { mutableStateOf<ReminderKind?>(null) }
 
     fun turn(kind: ReminderKind, on: Boolean) {
         viewModel.set(kind, on)
-        if (on && !permitted) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (on && !permitted && !asked) {
+            asked = true
+            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Reminders") }, navigationIcon = { TextButton(onClick = onBack) { Text("Back") } }) }) { padding ->
@@ -142,8 +165,14 @@ fun RemindersScreen(onBack: () -> Unit, viewModel: RemindersViewModel = hiltView
             if (ui.mostOnOneDay > ReminderDay.MAX_PER_DAY) {
                 Notice("Up to ${ui.mostOnOneDay} of these could be due on one day. Only the first ${ReminderDay.MAX_PER_DAY} still needed will be sent, in time order.")
             }
-            if (r.anyOn && !permitted) {
-                Notice("Notifications are off for Recomp, so nothing can be sent. Turn them on in the phone's settings for this app. Today's evening card still shows.")
+            blockedNotice(r.anyOn, permitted, r.checkin.on, channelsOff.first, channelsOff.second)?.let { text ->
+                Notice(text)
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Open notification settings") }
             }
 
             ReminderRow(ReminderKind.WEIGH_IN, r, ReminderText.skippedWhen(ReminderKind.WEIGH_IN, null), ::turn) { picking = it }
@@ -209,6 +238,13 @@ private fun ReminderRow(kind: ReminderKind, reminders: Reminders, note: String, 
         Text(BodyText.time(reminder.time), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
         TextButton(onClick = { onPickTime(kind) }) { Text("Change time") }
     }
+}
+
+/** Whether the *Reminders* and *Weekly check-in* channels are switched off. */
+private fun channelsOff(context: android.content.Context): Pair<Boolean, Boolean> {
+    val manager = context.getSystemService(NotificationManager::class.java)
+    fun off(id: String) = manager.getNotificationChannel(id)?.importance == NotificationManager.IMPORTANCE_NONE
+    return off(NotificationChannels.REMINDERS) to off(NotificationChannels.CHECKIN)
 }
 
 @Composable

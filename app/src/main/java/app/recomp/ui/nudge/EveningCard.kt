@@ -47,8 +47,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Today's evening card: tonight's nudge, and the suggestion just logged from it (for *Undo*). */
-data class EveningCardUi(val nudge: EveningNudge = EveningNudge.NONE, val logged: LoggedSuggestion? = null) {
-    val visible: Boolean get() = nudge.lines.isNotEmpty() || logged != null
+data class EveningCardUi(val nudge: EveningNudge = EveningNudge.NONE, val logged: LoggedSuggestion? = null, val message: String? = null) {
+    val visible: Boolean get() = nudge.lines.isNotEmpty() || logged != null || message != null
 }
 
 /** When Today's evening card shows (PRD §12.8): from the evening nudge's time until the log day ends. */
@@ -66,6 +66,7 @@ class EveningCardViewModel @Inject constructor(
     days: DayBoundary,
 ) : ViewModel() {
     private val logged = MutableStateFlow<LoggedSuggestion?>(null)
+    private val message = MutableStateFlow<String?>(null)
 
     /** Whether the nudge time has passed, checked again each minute so the card appears while Today is open. */
     private val open: Flow<Boolean> = combine(prefs.reminders, prefs.dayStart, minutes()) { reminders, dayStart, now ->
@@ -73,8 +74,8 @@ class EveningCardViewModel @Inject constructor(
     }.distinctUntilChanged()
 
     /** The same nudge the notification carries, whether or not the reminder is on. */
-    val ui: StateFlow<EveningCardUi> = combine(snapshots.observe(), open, logged) { snapshot, open, logged ->
-        EveningCardUi(if (open) snapshots.evening(snapshot) else EveningNudge.NONE, logged?.takeIf { it.entryId > 0 })
+    val ui: StateFlow<EveningCardUi> = combine(snapshots.shared, open, logged, message) { snapshot, open, logged, message ->
+        EveningCardUi(if (open) snapshots.evening(snapshot) else EveningNudge.NONE, logged?.takeIf { it.entryId > 0 }, message)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EveningCardUi())
 
     private fun minutes(): Flow<Long> = flow {
@@ -84,12 +85,25 @@ class EveningCardViewModel @Inject constructor(
         }
     }
 
-    /** One tap logs it into the meal for the time of day (NU-23). */
-    fun log(suggestion: Suggestion) = viewModelScope.launch { logged.value = snapshots.log(suggestion) }
+    /** One tap logs it into the meal for the time of day (NU-23). When it can't, the card says why (review N7). */
+    fun log(suggestion: Suggestion) = viewModelScope.launch { logNow(suggestion) }
+
+    /** The card's message, if any: why a tap didn't log. */
+    val notice: StateFlow<String?> = message
+
+    internal suspend fun logNow(suggestion: Suggestion, now: Long = System.currentTimeMillis()) {
+        val done = runCatching { snapshots.log(suggestion, now) }.getOrNull()
+        logged.value = done
+        message.value = if (done == null) NOT_LOGGED else null
+    }
 
     fun undo() = viewModelScope.launch {
-        logged.value?.let { snapshots.undo(it) }
+        logged.value?.let { runCatching { snapshots.undo(it) } }
         logged.value = null
+    }
+
+    companion object {
+        const val NOT_LOGGED = "Couldn't log that: the food isn't available any more. Log something from the Food tab."
     }
 }
 
@@ -105,6 +119,7 @@ fun EveningNudgeCard(viewModel: EveningCardViewModel = hiltViewModel()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Tonight", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ui.nudge.lines.forEach { Text(ReminderText.line(it), style = MaterialTheme.typography.titleLarge) }
+            ui.message?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             ui.logged?.let { logged ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(ReminderText.logged(logged.suggestion, logged.slot), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)

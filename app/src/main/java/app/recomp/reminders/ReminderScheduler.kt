@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
@@ -35,6 +34,11 @@ class ReminderScheduler @Inject constructor(
     private val widgets: WidgetUpdater,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    companion object {
+        /** After a failed wake, the soonest the alarm fires again. */
+        const val RETRY_AFTER_MS = 15 * 60_000L
+    }
     private var started = false
 
     private val alarm: PendingIntent
@@ -49,10 +53,26 @@ class ReminderScheduler @Inject constructor(
         return listOfNotNull(ring, rollover).minOrNull()
     }
 
-    suspend fun reschedule(now: Long = System.currentTimeMillis()) {
+    /**
+     * Sets the alarm for [nextAlarm]. After a failed wake ([backOff]), never sooner than [RETRY_AFTER_MS]: a ring that's
+     * still due would otherwise set it for "now" and wake the phone every few seconds until it's too late (review S2).
+     */
+    suspend fun reschedule(now: Long = System.currentTimeMillis(), backOff: Boolean = false) {
         val manager = context.getSystemService(AlarmManager::class.java)
         val at = nextAlarm(now)
-        if (at == null) manager.cancel(alarm) else manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, max(at, now), alarm)
+        val earliest = if (backOff) now + RETRY_AFTER_MS else now
+        if (at == null) manager.cancel(alarm) else manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, max(at, earliest), alarm)
+    }
+
+    /**
+     * One wake: sends what's due, redraws the widget and sets the next alarm. A failure never escapes, and a failed
+     * send backs the alarm off. Returns whether the send worked.
+     */
+    suspend fun wake(now: Long = System.currentTimeMillis()): Boolean {
+        val sent = runCatching { runner.run(now) }.isSuccess
+        runCatching { widgets.update() }
+        runCatching { reschedule(now, backOff = !sent) }
+        return sent
     }
 
     /**
@@ -65,9 +85,12 @@ class ReminderScheduler @Inject constructor(
         started = true
         scope.launch { runCatching { reschedule() } }
         scope.launch {
-            combine(prefs.reminders, prefs.dayStart, prefs.scanSlot) { _, _, _ -> }.drop(1).collect {
-                runCatching {
-                    runner.settingsChanged()
+            var before: ReminderInputs? = null
+            combine(prefs.reminders, prefs.dayStart, prefs.scanSlot, ::ReminderInputs).collect { after ->
+                val was = before
+                before = after
+                if (was != null && was != after) runCatching {
+                    runner.settingsChanged(was, after)
                     reschedule()
                 }
             }
@@ -79,9 +102,7 @@ class ReminderScheduler @Inject constructor(
 /** Wakes for reminders: the alarm itself, and everything that can make the alarm stale. */
 @AndroidEntryPoint
 class ReminderReceiver : BroadcastReceiver() {
-    @Inject lateinit var runner: ReminderRunner
     @Inject lateinit var scheduler: ReminderScheduler
-    @Inject lateinit var widgets: WidgetUpdater
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action !in ACTIONS) return
@@ -89,9 +110,7 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             try {
                 // Whatever woke us, what's due is sent: after a boot or a clock change that may be a ring the alarm missed.
-                runCatching { runner.run() }
-                runCatching { widgets.update() }
-                runCatching { scheduler.reschedule() }
+                scheduler.wake()
             } finally {
                 pending.finish()
             }
