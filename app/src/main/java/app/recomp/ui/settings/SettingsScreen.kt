@@ -472,7 +472,7 @@ fun SettingsScreen(
 @Composable
 private fun HeightDialog(first: String, second: String, style: UnitStyle, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
     if (!style.imperial) {
-        NumberEntryDialog("Height", first, decimal = true, suffix = "cm", onDismiss = onDismiss) { onConfirm(it, "") }
+        NumberEntryDialog("Height", first, decimal = true, suffix = UnitStyle.METRIC.length, onDismiss = onDismiss) { onConfirm(it, "") }
         return
     }
     var ft by remember { mutableStateOf(first) }

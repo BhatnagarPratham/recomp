@@ -26,13 +26,6 @@ import kotlin.math.abs
 
 /** Body's sentences (PRD §7.8, §7.9). Rates and protocol flags are information, never failure. */
 object BodyText {
-    /** "80.4 kg" from grams, to 0.1 kg. */
-    fun kg(grams: Int): String = "${oneDecimal(grams / 1000.0)} kg"
-
-    fun kg(value: Double): String = "${oneDecimal(value)} kg"
-
-    fun cm(value: Double): String = "${oneDecimal(value)} cm"
-
     fun oneDecimal(value: Double): String = "%.1f".format(Locale.getDefault(), value)
 
     /** "+0.4 kg", "−1.2 cm"; a value that rounds to 0.0 has no sign. */
@@ -56,9 +49,6 @@ object BodyText {
         WeightSource.GYM_SCALE -> "gym scale"
         WeightSource.SCAN -> "scans"
     }
-
-    /** "−0.4 kg this week (−0.5%)". */
-    fun rate(r: WeeklyRate): String = "${signed(r.kgPerWeek, "kg")} this week (${signed(r.pctPerWeek, "%").replace(" %", "%")})"
 
     /** "goal −0.5% a week", "goal +0.25 to +0.5% a week", "goal: steady". */
     fun pace(p: WeightPace): String = when {
@@ -114,14 +104,6 @@ object BodyText {
      * "+0.4 kg muscle · within noise; −0.8 pts body fat · within noise" (IB-04, TRD §5.6). A change in body fat is in
      * points of the percentage, not a percent of it.
      */
-    fun scanChange(c: ScanChange): String =
-        "${signed(c.muscleKg, "kg")} muscle" + (if (c.muscleWithinNoise) " · within noise" else "") +
-            "; ${signed(c.bodyFatPct, "pts")} body fat" + (if (c.bodyFatWithinNoise) " · within noise" else "")
-
-    /** The slopes per 4 weeks of muscle, fat mass and body fat (in points), signed. */
-    fun scanSlopes(s: ScanSlopes): String =
-        "Per 4 weeks: muscle ${signed(s.muscleKg, "kg")}, fat mass ${signed(s.fatKg, "kg")}, body fat ${signed(s.bodyFatPct, "pts")}"
-
     /** Which scans the chart's slope is from: the window's ("in the last 12 weeks") or all of them. */
     fun slopeFrom(scans: Int, weeks: Long?): String =
         if (weeks == null) "from all $scans on-protocol scans" else "from $scans on-protocol scans in the last $weeks weeks"

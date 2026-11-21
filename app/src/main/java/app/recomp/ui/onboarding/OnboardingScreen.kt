@@ -52,6 +52,7 @@ import app.recomp.domain.persona.SplitTemplate
 import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
+import app.recomp.domain.units.UnitStyle
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.DateDialog
@@ -225,7 +226,7 @@ private fun LazyListScope.aboutStep(ui: OnboardingUi, vm: OnboardingViewModel) {
                 NumberField("Height", ui.about.height, "ft", Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
                 NumberField("", ui.about.heightIn, "in", Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(heightIn = t) } }
             } else {
-                NumberField("Height", ui.about.height, "cm", Modifier.weight(1f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
+                NumberField("Height", ui.about.height, UnitStyle.METRIC.length, Modifier.weight(1f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
             }
             NumberField("Current weight", ui.about.weight, style.weight, Modifier.weight(1f), error = ui.about.weight.isNotBlank() && ui.about.weightKg == null) { t -> vm.updateAbout { it.copy(weight = t) } }
         }
