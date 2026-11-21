@@ -1,6 +1,7 @@
 package app.recomp
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,7 +20,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         mainViewModel.onLaunch(openWorkout = savedInstanceState == null && intent?.action == ACTION_OPEN_WORKOUT)
-        if (savedInstanceState == null) mainViewModel.open(intent?.action)
+        if (savedInstanceState == null) {
+            mainViewModel.open(intent?.action)
+            intent?.let(::shared)
+        }
         setContent {
             RecompTheme {
                 RecompNavHost(mainViewModel)
@@ -30,6 +34,18 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == ACTION_OPEN_WORKOUT) mainViewModel.openActive() else mainViewModel.open(intent.action)
+        shared(intent)
+    }
+
+    /**
+     * An image shared to Recomp (IB-03, TRD §6.7). It's opened here, while the share's permission to read it holds,
+     * and copied into app-private storage; nothing else is done with it until you say what it is.
+     */
+    private fun shared(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND || intent.type?.startsWith("image/") != true) return
+        val uri = intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) ?: return
+        val type = contentResolver.getType(uri) ?: intent.type
+        mainViewModel.onSharedImage(type) { runCatching { contentResolver.openInputStream(uri) }.getOrNull() }
     }
 
     companion object {

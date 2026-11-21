@@ -31,6 +31,7 @@ import app.recomp.ui.ResumePrompt
 import app.recomp.ui.components.formatDuration
 import app.recomp.ui.body.BodyScreen
 import app.recomp.ui.body.ScanScreen
+import app.recomp.ui.body.ShareScreen
 import app.recomp.ui.checkin.CheckinScreen
 import app.recomp.ui.checkin.LocalOpenCheckin
 import app.recomp.ui.checkin.LocalOpenProgrammeReview
@@ -71,8 +72,11 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object BodyRoute
 
-/** A scan's form (IB-01); 0 is a new scan. */
-@Serializable data class ScanRoute(val scanId: Long = 0)
+/** A scan's form (IB-01); 0 is a new scan. [image] is a shared InBody screenshot pinned above it (IB-03). */
+@Serializable data class ScanRoute(val scanId: Long = 0, val image: String = "")
+
+/** "What is this?" for a shared image (IB-03, TRD §6.7); [image] is its kept copy, empty when it couldn't be read. */
+@Serializable data class ShareRoute(val image: String)
 
 /** A week's check-in (PRD §12.1); [weekStart] is its Monday, an ISO date. */
 @Serializable data class CheckinRoute(val weekStart: String)
@@ -149,6 +153,7 @@ fun RecompNavHost(main: MainViewModel) {
                     nav.openTopLevel(TodayRoute)
                     nav.openCheckin(event.weekStart)
                 }
+                is AppNav.Shared -> nav.navigate(ShareRoute(event.image))
             }
         }
     }
@@ -200,6 +205,12 @@ fun RecompNavHost(main: MainViewModel) {
             composable<ProgrammeReviewRoute> { ProgrammeReviewScreen(onBack = { nav.popBackStack() }) }
             composable<BodyRoute> { BodyScreen(onOpenScan = { nav.navigate(ScanRoute(it ?: 0)) }) }
             composable<ScanRoute> { ScanScreen(onDone = { nav.popBackStack() }) }
+            composable<ShareRoute> {
+                ShareScreen(
+                    onInBody = { image -> nav.navigate(ScanRoute(image = image)) { popUpTo<ShareRoute> { inclusive = true } } },
+                    onDone = { nav.popBackStack() },
+                )
+            }
             composable<FoodRoute> { entry ->
                 val (outcome, shown) = entry.describeOutcome()
                 FoodScreen(

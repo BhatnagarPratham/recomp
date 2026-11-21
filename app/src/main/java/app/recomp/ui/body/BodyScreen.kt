@@ -196,6 +196,7 @@ fun BodyScreen(onOpenScan: (Long?) -> Unit, viewModel: BodyViewModel = hiltViewM
             item {
                 Column {
                     SectionTitle("Scans")
+                    ScanTargetsCard()
                     if (scans.isNotEmpty()) {
                         val weeks by viewModel.compositionRange.collectAsStateWithLifecycle()
                         Card(Modifier.fillMaxWidth()) {

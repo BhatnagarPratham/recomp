@@ -1,5 +1,8 @@
 package app.recomp.ui
 
+import app.recomp.data.body.ScanImages
+import app.recomp.data.repo.BodyRepository
+import java.io.InputStream
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.recomp.data.backup.BackupManager
@@ -41,6 +44,9 @@ sealed interface AppNav {
     data object Food : AppNav
     data object Body : AppNav
     data class Checkin(val weekStart: java.time.LocalDate) : AppNav
+
+    /** A shared image, kept as [image] (IB-03); empty when it couldn't be read or isn't one the app keeps. */
+    data class Shared(val image: String) : AppNav
 }
 
 /**
@@ -57,6 +63,8 @@ class MainViewModel @Inject constructor(
     backups: BackupManager,
     private val checkins: CheckinRepository,
     reminders: app.recomp.reminders.ReminderScheduler,
+    private val scanImages: ScanImages,
+    private val body: BodyRepository,
 ) : ViewModel() {
     /** Null while settings load. False opens onboarding, on a fresh install or the first launch after an upgrade. */
     val onboarded: StateFlow<Boolean?> = personas.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -92,6 +100,8 @@ class MainViewModel @Inject constructor(
             checkins.catchUp()
         }
         viewModelScope.launch { training.ensureLibrarySeeded() }
+        // A shared image you backed out of is kept a day, then goes (IB-03).
+        viewModelScope.launch { body.cleanImages() }
         viewModelScope.launch { foodSeeder.ensureSeeded() }
         // M12: the reminder alarm and the widget follow the app from its first screen (TRD §6.6).
         reminders.start()
@@ -138,6 +148,14 @@ class MainViewModel @Inject constructor(
                 lastSetAt = lastSetAt,
                 stale = System.currentTimeMillis() - session.startedAt > STALE_AFTER_MS,
             )
+        }
+    }
+
+    /** Copies a shared image in and opens "What is this?" (IB-03). */
+    fun onSharedImage(mimeType: String?, open: () -> InputStream?) {
+        viewModelScope.launch {
+            val name = open()?.let { scanImages.stage(it, mimeType) }
+            _nav.send(AppNav.Shared(name.orEmpty()))
         }
     }
 

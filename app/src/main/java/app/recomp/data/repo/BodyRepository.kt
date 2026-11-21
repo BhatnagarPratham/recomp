@@ -1,5 +1,6 @@
 package app.recomp.data.repo
 
+import app.recomp.data.body.ScanImages
 import java.time.LocalDate
 import app.recomp.domain.body.ScanTargets
 import app.recomp.domain.body.LeanScan
@@ -77,6 +78,8 @@ data class ScanInput(
     val score: Int? = null,
     val segmental: SegmentalLean? = null,
     val notes: String? = null,
+    /** A shared InBody screenshot kept with the scan (IB-03), by its file name; null keeps what the scan has. */
+    val imagePath: String? = null,
 )
 
 /** What saving a scan did. [slotSet] is true when this first scan set the usual slot (PRD §7.9). */
@@ -93,6 +96,7 @@ class BodyRepository @Inject constructor(
     private val workoutDao: WorkoutDao,
     private val prefs: SettingsPrefs,
     private val days: DayBoundary,
+    private val images: ScanImages,
 ) {
     private val zone: ZoneId get() = ZoneId.systemDefault()
 
@@ -214,6 +218,7 @@ class BodyRepository @Inject constructor(
             minsFromSlot = check.minutesFromSlot,
             protocolOk = check.ok,
             notes = input.notes?.trim()?.takeIf { it.isNotEmpty() },
+            imagePath = input.imagePath ?: base.imagePath,
         )
         val saved = db.withTransaction {
             val scanId = if (existing == null) bodyDao.insert(row) else row.id.also { bodyDao.update(row) }
@@ -226,13 +231,18 @@ class BodyRepository @Inject constructor(
         return ScanSaved(saved, check, slotSet)
     }
 
-    /** The scan's weigh-in goes with it (TRD §5.6). */
+    /** The scan's weigh-in goes with it (TRD §5.6), and so does its image (IB-03). */
     suspend fun deleteScan(id: Long) = withContext(NonCancellable) {
-        db.withTransaction {
+        val scan = db.withTransaction {
             bodyDao.weighInForScan(id)?.let { bodyDao.delete(it) }
-            bodyDao.scan(id)?.let { bodyDao.delete(it) }
+            bodyDao.scan(id)?.also { bodyDao.delete(it) }
         }
+        images.delete(scan?.imagePath)
     }
+
+    /** Images no scan keeps, such as a share you backed out of, go after a day. */
+    suspend fun cleanImages(now: Long = System.currentTimeMillis()) =
+        images.clean(bodyDao.observeScans().first().mapNotNull { it.imagePath }.toSet(), now)
 
     /** IB-05: the scan that sets BMR on [today] (TRD §5.3), or null. */
     suspend fun countingScan(today: LocalDate): LeanScan? = ScanTargets.counting(bodyDao.observeScans().first().map { it.toLeanScan() }, today)

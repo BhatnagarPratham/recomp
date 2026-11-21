@@ -1,5 +1,7 @@
 package app.recomp.data.repo
 
+import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import app.recomp.domain.body.ScanTargets
 import app.recomp.data.db.CheckinDao
@@ -59,6 +61,9 @@ data class MaintenanceEstimate(val kcal: Int, val weekStart: LocalDate) {
 }
 
 /** What a Settings change would do to the targets (PRD §7.1: shown before it saves). */
+/** A scan that would move BMR (IB-05): its day and time, and BMR now against the scan's. */
+data class ScanOffer(val date: LocalDate, val measuredAt: Long, val targetBmrKcal: Int, val scanBmrKcal: Int)
+
 data class TargetPreview(
     val before: NutritionTargetEntity?,
     val after: NutritionTargets,
@@ -123,6 +128,21 @@ class PersonaRepository @Inject constructor(
      * §5.3), else null for Mifflin-St Jeor. It's used whenever targets are worked out; they never change on their own.
      */
     suspend fun leanMassKg(today: LocalDate? = null): Double? = body.countingScan(today ?: days.today())?.leanKg
+
+    /**
+     * IB-05, PRD §12.11: *Preview targets with your scan*, while the scan that counts puts BMR 20 kcal or more from the
+     * target in force today and you haven't dismissed it for that scan. Targets never change on their own.
+     */
+    val scanOffer: Flow<ScanOffer?> = combine(body.observeScans(), days.observeToday(), prefs.scanTargetsDismissed, ::Triple).flatMapLatest { (scans, today, dismissed) ->
+        nutritionDao.observeTargetOn(today).map { target ->
+            val scan = ScanTargets.counting(scans.map { it.toLeanScan() }, today) ?: return@map null
+            val scanBmr = ScanTargets.bmr(scan)
+            if (target == null || scan.measuredAt == dismissed || !ScanTargets.worthPreview(target.bmrKcal.toDouble(), scanBmr)) null
+            else ScanOffer(scan.date, scan.measuredAt, target.bmrKcal, scanBmr.roundToInt())
+        }
+    }.distinctUntilChanged()
+
+    suspend fun dismissScanOffer(measuredAt: Long) = prefs.setScanTargetsDismissed(measuredAt)
 
     val leanMass: Flow<Double?> = combine(body.observeScans(), days.observeToday()) { scans, today ->
         ScanTargets.counting(scans.map { it.toLeanScan() }, today)?.leanKg
