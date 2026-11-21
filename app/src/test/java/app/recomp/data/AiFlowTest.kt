@@ -3,6 +3,7 @@ package app.recomp.data
 import androidx.datastore.preferences.core.edit
 import app.recomp.data.ai.AiKeyStore
 import app.recomp.data.ai.DnsHostResolver
+import app.recomp.data.ai.MealSchema
 import app.recomp.data.db.FoodEntity
 import app.recomp.data.repo.AiItemToLog
 import app.recomp.data.repo.CustomFood
@@ -924,5 +925,27 @@ class AiFlowTest {
         assertEquals("10.0.0.7", quick.addresses("box.example").single().hostAddress)
         val failing = DnsHostResolver(limitMs = 3_000) { throw java.net.UnknownHostException("nowhere.example") }
         assertTrue(failing.addresses("nowhere.example").isEmpty())
+    }
+
+    @Test
+    fun `a programme review whose name lookup hangs doesn't hold up a meal estimate either`() = runBlocking {
+        ai.setEnabled(true)
+        ai.setProvider(AiProviderId.COMPATIBLE)
+        ai.setCompatible("https://ai.far.example/v1", "m", 0.0, 0.0)
+        ai.saveKey("far-test-key")
+        app.resolver.hosts["ai.far.example"] = listOf("104.18.2.115")
+        app.localNetwork.allowed.value = false
+        app.estimator.next = { FakeEstimator.reply(AiStatus.OK, MealEstimate(listOf(item()), null)) }
+
+        val hang = CompletableDeferred<Unit>()
+        app.resolver.hang = hang
+        val review = async { ai.coach("SYSTEM", "USER", MealSchema.schema) }
+        withTimeout(5_000) { while (app.resolver.lookups.isEmpty()) delay(10) }
+        assertTrue(withTimeout(5_000) { ai.estimate("roti", Origin.HOME) } is EstimateResult.Estimated)
+        assertFalse(review.isCompleted)
+
+        hang.complete(Unit)
+        assertEquals(AiStatus.OK, withTimeout(5_000) { review.await() }.status)
+        assertEquals(1, app.sender.calls.size)
     }
 }
