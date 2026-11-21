@@ -506,7 +506,7 @@ class HealthFlowTest {
 
         assertEquals(1, app.healthSource.reads[HealthFeature.WORKOUTS])
         assertEquals(setOf("new-walk-1", "new-yoga-1"), imported().map { it.hcRecordId }.toSet())
-        assertEquals(first.replace("walk-1", "new-walk-1").replace("yoga-1", "new-yoga-1").replace("a-", "new-a-"), everything())
+        assertEquals(first.replace("walk-1", "new-walk-1").replace("yoga-1", "new-yoga-1").replace(Regex("\\ba-([wfb])\\b"), "new-a-$1"), everything())
     }
 
     @Test
