@@ -21,6 +21,8 @@ import app.recomp.data.db.CheckinDecision
 import app.recomp.data.db.MealDraftEntity
 import app.recomp.data.db.WeeklyCheckinEntity
 import app.recomp.data.db.readers
+import app.recomp.data.db.PhotoPose
+import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.data.db.ScanDraftEntity
 import app.recomp.data.db.SleepSource
 import app.recomp.data.db.YogaDetailEntity
@@ -202,6 +204,8 @@ class BackupTest {
         health.ensureDay(today.minusDays(1))
         health.setTypedSleep(today.minusDays(1), 7.5)
         health.insert(ScanDraftEntity(measuredAt = now - 5 * dayMs, weightG = 80_600, bodyFatPct = 25.4, bmrKcal = 1_690, hcIds = listOf("w-1", "f-1", "b-1")))
+        // M17: a progress photo's row (the file itself only travels with *Include photos*).
+        app.db.photoDao().insert(ProgressPhotoEntity(logDate = today, takenAt = now, pose = PhotoPose.FRONT, filePath = "photos/test-front.jpg"))
         app.db.workoutDao().insertExtraSession(
             WorkoutSessionEntity(
                 routineId = null, kind = SessionKind.CARDIO, status = SessionStatus.COMPLETED, startedAt = now - 4 * dayMs,

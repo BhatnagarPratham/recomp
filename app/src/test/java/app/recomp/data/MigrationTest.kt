@@ -1,6 +1,8 @@
 package app.recomp.data
 
+import app.recomp.data.db.PhotoPose
 import app.recomp.data.db.ProgrammeReviewEntity
+import app.recomp.data.db.ProgressPhotoEntity
 import app.recomp.data.db.ScanDraftEntity
 import app.recomp.data.db.SleepSource
 import android.database.sqlite.SQLiteDatabase
@@ -525,7 +527,7 @@ class MigrationTest {
             assertEquals(listOf("w", "f", "b"), health.draft(id)!!.hcIds)
             assertEquals(2, health.drafts().size)
         }
-        assertEquals(12, room.openHelper.readableDatabase.version)
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()
     }
 
@@ -598,6 +600,27 @@ class MigrationTest {
         runBlocking {
             assertEquals(1L, room.workoutDao().session(1)!!.id)
             assertEquals(emptyList<BodyWeightEntity>(), room.bodyDao().weighIns())
+        }
+        assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
+        room.close()
+    }
+
+    @Test
+    fun `12 to 13 adds progress photos and keeps M13's scan drafts`() {
+        val file = File(tmp.root, "v12.db")
+        createAt(12, file).use { db ->
+            db.execSQL("INSERT INTO scan_draft (id, measured_at, weight_g, hc_ids) VALUES (1, 100, 80000, '[]')")
+            db.execSQL("INSERT INTO workout_session (id, kind, status, started_at, ended_at, log_date) VALUES (1, 'STRENGTH', 'COMPLETED', 0, 1, '2026-11-10')")
+        }
+        val room = openWithRoom(file)
+        runBlocking {
+            assertEquals(80_000, room.healthDao().draft(1)!!.weightG)
+            assertEquals(1L, room.workoutDao().session(1)!!.id)
+            val photos = room.photoDao()
+            assertTrue(photos.all().isEmpty())
+            val id = photos.insert(ProgressPhotoEntity(logDate = LocalDate.of(2026, 11, 21), takenAt = 5, pose = PhotoPose.SIDE, filePath = "photos/a.jpg"))
+            assertEquals(PhotoPose.SIDE, photos.get(id)!!.pose)
+            assertEquals("photos/a.jpg", photos.get(id)!!.filePath)
         }
         assertEquals(Schemas.current, room.openHelper.readableDatabase.version)
         room.close()

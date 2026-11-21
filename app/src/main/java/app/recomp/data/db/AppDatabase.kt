@@ -37,8 +37,9 @@ import kotlinx.serialization.json.Json
         DailyActivityEntity::class,
         ProgrammeReviewEntity::class,
         ScanDraftEntity::class,
+        ProgressPhotoEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -59,6 +60,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun backupCheckDao(): BackupCheckDao
     abstract fun nudgeDao(): NudgeDao
     abstract fun historyDao(): HistoryDao
+    abstract fun photoDao(): PhotoDao
 
     companion object {
         const val NAME = "recomp.db"
@@ -74,6 +76,7 @@ abstract class AppDatabase : RoomDatabase() {
             Migrations.MIGRATION_9_10,
             Migrations.MIGRATION_10_11,
             Migrations.MIGRATION_11_12,
+            Migrations.MIGRATION_12_13,
         )
     }
 }

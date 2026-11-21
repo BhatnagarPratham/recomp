@@ -16,6 +16,7 @@ import app.recomp.data.db.FoodLogDao
 import app.recomp.data.db.HealthDao
 import app.recomp.data.db.NudgeDao
 import app.recomp.data.db.HistoryDao
+import app.recomp.data.db.PhotoDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.ProgrammeReviewDao
 import app.recomp.data.db.ReviewDao
@@ -95,6 +96,9 @@ object DatabaseModule {
 
     @Provides
     fun provideHistoryDao(db: AppDatabase): HistoryDao = db.historyDao()
+
+    @Provides
+    fun providePhotoDao(db: AppDatabase): PhotoDao = db.photoDao()
 
     @Provides
     fun provideProgrammeReviewDao(db: AppDatabase): ProgrammeReviewDao = db.programmeReviewDao()
