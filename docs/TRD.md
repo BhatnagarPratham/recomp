@@ -26,7 +26,7 @@
 | Charts | Compose `Canvas` | M4's weight chart is a small hand-drawn chart (dots and a line), so it needs no library. The v1.1 charts reuse it as a shared component (M8). Vico is the candidate only if a chart needs pan and zoom. |
 | Health data | Health Connect (`androidx.health.connect:connect-client`) | P1. Steps come from whichever app writes them; §6.3. |
 | On-device OCR | An open-source on-device recogniser (e.g. Tesseract), picked after a trial on real labels | P1 (M18). Nutrition labels, without AI. Not ML Kit: it sends usage metrics to Google, which §7 doesn't allow (decided 2026-10-18). |
-| Widget | Jetpack Glance | P1 (M12). |
+| Widget | Jetpack Glance (`androidx.glance:glance-appwidget` 1.2.0) | P1 (M12). One responsive widget, redrawn from `TodaySnapshot`. |
 | AI | Anthropic Java SDK (`com.anthropic:anthropic-java`); from M7, OpenAI, Gemini and OpenAI-compatible endpoints over OkHttp | Kotlin uses the Java SDK. Builds and passes R8 (M0). Its class-based structured outputs don't work on Android (§6.2). The other providers need no SDK: kotlinx.serialization and hand-written schemas, behind one `AiProvider` interface (M7, AI-05). |
 | Barcode | CameraX with ZXing (on-device) | P1 (M18). ML Kit is ruled out for the same reason as OCR. |
 | Serialization | kotlinx.serialization | Seed data and export files. |
@@ -170,7 +170,8 @@ ai_request_log      id, created_at, kind(MEAL_TEXT|MEAL_PHOTO|LABEL|INBODY|FIT_C
   - `ai_notices_seen`, a string set with one entry per provider and kind (`OPENAI:MEAL_TEXT`), and per server for the compatible provider (`COMPATIBLE/openrouter.ai:MEAL_TEXT`). The older boolean `ai_notice_seen` is still read as Anthropic's meal notice and never written.
   - The API keys are not here: one per provider, encrypted, in their own `secrets` DataStore file (`anthropic_api_key`, `openai_api_key`, `gemini_api_key`, `compatible_api_key`).
 - `scan_slot` (IB-02): the usual scan weekday and time of day.
-- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh.
+- `reminders` (RM-01, M12): JSON with each reminder's on or off and time in minutes after midnight (`weighIn`, `lunch`, `evening`, `workout`, `checkin`), the meal the lunch reminder watches (`lunchSlot`, a slot key; absent is the meal for its time), the workout reminder's ISO weekdays (`workoutDays`), and `scan` (on or off; its time follows `scan_slot`). Absent, or a reminder missing from it, is off at its default time. Exported like every other setting; import checks the times and weekdays.
+- From v1.1, each milestone lists its own keys (§10). **Device state** (the reminder ledger, Health Connect change tokens, the backup folder's address) lives in its own `device` DataStore file, which exports and Android's own backup leave out, so a restored or transferred phone starts it fresh. From M12 it holds `reminder_ledger`: the log day's reminders sent and handled (below, §6.6).
 
 M1 and M2 stored a `TrainingSettings` JSON under `training`. A DataStore `DataMigration` moves it into `persona` and `keep_screen_on` on first read after the upgrade and deletes the old key. The install then has a training setup but no goal or profile, so onboarding opens, pre-filled from it (PRD §7.1).
 
@@ -841,6 +842,13 @@ Saved meals push the number of AI calls down over time. Opus 5.5 is the default.
 - **Channels:** *Workout* (ongoing), *Rest timer* (high importance), *Reminders*, *Weekly check-in*.
 - **Scheduling:** reminders use AlarmManager's inexact alarms that may fire while the phone dozes (`setAndAllowWhileIdle`; no exact-alarm permission), since Doze holds WorkManager's jobs until maintenance windows that grow rarer the longer the phone is idle. A few minutes either way is fine. WorkManager stays for sync and backups (M13, M16).
 - **Permission:** `POST_NOTIFICATIONS` is requested at the first opt-in.
+
+**Reminders as built (M12, `reminders/`).**
+- **Times.** Each reminder is a wall-clock time on calendar weekdays (the check-in on Monday, the workout reminder on the days you pick, the scan reminder 3 hours before your usual slot, the evening before when that crosses midnight). The 2-a-day cap counts per *log* day (PR-03): a reminder set for 01:00 belongs to the day before and comes after its evening ones. A time that a clock change skips moves forward.
+- **One alarm.** `ReminderScheduler` keeps a single inexact alarm (`setAndAllowWhileIdle`, `RTC_WAKEUP`) at the next ring, or at the next day boundary when a widget is on the home screen and that's sooner. `ReminderReceiver` runs what's due, redraws the widget and sets the alarm again. It also listens for `BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, `TIMEZONE_CHANGED` and `TIME_SET`, since Android drops alarms on a restart and an update and a clock change makes them stale. The app sets it again at launch (a force-stop clears it) and whenever `reminders`, "day starts at" or the scan slot change.
+- **The ledger** (`ReminderDay` in `:domain`, `reminder_ledger` in the `device` store). At each wake, every ring of the log day that's due and not yet handled is looked at once, in time order: it's sent if fewer than two have gone today, its skip rule says it's still needed, notifications are allowed and its channel is on. Otherwise it's handled unsent, so a skipped or blocked reminder never uses up the cap. A ring more than 90 minutes late (the phone was off) is dropped rather than sent at an odd hour. Turning a reminder on, or changing its time, after its time today marks it handled, so it starts tomorrow. The ledger is written before the notification is shown, so a crash can lose a reminder but never send one twice; and a time-zone change that brings a time round again doesn't resend it.
+- **Skip rules and text** read one `TodaySnapshot` (`ReminderText.content`), the same one Today's evening card and the widget read, so they can't disagree.
+- **Notifications** use one id per kind, so a later one replaces an earlier one of its kind. Tapping opens the screen it's about (Today, the Food tab, Body or the check-in). The evening nudge's suggestions are up to three actions; one logs that portion into the meal for the time of day (`NudgeActionReceiver`) and the notification then offers *Undo*.
 
 ### 6.7 Share target (IB-03, NU-19, NU-20)
 
