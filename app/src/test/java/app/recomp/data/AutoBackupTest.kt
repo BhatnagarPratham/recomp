@@ -1,6 +1,7 @@
 package app.recomp.data
 
 import app.recomp.data.backup.AutoBackup
+import app.recomp.data.backup.BackupManager
 import app.recomp.data.backup.BackupRun
 import app.recomp.data.backup.BackupStorage
 import app.recomp.data.backup.StoredFile
@@ -294,6 +295,22 @@ class AutoBackupTest {
         assertEquals("recomp-backup-2026-09-13.zip", run.name)
         assertEquals(listOf("recomp-backup-2026-09-13.zip"), storage.files.keys.filter { BackupRotation.dateOf(it) != null })
         assertTrue(storage.files.getValue(run.name).size > 2)
+    }
+
+    @Test
+    fun `a manual export saved into the backup folder is never counted or deleted by the rotation`() = runBlocking {
+        app.device.setBackupTarget(folder)
+        val export = BackupManager.fileName(LocalDate.of(2026, 9, 6))
+        assertEquals("recomp-export-2026-09-06.zip", export)
+        assertNull(BackupRotation.dateOf(export))
+        storage.files[export] = byteArrayOf(9)
+        // Ten weeks of automatic backups, one on the export's own day: the export outlives them all.
+        (0L until 10).forEach { week ->
+            app.clock.instant = sunday(week)
+            assertTrue(backup.run() is BackupRun.Done)
+        }
+        assertTrue(export in storage.files)
+        assertEquals(8, storage.files.keys.count { BackupRotation.dateOf(it) != null })
     }
 
     @Test

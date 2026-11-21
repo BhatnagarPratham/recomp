@@ -679,8 +679,11 @@ class BackupManager @Inject constructor(
         const val TOO_BIG = "This file is too big to be a Recomp backup."
         const val NOT_A_BACKUP = "This file isn't a Recomp backup."
 
-        /** `recomp-backup-2026-10-18.zip`. */
-        fun fileName(date: java.time.LocalDate) = "recomp-backup-$date.zip"
+        /**
+         * The name *Export all data* suggests: `recomp-export-2026-10-18.zip`. It's not an automatic backup's name, so
+         * an export saved into the backup folder is never counted, or deleted, by that folder's rotation (#27 N1).
+         */
+        fun fileName(date: java.time.LocalDate) = "recomp-export-$date.zip"
 
         fun encodeSettings(prefs: Preferences): Map<String, SettingValue> = prefs.asMap().entries.associate { (key, value) ->
             key.name to when (value) {
