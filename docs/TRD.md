@@ -1842,7 +1842,7 @@ Tests cover:
   - the 60-day and protocol rules for which scan counts;
   - the body-fat goal weight;
   - a shared image with and without a matching draft, and the image deleted with its scan.
-- **Risks:** the image is sensitive: it stays in app-private storage, out of Android's own backup, and is never sent anywhere. Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
+- **Risks:** the image is sensitive: it stays in app-private storage and out of Android's own backup, and no AI or server ever gets it. Since the backup fixes (2026-11-22) it also goes into your own backups (an export, or the automatic backup folder you chose) when *Include photos* is on (§6.5). Lean mass from Health Connect is derived from weight and body fat % (§6.3), so it can differ a little from the machine's own figure.
 - **Parallel:** with M16.
 
 **M15 results (2026-11-21; no Room change).** Built to PRD §12.11 and the block above. Where the spec was silent:
