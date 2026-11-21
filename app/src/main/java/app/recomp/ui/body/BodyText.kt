@@ -171,6 +171,9 @@ object BodyText {
     /** A change in cm: "−1.2 cm", "−0.4 in". */
     fun signedLength(cmDelta: Double, style: UnitStyle): String = signedIn(UnitMath.lengthOf(cmDelta, style.units), style.length, style)
 
+    /** The height fields' units in lb mode: feet, then inches. */
+    const val FEET = "ft"
+
     /** "175 cm", "5 ft 9 in". */
     fun height(cm: Double, style: UnitStyle): String =
         if (style.imperial) UnitMath.feetAndInches(cm).let { (ft, inches) -> "$ft ft $inches in" } else "${GoalText.d(cm)} cm"

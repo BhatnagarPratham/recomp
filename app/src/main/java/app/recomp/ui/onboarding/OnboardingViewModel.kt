@@ -403,7 +403,7 @@ class OnboardingViewModel @Inject constructor(
                     walkthrough = items,
                     choices = items.associate { it.slotKey to it.selectedId },
                     // The library is seeded in kg; a choice of lb shows lb steps (PRD §12.16).
-                    increments = items.flatMap { it.options }.associate { it.id to LoadUnits.defaultIn(it.incrementG, state.draft.units) },
+                    increments = items.flatMap { it.options }.associate { it.id to LoadUnits.defaultIn(it.incrementG, it.equipment, state.draft.units) },
                     busy = false,
                 )
             }
@@ -446,7 +446,9 @@ class OnboardingViewModel @Inject constructor(
             draft = it.draft.copy(units = units),
             about = it.about.inUnits(units),
             goal = it.goal.inUnits(units),
-            increments = it.increments.mapValues { (_, g) -> LoadUnits.defaultIn(g, units) },
+            increments = it.increments.mapValues { (id, g) ->
+                it.walkthrough.flatMap { item -> item.options }.firstOrNull { e -> e.id == id }?.let { e -> LoadUnits.defaultIn(g, e.equipment, units) } ?: LoadUnits.defaultIn(g, units)
+            },
         )
     }
 

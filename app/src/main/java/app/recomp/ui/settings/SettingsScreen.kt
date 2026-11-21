@@ -486,7 +486,7 @@ private fun HeightDialog(first: String, second: String, style: UnitStyle, onDism
         text = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    ft, { ft = it }, Modifier.weight(1f), singleLine = true, suffix = { Text("ft") }, isError = !valid,
+                    ft, { ft = it }, Modifier.weight(1f), singleLine = true, suffix = { Text(BodyText.FEET) }, isError = !valid,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 OutlinedTextField(

@@ -166,6 +166,15 @@ object LoadUnits {
     }
 
     /**
+     * [defaultIn] for an exercise of [equipment]: a step still on the other unit's default for that equipment takes
+     * [to]'s default (a 4 kg kettlebell step becomes 5 lb, as PRD §12.16 lists, not the nearer 10 lb).
+     */
+    fun defaultIn(incrementG: Int, equipment: Equipment, to: Units): Int {
+        val other = if (to == Units.IMPERIAL) Units.METRIC else Units.IMPERIAL
+        return if (incrementG == defaultIncrementG(equipment, other)) defaultIncrementG(equipment, to) else defaultIn(incrementG, to)
+    }
+
+    /**
      * The switch dialog's mapping (PRD §12.16): a step moves to the nearest step offered in the other unit, the
      * larger on a tie. 2.5 kg → 5 lb; 5 lb → 2.5 kg.
      */

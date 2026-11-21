@@ -97,7 +97,7 @@ class TrainingRepository @Inject constructor(
      */
     suspend fun moveDefaultSteps(to: Units, keep: Set<Long>) {
         val moved = exerciseDao.observeActive().first().filter { it.id !in keep && Loads.logsLoad(it.loadType) }.mapNotNull { e ->
-            LoadUnits.defaultIn(e.incrementG, to).takeIf { it != e.incrementG }?.let { e.copy(incrementG = it) }
+            LoadUnits.defaultIn(e.incrementG, e.equipment, to).takeIf { it != e.incrementG }?.let { e.copy(incrementG = it) }
         }
         if (moved.isNotEmpty()) exerciseDao.updateAll(moved)
     }

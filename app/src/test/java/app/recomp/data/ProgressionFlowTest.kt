@@ -242,9 +242,29 @@ class ProgressionFlowTest {
         assertEquals(lb(20), less.loadG)
         val more = ProgressionRepository.onGrid(Recommendation(Action.DELOAD, 12_000, listOf(8), assisted = true), 11_340, five, Units.IMPERIAL)
         assertEquals(lb(30), more.loadG)
-        // A repeat keeps a kg-era 100 kg to the nearest 0.01 lb (220.46 lb, 99,999 g), so the field types back exactly; kg changes nothing.
-        assertEquals(99_999, ProgressionRepository.onGrid(Recommendation(Action.REPEAT, 100_000, listOf(8)), 100_000, five, Units.IMPERIAL).loadG)
+        // A repeat and an add-a-rep keep exactly what you lifted, even when 0.01 lb would round it up; kg changes nothing.
+        assertEquals(100_000, ProgressionRepository.onGrid(Recommendation(Action.REPEAT, 100_000, listOf(8)), 100_000, five, Units.IMPERIAL).loadG)
+        assertEquals(42_500, ProgressionRepository.onGrid(Recommendation(Action.ADD_REPS, 42_500, listOf(9, 9, 8)), 42_500, five, Units.IMPERIAL).loadG)
         val kg = Recommendation(Action.INCREASE, 102_500, listOf(8))
         assertEquals(kg, ProgressionRepository.onGrid(kg, 100_000, 2_500, Units.METRIC))
+    }
+
+    @Test
+    fun `in lb, a kg-era repeat logged as shown is the same weight, not a heavier record`() = runBlocking {
+        val first = benchSession(42_500, 9, 8, 8)
+        benchSession(42_500, 9, 8, 8)
+        inLb(app.workouts.observeSessionExercises(first).first().first().exercise.id)
+        // 42,500 g shows as 93.7 lb, which is 42,502 g: logging the target as shown must stay 42,500 g.
+        clock += 86_400_000
+        val id = app.workouts.startRoutine(push().id, now = clock)
+        val target = benchRecommendation(id)!!
+        assertTrue(target.action == Action.ADD_REPS || target.action == Action.REPEAT)
+        assertEquals(42_500, target.loadG)
+        val bench = app.workouts.observeSessionExercises(id).first().first()
+        bench.sets.sortedBy { it.setIndex }.forEach { set -> app.workouts.completeSet(set.id, target.loadG, 9, null, now = clock + 60_000) }
+        app.workouts.finish(id, endedAt = clock + 3_600_000)
+        val types = app.progression.observeSessionRecords(id).first().map { it.type }.toSet()
+        assertTrue("no heavier-lift record: $types", PrType.MAX_LOAD !in types)
+        assertTrue(app.workouts.observeSessionExercises(id).first().first().sets.all { it.loadG == 42_500 })
     }
 }

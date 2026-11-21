@@ -123,4 +123,14 @@ class UnitsTest {
         assertEquals(2500, LoadUnits.defaultIn(2268, Units.METRIC))
         assertEquals(2500, LoadUnits.defaultIn(2500, Units.METRIC))
     }
+
+    @Test
+    fun `an exercise still on its kg default gets its equipment's lb default`() {
+        assertEquals(2268, LoadUnits.defaultIn(4000, Equipment.KETTLEBELL, Units.IMPERIAL))
+        assertEquals(4536, LoadUnits.defaultIn(5000, Equipment.CABLE, Units.IMPERIAL))
+        assertEquals(2268, LoadUnits.defaultIn(2500, Equipment.BARBELL, Units.IMPERIAL))
+        // Not the default: the nearest step, as before.
+        assertEquals(4536, LoadUnits.defaultIn(4000, Equipment.BARBELL, Units.IMPERIAL))
+        assertEquals(4000, LoadUnits.defaultIn(2268, Equipment.KETTLEBELL, Units.METRIC))
+    }
 }

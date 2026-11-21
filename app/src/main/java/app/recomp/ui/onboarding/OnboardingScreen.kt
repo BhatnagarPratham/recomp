@@ -53,6 +53,7 @@ import app.recomp.domain.persona.Units
 import app.recomp.domain.persona.WeightSource
 import app.recomp.domain.training.LogDates
 import app.recomp.domain.units.UnitStyle
+import app.recomp.ui.body.BodyText
 import app.recomp.ui.components.ChoiceChips
 import app.recomp.ui.components.ConfirmDialog
 import app.recomp.ui.components.DateDialog
@@ -223,7 +224,7 @@ private fun LazyListScope.aboutStep(ui: OnboardingUi, vm: OnboardingViewModel) {
             val style = unitStyle(ui.about.units)
             val heightError = (ui.about.height.isNotBlank() || ui.about.heightIn.isNotBlank()) && ui.about.heightCm == null
             if (style.imperial) {
-                NumberField("Height", ui.about.height, "ft", Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
+                NumberField("Height", ui.about.height, BodyText.FEET, Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }
                 NumberField("", ui.about.heightIn, "in", Modifier.weight(0.8f), error = heightError) { t -> vm.updateAbout { it.copy(heightIn = t) } }
             } else {
                 NumberField("Height", ui.about.height, UnitStyle.METRIC.length, Modifier.weight(1f), error = heightError) { t -> vm.updateAbout { it.copy(height = t) } }

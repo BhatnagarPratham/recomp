@@ -21,7 +21,7 @@ class UnitsGuardTest {
     )
 
     /** Unit words inside a string literal: "42 kg", "kg", "$x cm", "in kg". Inches aren't checked: "in" is a common word. */
-    private val unit = Regex("""(?<![A-Za-z])(kg|lb|cm)(?![A-Za-z])""")
+    private val unit = Regex("""(?<![A-Za-z])(kg|lbs?|cm|pounds?|kilos?|kilograms?|inch(es)?|ft)(?![A-Za-z])""")
 
     /** Literal text that names a unit without formatting a value: g per kg (protein, PRD §12.16), "/kg". */
     private val exempt = listOf(

@@ -38,7 +38,11 @@ class UnitSwitch @Inject constructor(
 
     /** Switches to [to]; with [moveSteps], every active exercise that logs a load gets its step's nearest one in [to]. */
     suspend fun switch(to: Units, moveSteps: Boolean) {
-        if (moveSteps) {
+        // The units first, so a failed write leaves nothing moved; a failed move puts the units back.
+        val from = current()
+        prefs.updatePersona { it.copy(units = to) }
+        if (!moveSteps) return
+        try {
             db.withTransaction {
                 val moved = exerciseDao.observeActive().first().filter { Loads.logsLoad(it.loadType) }.mapNotNull { e ->
                     val target = LoadUnits.nearestIncrementG(e.incrementG, to)
@@ -46,8 +50,11 @@ class UnitSwitch @Inject constructor(
                 }
                 if (moved.isNotEmpty()) exerciseDao.updateAll(moved)
             }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            prefs.updatePersona { it.copy(units = from) }
+            throw e
         }
-        prefs.updatePersona { it.copy(units = to) }
     }
 
     suspend fun current(): Units = prefs.persona.first().units

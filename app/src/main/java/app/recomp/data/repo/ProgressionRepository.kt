@@ -276,7 +276,10 @@ class ProgressionRepository @Inject constructor(
                     else -> LoadUnits.increase(topG, load, incrementG, units)
                 }
                 Action.DELOAD -> LoadUnits.toGrid(load, incrementG, units, if (rec.assisted) RoundingMode.UP else RoundingMode.DOWN)
-                else -> LoadUnits.snap(load, units)
+                // A repeat or add-a-rep keeps exactly what you lifted (PRD §12.16). Snapping a kg-era load to 0.01 lb can
+                // round it up (42,500 g → 42,502 g), which would log a false heavier lift; LoadEntry keeps the stored
+                // grams when the shown text is unchanged, so typing what's shown still hits the target.
+                else -> load
             }
             return rec.copy(loadG = snapped)
         }

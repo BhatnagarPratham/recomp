@@ -53,6 +53,9 @@ object UnitsText {
 
     const val HISTORY = "Your logged workouts, weigh-ins and measurements stay exactly as they are."
 
+    /** Moving is by nearest step, so going back doesn't always return the old step (1 kg → 2.5 lb → 1.25 kg). */
+    const val ROUND_TRIP = "Switching back later moves steps to the nearest step again, which may not be the one you had."
+
     fun keep(to: Units) = "If you keep them, they show converted, e.g. 2.5 kg as ${Labels.step(2_500, unitStyle(to))}."
 }
 
@@ -89,6 +92,7 @@ fun UnitsSetting(viewModel: UnitsViewModel = hiltViewModel()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     moves.forEach { Text(UnitsText.move(it, from, toStyle)) }
                     Text(UnitsText.HISTORY, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(UnitsText.ROUND_TRIP, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(UnitsText.keep(to), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
