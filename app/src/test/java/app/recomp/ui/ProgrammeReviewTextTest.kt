@@ -33,6 +33,14 @@ class ProgrammeReviewTextTest {
         assertNull(ProgrammeReviewText.adviceOnly(Suggestion(SuggestionKind.ADVICE, null, "x")))
         assertTrue("library" in ProgrammeReviewText.adviceOnly(Suggestion(SuggestionKind.SWAP, null, "x", AdviceOnly.UNKNOWN_EXERCISE))!!)
         assertTrue("safe ranges" in ProgrammeReviewText.adviceOnly(Suggestion(SuggestionKind.CALORIES, null, "x", AdviceOnly.OUTSIDE_GUARDRAILS))!!)
+        assertEquals(
+            "This text goes to the AI server, and nothing else. Nothing changes until you tap Apply.",
+            ProgrammeReviewText.sentTo(app.recomp.domain.ai.AiProviderId.COMPATIBLE, withKey = false),
+        )
+        assertEquals(
+            "This text goes to Claude with your API key, and nothing else. Nothing changes until you tap Apply.",
+            ProgrammeReviewText.sentTo(app.recomp.domain.ai.AiProviderId.ANTHROPIC, withKey = true),
+        )
         assertEquals("It's been 7 weeks of training. A lighter week now helps you keep progressing: each lift at 90% for a week.", ProgrammeReviewText.deloadLine(7))
     }
 }

@@ -1475,7 +1475,14 @@ Tests cover:
 - Repository (`ProgrammeReviewFlowTest`): the report from a real week; the gate, effort, timeout and what was sent; an invalid reply; every kind applied, with *Undo*; a pending deload becoming the next workout's target once; the guardrail; the deload card.
 - `CoachRequestTest`: the request against a mock server for Anthropic and OpenAI (schema, effort, output limit) and parsing.
 - `MigrationTest`: 10 to 11.
-- `ProgrammeReviewTextTest`: the suggestion lines.
+- `ProgrammeReviewTextTest`: the suggestion lines and where the text goes.
+
+| Check | Result |
+|-------|--------|
+| Backup, then the release over the real data | ✅ Exported first (schema 10). The 10→11 migration ran with no crash. Today, Train and Body open. Today's check-in card has the line about the AI review. Train shows no deload card, since the user is a beginner. This week's review ends with *Ask AI to review your programme*, and its preview built from the real week with Goal, Food and Training only, in relative terms. Nothing was sent, answered or logged. |
+| Dev install with invented data | ✅ `app.recomp.m11dev`, uninstalled afterwards. A review went to a stand-in OpenAI-compatible server on the Mac over adb reverse: no key over http, 16,000 max tokens, and the reply showed in 3.1 s. Suggestions rendered, with the unknown exercise as advice. *Apply* and *Undo* worked on a sets change, and a calorie change went through its before-and-after dialog, after which Today showed the new target. |
+| Fixed during the phone run | The line under the preview said the text goes "to The AI server with your API key"; a server over plain http gets no key. The split went as `ppl` rather than its name. |
+| Not run on the phone | A real provider's reply (the tests use a mock server), the scheduled deload card (needs an intermediate lifter with weeks of history), and the history list's past reviews. The tests cover them. |
 
 #### M12: Nudges, reminders and the widget
 

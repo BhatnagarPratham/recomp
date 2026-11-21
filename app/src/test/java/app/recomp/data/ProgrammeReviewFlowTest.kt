@@ -112,6 +112,8 @@ class ProgrammeReviewFlowTest {
         listOf("male", "175", "1996", "30 years").forEach { assertFalse(it, it.lowercase() in report.text.lowercase()) }
         assertTrue(report.routines.isNotEmpty() && report.exercises.isNotEmpty())
         assertTrue("Working sets per muscle" in report.text)
+        // The split by its name, as Train shows it.
+        assertTrue(report.text, "Split: ${app.prefs.currentTraining().split!!.label}." in report.text)
 
         val body = reviews.report(week, ReportSections(body = true))
         assertTrue("## Body trends" in body.text)

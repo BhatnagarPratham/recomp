@@ -179,7 +179,7 @@ class ProgrammeReviewRepository @Inject constructor(
         val sets = MuscleSets.weekly(dao.workingSets(weekStart, weekStart.plusDays(6)).map { MuscleSets.Work(it.primaryMuscle, it.secondaryMuscles, it.sets) })
         return TrainingFacts(
             experience = settings.experience.name.lowercase(),
-            split = settings.split?.name?.lowercase()?.replace('_', ' ') ?: "custom",
+            split = settings.split?.label ?: "custom",
             strengthDaysPerWeek = settings.strengthDaysPerWeek,
             routines = routines,
             sessions = sessions,

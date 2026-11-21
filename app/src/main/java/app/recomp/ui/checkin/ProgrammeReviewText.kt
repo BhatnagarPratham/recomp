@@ -35,7 +35,11 @@ object ProgrammeReviewText {
     const val UNDONE = "Undone"
     const val INVALID = "The reply didn't fit what the app can read, so nothing came of it. What was sent is kept below."
 
-    fun sentTo(provider: AiProviderId): String = "This text goes to ${provider.service} with your API key, and nothing else. Nothing changes until you tap Apply."
+    /** Where the text goes; a server reached over plain http is never sent the key. */
+    fun sentTo(provider: AiProviderId, withKey: Boolean): String {
+        val to = provider.service.let { if (it.startsWith("The ")) "the" + it.drop(3) else it }
+        return "This text goes to $to" + (if (withKey) " with your API key" else "") + ", and nothing else. Nothing changes until you tap Apply."
+    }
 
     fun failed(status: AiStatus, provider: AiProviderId): String =
         if (status == AiStatus.INVALID) INVALID else AiText.reason(status, provider)

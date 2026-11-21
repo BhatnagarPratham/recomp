@@ -91,6 +91,9 @@ class ProgrammeReviewViewModel @Inject constructor(
 
     val provider: StateFlow<AiProviderId> = ai.settings.map { it.provider }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AiProviderId.DEFAULT)
 
+    /** Whether the provider in use is sent the key: a server over plain http never is. */
+    val sendsKey: StateFlow<Boolean> = ai.settings.map { it.needsKey }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
     val history: StateFlow<List<ProgrammeReviewEntity>> = reviews.observeHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
@@ -182,6 +185,7 @@ class ProgrammeReviewViewModel @Inject constructor(
 fun ProgrammeReviewScreen(onBack: () -> Unit, viewModel: ProgrammeReviewViewModel = hiltViewModel()) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val provider by viewModel.provider.collectAsStateWithLifecycle()
+    val sendsKey by viewModel.sendsKey.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Scaffold(
@@ -204,7 +208,7 @@ fun ProgrammeReviewScreen(onBack: () -> Unit, viewModel: ProgrammeReviewViewMode
                     Card(Modifier.fillMaxWidth()) {
                         Text(ui.preview.orEmpty(), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
-                    Text(ProgrammeReviewText.sentTo(provider), color = muted)
+                    Text(ProgrammeReviewText.sentTo(provider, sendsKey), color = muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = viewModel::back, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Change") }
                         Button(onClick = viewModel::send, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text(ProgrammeReviewText.SEND) }
