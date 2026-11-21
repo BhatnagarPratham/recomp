@@ -22,6 +22,7 @@ import app.recomp.domain.checkin.CheckinProposal
 import app.recomp.domain.checkin.CheckinStatus
 import app.recomp.domain.checkin.EstimateGap
 import app.recomp.domain.checkin.WaistReading
+import app.recomp.domain.nutrition.NutritionCalculator
 import app.recomp.domain.nutrition.NutritionTargets
 import app.recomp.domain.nutrition.TargetInputs
 import app.recomp.domain.nutrition.TargetOverrides
@@ -248,7 +249,8 @@ class CheckinRepository @Inject constructor(
         val profile = personas.currentProfile() ?: return null
         val guarded = Guardrails.apply(profile, stored, today)
         val notes = guarded.notes.filter { it != GuardrailNote.AGGRESSIVE_NEEDS_ACK }
-        return Basis(profile, guarded.plan, notes, TargetInputs.from(profile, guarded.plan, today))
+        // With a recent scan, BMR (and so the floor under any proposal) is the scan's (IB-05); the estimate sets TDEE.
+        return Basis(profile, guarded.plan, notes, TargetInputs.from(profile, guarded.plan, today, personas.leanMassKg(today)))
     }
 
     private suspend fun trend(): List<TrendPoint> =
@@ -314,7 +316,7 @@ class CheckinRepository @Inject constructor(
             status = status,
             evaluation = evaluation,
             gap = AdaptiveTdee.gapOf(row.windowDays, row.loggedDays, row.weighIns, row.tdeeObs != null),
-            formulaTdee = personas.targetsFor(basis.profile, basis.plan, TargetOverrides(), today).tdeeKcal.roundToInt(),
+            formulaTdee = NutritionCalculator.startingTargets(basis.inputs).tdeeKcal.roundToInt(),
             current = current,
             proposal = open?.let { CheckinProposal.targets(basis.inputs, row.tdeeNew.toDouble(), overrides.copy(kcal = null), kcal = it) },
             adjustRange = open?.let { CheckinProposal.adjustRange(basis.inputs, row.tdeeNew.toDouble()) },

@@ -92,12 +92,15 @@ data class GoalForm(
     val goalWeightTouched: Boolean = false,
     val finishKind: FinishKind? = null,
     val finishDate: LocalDate? = null,
+    /** A body-fat finish line's target % (IB-05), as typed. */
+    val targetBodyFat: String = "",
     /** You picked a finish line (including none), so the goal's default no longer applies. */
     val finishChosen: Boolean = false,
     val acknowledged: Boolean = false,
 ) {
     val bodyFatPct: Double? get() = if (knowsBodyFat) bodyFat.toDecimal()?.takeIf { it in 3.0..70.0 } else null
     val goalWeightKg: Double? get() = goalWeight.toDecimal()?.takeIf { it in 30.0..300.0 }
+    val targetBodyFatPct: Double? get() = targetBodyFat.toDecimal()?.takeIf { it in 5.0..50.0 }
 }
 
 data class PaceOption(val pace: Pace, val text: String, val allowed: Boolean)
@@ -127,6 +130,8 @@ data class OnboardingUi(
     val before: NutritionTargetEntity? = null,
     /** Settings → Goal: the check-in's maintenance estimate, which the new targets use as TDEE (TRD §5.4). */
     val maintenance: MaintenanceEstimate? = null,
+    /** Lean mass from a recent on-protocol scan (IB-05): BMR, the suggested goal weight and the body-fat finish line use it. */
+    val leanMassKg: Double? = null,
     val busy: Boolean = false,
     /** Saving failed: the form stays as it is so you can try again. */
     val error: String? = null,
@@ -144,7 +149,8 @@ data class OnboardingUi(
             val finish = when (this.goal.finishKind) {
                 FinishKind.GOAL_WEIGHT -> FinishLine.GoalWeight
                 FinishKind.DATE -> this.goal.finishDate?.let(FinishLine::ByDate)
-                FinishKind.BODY_FAT, null -> null
+                FinishKind.BODY_FAT -> this.goal.targetBodyFatPct?.let(FinishLine::BodyFat)
+                null -> null
             }
             return GoalPlan(policy, pace, this.goal.goalWeightKg, finish, startedOn = today, aggressiveAcknowledged = this.goal.acknowledged)
         }
@@ -180,6 +186,8 @@ data class OnboardingUi(
             Step.FINISH -> when (goal.finishKind) {
                 FinishKind.GOAL_WEIGHT -> goal.goalWeightKg != null
                 FinishKind.DATE -> goal.finishDate?.isAfter(today) == true
+                // Needs a recent on-protocol scan for its goal weight (IB-05).
+                FinishKind.BODY_FAT -> leanMassKg != null && goal.targetBodyFatPct != null
                 else -> goal.goalWeight.isBlank() || goal.goalWeightKg != null
             }
             Step.REVIEW -> draft.missing.none { it != "goal" }
@@ -222,6 +230,7 @@ class OnboardingViewModel @Inject constructor(
                     step = if (mode == FlowMode.GOAL) Step.GOAL else Step.PRESET,
                     before = if (mode == FlowMode.GOAL) nutrition.targetOn(today) else null,
                     maintenance = if (mode == FlowMode.GOAL) personas.maintenance() else null,
+                    leanMassKg = personas.leanMassKg(today),
                 )
             }
         }
@@ -240,6 +249,7 @@ class OnboardingViewModel @Inject constructor(
             is FinishLine.ByDate -> FinishKind.DATE
         },
         finishDate = (plan.finishLine as? FinishLine.ByDate)?.date,
+        targetBodyFat = (plan.finishLine as? FinishLine.BodyFat)?.pct?.let(GoalText::d).orEmpty(),
         finishChosen = true,
         acknowledged = plan.aggressiveAcknowledged,
     )
@@ -374,7 +384,7 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private fun projectionFor(ui: OnboardingUi, profile: Profile, plan: GoalPlan): String {
-        val targets = personas.targetsFor(profile, plan, TargetOverrides(), ui.today, ui.maintenance)
+        val targets = personas.targetsFor(profile, plan, TargetOverrides(), ui.today, ui.maintenance, ui.leanMassKg)
         val perWeek = Projection.kgPerWeek(targets.energyAdjustmentKcal)
         val goalKg = plan.goalWeightKg ?: suggestedGoalWeight(ui)
         val weeks = goalKg?.let { Projection.weeksTo(profile.weightKg, it, perWeek) }
@@ -385,7 +395,7 @@ class OnboardingViewModel @Inject constructor(
     private fun suggestedGoalWeight(ui: OnboardingUi): Double? {
         val p = ui.profile ?: return null
         val goal = ui.goal.goal ?: return null
-        return if (GoalWeights.suggestsGoalWeight(goal)) GoalWeights.suggest(p.heightCm, p.weightKg) else null
+        return if (GoalWeights.suggestsGoalWeight(goal)) GoalWeights.suggest(p.heightCm, p.weightKg, ui.leanMassKg, p.sex) else null
     }
 
     fun pickPace(pace: Pace) {
@@ -447,6 +457,16 @@ class OnboardingViewModel @Inject constructor(
 
     fun setGoalWeight(text: String) = _ui.update { it.copy(goal = it.goal.copy(goalWeight = text, goalWeightTouched = true)) }
 
+    /**
+     * A body-fat finish line's target (IB-05): its goal weight is lean mass ÷ (1 − target %), filled into the goal
+     * weight, which protein then uses.
+     */
+    fun setTargetBodyFat(text: String) = _ui.update { ui ->
+        val form = ui.goal.copy(targetBodyFat = text, finishKind = FinishKind.BODY_FAT, finishChosen = true)
+        val weight = ui.leanMassKg?.let { lean -> form.targetBodyFatPct?.let { GoalWeights.forBodyFat(lean, it) } }
+        ui.copy(goal = if (weight != null) form.copy(goalWeight = GoalText.d(weight), goalWeightTouched = true) else form)
+    }
+
     fun setFinish(kind: FinishKind?) = _ui.update {
         it.copy(goal = it.goal.copy(finishKind = kind, finishChosen = true, finishDate = it.goal.finishDate ?: it.today.plusWeeks(GoalWeights.LEAN_BULK_WEEKS)))
     }
@@ -473,7 +493,7 @@ class OnboardingViewModel @Inject constructor(
         val ui = _ui.value
         val profile = ui.profile ?: return null
         val plan = ui.plan ?: return null
-        return personas.targetsFor(profile, plan, ui.overrides, ui.today, ui.maintenance)
+        return personas.targetsFor(profile, plan, ui.overrides, ui.today, ui.maintenance, ui.leanMassKg)
     }
 
     fun setOverrides(overrides: TargetOverrides) = _ui.update { it.copy(overrides = overrides) }

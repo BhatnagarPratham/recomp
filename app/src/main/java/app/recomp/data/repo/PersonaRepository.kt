@@ -1,5 +1,7 @@
 package app.recomp.data.repo
 
+import kotlinx.coroutines.flow.distinctUntilChanged
+import app.recomp.domain.body.ScanTargets
 import app.recomp.data.db.CheckinDao
 import app.recomp.data.db.NutritionDao
 import app.recomp.data.db.WeeklyCheckinEntity
@@ -106,8 +108,25 @@ class PersonaRepository @Inject constructor(
      * whatever was decided that week, since *Keep* declines a proposal, not the estimate. BMR, and so the floor, stay
      * the formula's. Null [maintenance] is the formula, BMR × activity.
      */
-    fun targetsFor(profile: Profile, plan: GoalPlan, overrides: TargetOverrides, today: LocalDate, maintenance: MaintenanceEstimate? = null): NutritionTargets =
-        NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today).copy(maintenanceKcal = maintenance?.kcal?.toDouble()), overrides)
+    fun targetsFor(
+        profile: Profile,
+        plan: GoalPlan,
+        overrides: TargetOverrides,
+        today: LocalDate,
+        maintenance: MaintenanceEstimate? = null,
+        leanMassKg: Double? = null,
+    ): NutritionTargets =
+        NutritionCalculator.startingTargets(TargetInputs.from(profile, plan, today, leanMassKg).copy(maintenanceKcal = maintenance?.kcal?.toDouble()), overrides)
+
+    /**
+     * IB-05: lean mass from the latest on-protocol scan of the last 60 days, which BMR then uses (Katch-McArdle, TRD
+     * §5.3), else null for Mifflin-St Jeor. It's used whenever targets are worked out; they never change on their own.
+     */
+    suspend fun leanMassKg(today: LocalDate? = null): Double? = body.countingScan(today ?: days.today())?.leanKg
+
+    val leanMass: Flow<Double?> = combine(body.observeScans(), days.observeToday()) { scans, today ->
+        ScanTargets.counting(scans.map { it.toLeanScan() }, today)?.leanKg
+    }.distinctUntilChanged()
 
     /** The latest check-in's estimate, once a week had enough data; null before (TRD §5.4). */
     val maintenance: Flow<MaintenanceEstimate?> = checkinDao.observeLatestEstimate().map { MaintenanceEstimate.of(it) }
@@ -150,7 +169,7 @@ class PersonaRepository @Inject constructor(
                 increments = result.increments,
             ),
         )
-        writeTarget(targetsFor(result.profile, plan, result.overrides, today), plan, today, TargetReason.INITIAL, now)
+        writeTarget(targetsFor(result.profile, plan, result.overrides, today, leanMassKg = leanMassKg(today)), plan, today, TargetReason.INITIAL, now)
         prefs.edit {
             persona = this.persona.copy(
                 goal = StoredGoal.of(plan),
@@ -181,7 +200,7 @@ class PersonaRepository @Inject constructor(
         val maintenance = maintenance()
         return TargetPreview(
             before = nutritionDao.targetOn(today),
-            after = targetsFor(newProfile, guarded.plan, newOverrides, today, maintenance),
+            after = targetsFor(newProfile, guarded.plan, newOverrides, today, maintenance, leanMassKg(today)),
             plan = guarded.plan,
             notes = guarded.notes,
             profile = newProfile,

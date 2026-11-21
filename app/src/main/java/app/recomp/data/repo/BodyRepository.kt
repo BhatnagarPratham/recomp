@@ -1,5 +1,8 @@
 package app.recomp.data.repo
 
+import java.time.LocalDate
+import app.recomp.domain.body.ScanTargets
+import app.recomp.domain.body.LeanScan
 import androidx.room.withTransaction
 import app.recomp.data.db.AppDatabase
 import app.recomp.data.db.BodyCompositionEntity
@@ -231,7 +234,13 @@ class BodyRepository @Inject constructor(
         }
     }
 
+    /** IB-05: the scan that sets BMR on [today] (TRD §5.3), or null. */
+    suspend fun countingScan(today: LocalDate): LeanScan? = ScanTargets.counting(bodyDao.observeScans().first().map { it.toLeanScan() }, today)
+
     companion object {
         fun segmental(json: String?): SegmentalLean? = json?.let { runCatching { Json.decodeFromString<SegmentalLean>(it) }.getOrNull() }
     }
 }
+
+/** A scan as scan-informed targets see it (IB-05). */
+fun BodyCompositionEntity.toLeanScan() = LeanScan(logDate, measuredAt, weightG, bodyFatG, protocolOk)

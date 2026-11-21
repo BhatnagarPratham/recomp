@@ -261,7 +261,7 @@ class ProgrammeReviewRepository @Inject constructor(
         // A reply's % and g/kg mean the report's numbers; the guardrails are today's.
         val routineIds = stored.routines.values.toSet()
         val kcalRange = if (profile != null && plan != null && maintenance > 0) {
-            val range = CheckinProposal.adjustRange(TargetInputs.from(profile, plan, day), maintenance)
+            val range = CheckinProposal.adjustRange(TargetInputs.from(profile, plan, day, personas.leanMassKg(day)), maintenance)
             // PRD §4.9: below BMI 18.5 there's no deficit at all, and under 18 none deeper than the plan's own.
             val noDeficit = !Guardrails.deficitAllowed(profile)
             val minorFloor = if (Guardrails.isMinor(profile, day)) nutritionDao.targetOn(day)?.kcal else null
