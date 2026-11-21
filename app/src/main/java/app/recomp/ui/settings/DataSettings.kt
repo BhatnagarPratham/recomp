@@ -198,7 +198,7 @@ fun DataSettings(viewModel: DataViewModel = hiltViewModel()) {
     SettingRow("Export all data", "Save a file") { save.launch(BackupManager.fileName(LocalDate.now())) }
     SwitchRow(
         "Include photos",
-        "Progress photos go in the file too. Off, they stay only on this phone.",
+        "Progress photos and InBody screenshots go in the file too. Off, they stay only on this phone.",
         checked = includePhotos,
         onChange = viewModel::setIncludePhotos,
     )

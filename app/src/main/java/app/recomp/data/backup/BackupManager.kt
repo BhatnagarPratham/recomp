@@ -19,6 +19,7 @@ import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteStatement
 import app.recomp.data.db.AppDatabase
+import app.recomp.data.body.ScanImages
 import app.recomp.data.db.PhotoPaths
 import app.recomp.data.db.readers
 import app.recomp.data.prefs.SettingsPrefs
@@ -71,6 +72,8 @@ data class BackupManifest(
     val rows: Map<String, Int>,
     /** Progress photos carried as `photos/<name>` entries (M17, format 2). Zero in a backup without them. */
     val photos: Int = 0,
+    /** InBody scan images (M15) carried as `scan_images/<name>` entries, with the photos. Zero in a backup without them. */
+    val scanImages: Int = 0,
 ) {
     fun count(table: String): Int = rows[table] ?: 0
 }
@@ -89,7 +92,7 @@ enum class PendingOutcome {
 
 /** An import whose settings are still to be written (TRD §6.5): its database token and the settings. */
 @Serializable
-internal data class PendingRestore(val token: Int, val settings: Map<String, SettingValue>, val exportedAt: Long, val photos: Boolean = false)
+internal data class PendingRestore(val token: Int, val settings: Map<String, SettingValue>, val exportedAt: Long, val photos: Boolean = false, val scanImages: Boolean = false)
 
 /** One setting with its DataStore type, so it comes back as the same kind of key. */
 @Serializable
@@ -105,6 +108,8 @@ class PreparedBackup internal constructor(
     internal val scratch: File,
     /** The backup's photos, staged in app-private storage until the import commits; null when it has none. */
     internal val photos: File? = null,
+    /** The backup's scan images, staged the same way; null when it has none. */
+    internal val scanImages: File? = null,
 )
 
 /**
@@ -150,12 +155,26 @@ class BackupManager @Inject constructor(
         return names.map { File(photoDir, it) }.filter { it.isFile }.sortedBy { it.name }
     }
 
+    /** `files/scan_images/`: the InBody screenshots kept with scans (M15). Android's own backup never includes it. */
+    private val scanImageDir: File get() = File(context.filesDir, SCAN_IMAGE_DIR)
+
+    /** The scan images a backup carries: only those a scan's `image_path` names, with a name the store makes. */
+    private fun scanImageFiles(data: DatabaseData): List<File> {
+        val table = data.tables[SCAN_TABLE] ?: return emptyList()
+        val column = table.columns.indexOf(IMAGE_PATH)
+        if (column < 0) return emptyList()
+        val names = table.rows.mapNotNull { row -> row.getOrNull(column)?.jsonPrimitive?.contentOrNull?.takeIf(ScanImages::valid) }.toSet()
+        return names.map { File(scanImageDir, it) }.filter { it.isFile }.sortedBy { it.name }
+    }
+
     private suspend fun exportTo(out: OutputStream, now: Long, includePhotos: Boolean): BackupManifest {
         val data = db.withTransaction { DatabaseSnapshot.read(db.openHelper.writableDatabase::query) }
         val settings = encodeSettings(prefs.exportable())
         val photos = if (includePhotos) photoFiles(data) else emptyList()
+        // Scan images follow the same switch as the photos (PRD §12.13): both are pictures of you.
+        val scanImages = if (includePhotos) scanImageFiles(data) else emptyList()
         val version = if (includePhotos) FORMAT_VERSION else FORMAT_VERSION_WITHOUT_MEDIA
-        val manifest = BackupManifest(FORMAT, version, schemaVersion(), now, appVersion(), data.tables.mapValues { it.value.rows.size }, photos.size)
+        val manifest = BackupManifest(FORMAT, version, schemaVersion(), now, appVersion(), data.tables.mapValues { it.value.rows.size }, photos.size, scanImages.size)
         // Each entry is written straight into the zip, never held as one big string; photos stream file by file.
         ZipOutputStream(out).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST))
@@ -166,6 +185,10 @@ class BackupManager @Inject constructor(
             json.encodeToStream(settings, zip)
             photos.forEach { file ->
                 zip.putNextEntry(ZipEntry("$PHOTO_DIR/${file.name}"))
+                file.inputStream().use { it.copyTo(zip) }
+            }
+            scanImages.forEach { file ->
+                zip.putNextEntry(ZipEntry("$SCAN_IMAGE_DIR/${file.name}"))
                 file.inputStream().use { it.copyTo(zip) }
             }
             zip.closeEntry()
@@ -191,21 +214,24 @@ class BackupManager @Inject constructor(
     private suspend fun prepareChecked(input: InputStream): PreparedBackup {
         // A backup's photos are staged before anything is checked, and dropped again if the check fails.
         val staging = incomingPhotos.apply { deleteRecursively() }
+        val scanStaging = incomingScanImages.apply { deleteRecursively() }
         val entries = try {
-            input.use { readZip(it, photosTo = staging) }
+            input.use { readZip(it, photosTo = staging, scanImagesTo = scanStaging) }
         } catch (e: Throwable) {
             staging.deleteRecursively()
+            scanStaging.deleteRecursively()
             throw e
         }
         try {
-            return prepareRead(entries, staging)
+            return prepareRead(entries, staging, scanStaging)
         } catch (e: Throwable) {
             staging.deleteRecursively()
+            scanStaging.deleteRecursively()
             throw e
         }
     }
 
-    private suspend fun prepareRead(entries: Contents, staging: File): PreparedBackup {
+    private suspend fun prepareRead(entries: Contents, staging: File, scanStaging: File): PreparedBackup {
         val manifest = entries.manifest?.takeIf { it.format == FORMAT } ?: throw BackupException(NOT_A_BACKUP)
         if (manifest.formatVersion > FORMAT_VERSION) throw BackupException("This backup's file format is newer than this version of Recomp understands. Update the app, then import it.")
         val current = schemaVersion()
@@ -227,17 +253,24 @@ class BackupManager @Inject constructor(
             deleteDatabaseFiles(scratch)
             throw e as? BackupException ?: BackupException("This backup couldn't be read: ${e.message ?: e.javaClass.simpleName}", e)
         }
-        if (entries.photos != manifest.photos) throw BackupException.damaged("${entries.photos} photos where it lists ${manifest.photos}")
-        return PreparedBackup(manifest, settings, scratch, staging.takeIf { manifest.photos > 0 })
+        if (entries.photos != manifest.photos || entries.scanImages != manifest.scanImages) {
+            deleteDatabaseFiles(scratch)
+            throw BackupException.damaged("${entries.photos} photos and ${entries.scanImages} scan images where it lists ${manifest.photos} and ${manifest.scanImages}")
+        }
+        return PreparedBackup(manifest, settings, scratch, staging.takeIf { manifest.photos > 0 }, scanStaging.takeIf { manifest.scanImages > 0 })
     }
 
     fun discard(backup: PreparedBackup) {
         deleteDatabaseFiles(backup.scratch)
         backup.photos?.deleteRecursively()
+        backup.scanImages?.deleteRecursively()
     }
 
     /** Where an import's photos wait until its database commits. App-private, out of Android's backup. */
     internal val incomingPhotos: File get() = File(context.filesDir, "backups/incoming-photos")
+
+    /** The same for scan images. */
+    internal val incomingScanImages: File get() = File(context.filesDir, "backups/incoming-scan-images")
 
     /**
      * Replaces every table and setting with the backup's (TRD §6.5 steps 4 to 6): a safety copy first, then
@@ -252,7 +285,7 @@ class BackupManager @Inject constructor(
         // a marker file holds that token and the settings. Until the settings are written, the next launch can
         // tell whether the commit happened and finish the job (finishPendingRestore).
         val token = Random.nextInt(1, Int.MAX_VALUE)
-        val pending = PendingRestore(token, encodeSettings(backup.settings), backup.manifest.exportedAt, photos = backup.photos != null)
+        val pending = PendingRestore(token, encodeSettings(backup.settings), backup.manifest.exportedAt, photos = backup.photos != null, scanImages = backup.scanImages != null)
         try {
             restoreDatabase(backup, token, pending)
         } catch (e: Throwable) {
@@ -260,6 +293,7 @@ class BackupManager @Inject constructor(
             throw e
         }
         finishPhotos(pending)
+        finishScanImages(pending)
         finishSettings(pending)
         deleteDatabaseFiles(backup.scratch)
     }
@@ -276,6 +310,19 @@ class BackupManager @Inject constructor(
         if (!staged.renameTo(photoDir)) {
             old.renameTo(photoDir)
             throw BackupException("Your data was replaced, but the photos couldn't be. Restore the data from before the import in Settings → Data.")
+        }
+        old.deleteRecursively()
+    }
+
+    /** The same swap for scan images: a backup with them replaces the current ones; one without leaves them. */
+    private fun finishScanImages(pending: PendingRestore) {
+        val staged = incomingScanImages
+        if (!pending.scanImages || !staged.isDirectory) return
+        val old = File(context.filesDir, "$SCAN_IMAGE_DIR.old").apply { deleteRecursively() }
+        if (scanImageDir.exists() && !scanImageDir.renameTo(old)) throw BackupException("Your data was replaced, but the scan images couldn't be. Restore the data from before the import in Settings → Data.")
+        if (!staged.renameTo(scanImageDir)) {
+            old.renameTo(scanImageDir)
+            throw BackupException("Your data was replaced, but the scan images couldn't be. Restore the data from before the import in Settings → Data.")
         }
         old.deleteRecursively()
     }
@@ -326,10 +373,12 @@ class BackupManager @Inject constructor(
         if (stamped != pending.token) {
             pendingFile.delete()
             incomingPhotos.deleteRecursively()
+            incomingScanImages.deleteRecursively()
             return@withContext PendingOutcome.NOT_APPLIED
         }
         try {
             runCatching { finishPhotos(pending) }
+            runCatching { finishScanImages(pending) }
             finishSettings(pending)
             PendingOutcome.FINISHED
         } catch (e: BackupException) {
@@ -354,7 +403,7 @@ class BackupManager @Inject constructor(
     val autoBackupScratch: File get() = File(context.cacheDir, "backups/automatic.zip")
 
     /** Whether an import is between its database commit and its photos and settings, so photos must be left alone. */
-    fun importInProgress(): Boolean = pendingFile.isFile || incomingPhotos.exists()
+    fun importInProgress(): Boolean = pendingFile.isFile || incomingPhotos.exists() || incomingScanImages.exists()
 
     /**
      * Takes a deleted photo out of the safety copy too, file and row, so *Delete* holds ("This can't be undone")
@@ -469,6 +518,10 @@ class BackupManager @Inject constructor(
             scratch.query("SELECT $FILE_PATH FROM $PHOTO_TABLE").use { c ->
                 while (c.moveToNext()) if (!PhotoPaths.valid(c.getString(0) ?: "")) throw BackupException.damaged("a photo that points outside the photos folder")
             }
+            // The same check for a scan's image: only a name the scan-image store makes, never a path (M15).
+            scratch.query("SELECT $IMAGE_PATH FROM $SCAN_TABLE WHERE $IMAGE_PATH IS NOT NULL").use { c ->
+                while (c.moveToNext()) if (!ScanImages.valid(c.getString(0) ?: "")) throw BackupException.damaged("a scan image that points outside its folder")
+            }
             room.backupCheckDao().readers().forEach { (table, read) ->
                 try {
                     read()
@@ -524,14 +577,14 @@ class BackupManager @Inject constructor(
     internal var maxPhotoFileBytes: Long = MAX_PHOTO_FILE_BYTES
     internal var maxPhotoBytes: Long = MAX_PHOTO_BYTES
 
-    private class Contents(var manifest: BackupManifest? = null, var database: DatabaseData? = null, var settings: Map<String, SettingValue>? = null, var photos: Int = 0)
+    private class Contents(var manifest: BackupManifest? = null, var database: DatabaseData? = null, var settings: Map<String, SettingValue>? = null, var photos: Int = 0, var scanImages: Int = 0)
 
     /**
      * Reads [only] the named entries and skips the rest, stopping at [maxBytes] of JSON. With [photosTo], each
      * `photos/<name>` entry streams into that folder under its own cap and the photos' total cap; photos never
      * count toward the JSON's budget.
      */
-    private fun readZip(input: InputStream, only: Set<String> = ENTRIES, photosTo: File? = null): Contents = try {
+    private fun readZip(input: InputStream, only: Set<String> = ENTRIES, photosTo: File? = null, scanImagesTo: File? = null): Contents = try {
         val contents = Contents()
         ZipInputStream(input).use { zip ->
             val budget = Budget(zip, maxBytes)
@@ -549,6 +602,19 @@ class BackupManager @Inject constructor(
                     photoBytes += written
                     if (photoBytes > maxPhotoBytes) throw BackupException(TOO_BIG)
                     contents.photos++
+                    continue
+                }
+                if (scanImagesTo != null && name.startsWith("$SCAN_IMAGE_DIR/")) {
+                    val file = name.removePrefix("$SCAN_IMAGE_DIR/")
+                    if (!ScanImages.valid(file)) throw BackupException.damaged("a scan image with a name it can't use")
+                    scanImagesTo.mkdirs()
+                    val target = File(scanImagesTo, file)
+                    if (target.exists()) throw BackupException.damaged("the same scan image twice")
+                    // Under the same caps as the photos, and counted in their total.
+                    val written = Budget(zip, maxPhotoFileBytes).let { capped -> target.outputStream().use { capped.copyTo(it) } }
+                    photoBytes += written
+                    if (photoBytes > maxPhotoBytes) throw BackupException(TOO_BIG)
+                    contents.scanImages++
                     continue
                 }
                 when (name.takeIf { it in only }) {
@@ -596,6 +662,9 @@ class BackupManager @Inject constructor(
         const val PHOTO_DIR = PhotoPaths.DIR
         private const val PHOTO_TABLE = "progress_photo"
         private const val FILE_PATH = "file_path"
+        const val SCAN_IMAGE_DIR = ScanImages.DIR
+        private const val SCAN_TABLE = "body_composition"
+        private const val IMAGE_PATH = "image_path"
         internal val PHOTO_NAME = PhotoPaths.NAME
         /** A phone photo is a few MB; 25 MB allows for any camera. */
         private const val MAX_PHOTO_FILE_BYTES = 25L * 1024 * 1024
