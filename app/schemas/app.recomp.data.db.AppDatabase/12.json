@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 12,
-    "identityHash": "02a1ae55b4011a83885585480a779969",
+    "identityHash": "506faafefcc361d63ded0f8c055c1c37",
     "entities": [
       {
         "tableName": "exercise",
@@ -1939,7 +1939,7 @@
       },
       {
         "tableName": "daily_activity",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`log_date` TEXT NOT NULL, `food_incomplete` INTEGER NOT NULL, `steps` INTEGER, `steps_synced_at` INTEGER, `sleep_hours` REAL, PRIMARY KEY(`log_date`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`log_date` TEXT NOT NULL, `food_incomplete` INTEGER NOT NULL, `steps` INTEGER, `steps_synced_at` INTEGER, `sleep_hours` REAL, `sleep_source` TEXT, PRIMARY KEY(`log_date`))",
         "fields": [
           {
             "fieldPath": "logDate",
@@ -1967,6 +1967,11 @@
             "fieldPath": "sleepHours",
             "columnName": "sleep_hours",
             "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sleepSource",
+            "columnName": "sleep_source",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -2047,49 +2052,8 @@
         ]
       },
       {
-        "tableName": "recipe",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`food_id` INTEGER NOT NULL, `servings` REAL, `cooked_weight_g` REAL, PRIMARY KEY(`food_id`), FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "foodId",
-            "columnName": "food_id",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "servings",
-            "columnName": "servings",
-            "affinity": "REAL"
-          },
-          {
-            "fieldPath": "cookedWeightG",
-            "columnName": "cooked_weight_g",
-            "affinity": "REAL"
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "food_id"
-          ]
-        },
-        "foreignKeys": [
-          {
-            "table": "food",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "food_id"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
-          }
-        ]
-      },
-      {
-        "tableName": "recipe_ingredient",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recipe_id` INTEGER NOT NULL, `position` INTEGER NOT NULL, `food_id` INTEGER NOT NULL, `grams` REAL NOT NULL, FOREIGN KEY(`recipe_id`) REFERENCES `recipe`(`food_id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`food_id`) REFERENCES `food`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "tableName": "scan_draft",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `measured_at` INTEGER NOT NULL, `weight_g` INTEGER NOT NULL, `body_fat_pct` REAL, `bmr_kcal` INTEGER, `hc_ids` TEXT NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -2098,27 +2062,31 @@
             "notNull": true
           },
           {
-            "fieldPath": "recipeId",
-            "columnName": "recipe_id",
+            "fieldPath": "measuredAt",
+            "columnName": "measured_at",
             "affinity": "INTEGER",
             "notNull": true
           },
           {
-            "fieldPath": "position",
-            "columnName": "position",
+            "fieldPath": "weightG",
+            "columnName": "weight_g",
             "affinity": "INTEGER",
             "notNull": true
           },
           {
-            "fieldPath": "foodId",
-            "columnName": "food_id",
-            "affinity": "INTEGER",
-            "notNull": true
+            "fieldPath": "bodyFatPct",
+            "columnName": "body_fat_pct",
+            "affinity": "REAL"
           },
           {
-            "fieldPath": "grams",
-            "columnName": "grams",
-            "affinity": "REAL",
+            "fieldPath": "bmrKcal",
+            "columnName": "bmr_kcal",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hcIds",
+            "columnName": "hc_ids",
+            "affinity": "TEXT",
             "notNull": true
           }
         ],
@@ -2127,56 +2095,12 @@
           "columnNames": [
             "id"
           ]
-        },
-        "indices": [
-          {
-            "name": "index_recipe_ingredient_recipe_id",
-            "unique": false,
-            "columnNames": [
-              "recipe_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_recipe_id` ON `${TABLE_NAME}` (`recipe_id`)"
-          },
-          {
-            "name": "index_recipe_ingredient_food_id",
-            "unique": false,
-            "columnNames": [
-              "food_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_recipe_ingredient_food_id` ON `${TABLE_NAME}` (`food_id`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "recipe",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "recipe_id"
-            ],
-            "referencedColumns": [
-              "food_id"
-            ]
-          },
-          {
-            "table": "food",
-            "onDelete": "NO ACTION",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "food_id"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
-          }
-        ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '02a1ae55b4011a83885585480a779969')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '506faafefcc361d63ded0f8c055c1c37')"
     ]
   }
 }

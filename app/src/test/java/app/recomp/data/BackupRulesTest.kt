@@ -30,6 +30,13 @@ class BackupRulesTest {
         return includes.isNotEmpty() && includes.none { (domain, path) -> domain == file.first && (path == file.second || file.second.startsWith("$path/")) }
     }
 
+    /** TRD §4: Health Connect's change tokens belong to this phone, so a restored or transferred one starts fresh. */
+    @Test
+    fun `device state is left out of cloud backup and device transfer`() {
+        val device = "file" to "datastore/${app.recomp.di.DatabaseModule.DEVICE_FILE}.preferences_pb"
+        listOf("cloud-backup", "device-transfer").forEach { section -> assertTrue("$section leaves out $device", leftOut(section, device)) }
+    }
+
     @Test
     fun `the encrypted key and its keyset are left out of cloud backup and device transfer`() {
         val secrets = "file" to "datastore/${AiModule.SECRETS_FILE}.preferences_pb"

@@ -35,6 +35,17 @@ object Targets {
     }
 
     /**
+     * PO-07: an override is a top completed working load other than the target's (for an assisted lift,
+     * the least assistance). Back-off sets don't count. False with no target load or no working set.
+     */
+    fun overrode(rec: Recommendation?, done: List<LoggedSet>): Boolean {
+        val target = rec?.loadG ?: return false
+        val loads = done.filter { it.type == SetType.WORKING }.map { it.loadG ?: 0 }
+        val top = (if (rec.assisted) loads.minOrNull() else loads.maxOrNull()) ?: return false
+        return top != target
+    }
+
+    /**
      * Live feedback for a ticked working set (PO-03): only when it meets or beats its target, phrased
      * against last time's matching set. A miss says nothing. For an assisted lift, less assistance is the gain.
      */
