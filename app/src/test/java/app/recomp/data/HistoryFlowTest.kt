@@ -3,6 +3,9 @@ package app.recomp.data
 import app.recomp.data.db.ExerciseEntity
 import app.recomp.data.db.PersonalRecordEntity
 import app.recomp.data.db.SessionExerciseWithSets
+import app.recomp.domain.model.SessionStatus
+import app.recomp.data.db.YogaDetailEntity
+import app.recomp.data.db.WorkoutSessionEntity
 import app.recomp.data.repo.ExtraDraft
 import app.recomp.data.repo.ExtraEdit
 import app.recomp.data.repo.ProgressionRepository
@@ -572,6 +575,27 @@ class HistoryFlowTest {
         assertEquals(atFinish, records())
         assertTrue(PrType.E1RM in types(second))
         assertNotNull(first)
+    }
+
+    // Other apps' sessions (AR-04, PRD §12.9)
+
+    @Test
+    fun `another app's session shows in History but can't be edited or deleted here`() = runBlocking {
+        val walk = app.db.workoutDao().insertExtraSession(
+            WorkoutSessionEntity(
+                routineId = null, kind = SessionKind.CARDIO, status = SessionStatus.COMPLETED, startedAt = clock, endedAt = clock + 35 * 60_000,
+                logDate = session(bench(40_000, 10, 10, 10)).logDate, notes = "from Google Fit", hcRecordId = "hc-walk-1",
+            ),
+            YogaDetailEntity(sessionId = 0, style = "Walk", durationMin = 35),
+        )
+        val before = session(walk)
+        assertTrue(history.observeHistory(50).first().any { it.session.id == walk })
+        assertNull(history.extra(walk))
+        assertNull(history.editable(walk))
+        assertNotNull(history.saveExtra(walk, ExtraEdit(before.logDate.minusDays(1), 20, 2, "mine"), now = later))
+        assertFalse(history.deleteSession(walk))
+        assertEquals(before, session(walk))
+        assertEquals(35, app.db.workoutDao().yogaDetail(walk)!!.durationMin)
     }
 }
 

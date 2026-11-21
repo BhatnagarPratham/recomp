@@ -141,7 +141,10 @@ fun HistoryScreen(onBack: () -> Unit, onOpenWorkout: (Long) -> Unit, deleted: Bo
             }
             items(ui.rows, key = { it.session.id }) { row ->
                 val isExtra = row.session.kind.isExtra
-                Card(Modifier.fillMaxWidth().clickable(onClickLabel = if (isExtra) "Edit" else "Open") { if (isExtra) viewModel.openExtra(row) else onOpenWorkout(row.session.id) }) {
+                // Another app's sessions (AR-04) are read-only, so they don't open.
+                val imported = row.session.hcRecordId != null
+                val open = if (imported) Modifier else Modifier.clickable(onClickLabel = if (isExtra) "Edit" else "Open") { if (isExtra) viewModel.openExtra(row) else onOpenWorkout(row.session.id) }
+                Card(Modifier.fillMaxWidth().then(open)) {
                     Column(Modifier.padding(16.dp).heightIn(min = 40.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(historyTitle(row), style = MaterialTheme.typography.titleMedium)
                         Text(row.session.logDate.format(dates) + " · " + historyDetail(row), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -167,7 +170,9 @@ internal fun historyTitle(row: HistoryRow): String =
 /** "52 min · 5 exercises · 15 sets", or for an extra session "60 min · Vinyasa". */
 internal fun historyDetail(row: HistoryRow): String {
     if (row.session.kind.isExtra) {
-        return listOfNotNull(row.durationMin?.let { "$it min" }, row.style?.takeIf { it.isNotBlank() && it != row.routineName }).joinToString(" · ").ifEmpty { Labels.kind(row.session.kind) }
+        // An import says which app it came from ("from Google Fit"), which M13 keeps in its notes.
+        val origin = row.session.notes?.takeIf { row.session.hcRecordId != null }
+        return listOfNotNull(row.durationMin?.let { "$it min" }, row.style?.takeIf { it.isNotBlank() && it != row.routineName }, origin).joinToString(" · ").ifEmpty { Labels.kind(row.session.kind) }
     }
     val duration = formatDuration(((row.session.endedAt ?: row.session.startedAt) - row.session.startedAt).coerceAtLeast(0))
     return "$duration · ${plural(row.exercises, "exercise")} · ${plural(row.sets, "set")}"
