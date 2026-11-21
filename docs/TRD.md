@@ -898,7 +898,7 @@ The app registers as an Android share target for images (`ACTION_SEND`, `image/*
 | **M11: Programme review** | A weekly report you check, sent to your AI provider, with up to 5 suggested changes you accept one by one (Room v11) | HM-06 |
 | **M12: Nudges, reminders, widget** | Opt-in reminders on AlarmManager (2 a day at most), the goal's evening nudge with protein suggestions, workout-day and scan-slot reminders, home-screen widget | RM-01, NU-23, GL-08 (nudges), PO-11, IB-06, HM-05 |
 | **M13: Health Connect in** | Steps with a goal, sleep at the morning weigh-in, other apps' workouts, InBody records as scan drafts (Room v12) | AR-01, AR-02, AR-04, IB-07 |
-| **M14: Recipes** | Recipe builder; a recipe is a food (Room v13) | NU-22 |
+| **M14: Recipes** | Recipe builder; a recipe is a food (Room v11; planned as v13) | NU-22 |
 | **M15: InBody share, scan targets** | The share target (§6.7) with *InBody result* (no AI), Katch-McArdle BMR, the body-fat finish line | IB-03, IB-05 |
 | **M16: Data out** | Weekly automatic backup to a folder, CSV export, Health Connect write-back | DA-02, DA-03, DA-04 |
 | **M17: Body extras** | Tape measurements, progress photos, focus areas, mobility markers (Room v14) | BM-03, BM-04, YG-03, YG-04 |
