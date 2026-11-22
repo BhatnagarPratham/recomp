@@ -123,6 +123,8 @@ The Indian food database comes from the [Indian Nutrient Databank (INDB)](https:
 - `app/`: Compose UI, Room, Hilt, the workout service, and the Health Connect and AI clients. The exercise library and split templates are JSON in `app/src/main/assets/seed/`, so a fork can change them without code.
 - `docs/`: PRD and TRD. `docs/local/` is gitignored, for your own notes.
 
+The tab icons are [Material Icons and Material Symbols](https://github.com/google/material-design-icons) by Google, under the Apache License 2.0.
+
 ## Licence
 
 [MIT](LICENSE)

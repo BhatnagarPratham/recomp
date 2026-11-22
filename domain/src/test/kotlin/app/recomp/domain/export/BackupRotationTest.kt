@@ -23,7 +23,8 @@ class BackupRotationTest {
     fun `a part a crashed run left is recognised, of any day, and nothing else is`() {
         assertTrue(BackupRotation.isPart(BackupRotation.partName(BackupRotation.fileName(LocalDate.of(2026, 9, 6)))))
         assertTrue(BackupRotation.isPart("recomp-backup-2026-09-06 (1).zip.part"))
-        listOf("recomp-backup-2026-09-06.zip", "notes.zip.part", "recomp-backup-2026-09-06.zip.partial", "recomp-csv-2026-09-06.zip.part")
+        assertTrue(BackupRotation.isPart("recomp-backup-2026-09-06.zip (1).part"))
+        listOf("recomp-backup-2026-09-06.zip", "notes.zip.part", "recomp-backup-2026-09-06.zip.partial", "recomp-csv-2026-09-06.zip.part", "recomp-backup-2026-09-06.zip (1).partial", "recomp-backup-2026-09-06.zip (x).part")
             .forEach { assertTrue(it, !BackupRotation.isPart(it)) }
     }
 
