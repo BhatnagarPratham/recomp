@@ -30,13 +30,17 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-/** A date picker that opens in typing mode, which is quicker for a date of birth. Material's dates are UTC midnights. */
+/**
+ * A calendar date picker; tap the month and year to jump years for a date of birth. No typing mode: its keyboard
+ * squeezed the dialog, and switching modes resized it frame by frame as the keyboard closed. Material's dates are
+ * UTC midnights.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DateDialog(initial: LocalDate, onDismiss: () -> Unit, onPick: (LocalDate) -> Unit) {
     val state = rememberDatePickerState(
         initialSelectedDateMillis = initial.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
-        initialDisplayMode = DisplayMode.Input,
+        initialDisplayMode = DisplayMode.Picker,
         yearRange = 1900..2100,
     )
     DatePickerDialog(
@@ -47,7 +51,7 @@ fun DateDialog(initial: LocalDate, onDismiss: () -> Unit, onPick: (LocalDate) ->
             }) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    ) { DatePicker(state) }
+    ) { DatePicker(state, showModeToggle = false) }
 }
 
 /** "Midnight", "4 AM" (PR-03). */
