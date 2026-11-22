@@ -2,7 +2,9 @@ package app.recomp.ui.navigation
 
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.annotation.DrawableRes
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -14,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -24,6 +27,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import app.recomp.R
 import app.recomp.ui.food.LabelScanScreen
 import app.recomp.ui.camera.BarcodeScanScreen
 import app.recomp.data.backup.PendingOutcome
@@ -157,14 +161,14 @@ import kotlinx.serialization.Serializable
 /** Settings → Reminders (RM-01). */
 @Serializable data object RemindersRoute
 
-private data class TopLevel(val label: String, val glyph: String, val route: Any)
+private data class TopLevel(val label: String, @DrawableRes val icon: Int, val route: Any)
 
 private val topLevel = listOf(
-    TopLevel("Today", "◉", TodayRoute),
-    TopLevel("Food", "◍", FoodRoute),
-    TopLevel("Train", "▤", TrainRoute),
-    TopLevel("Body", "⚖", BodyRoute),
-    TopLevel("Settings", "⚙", SettingsRoute),
+    TopLevel("Today", R.drawable.ic_tab_today, TodayRoute),
+    TopLevel("Food", R.drawable.ic_tab_food, FoodRoute),
+    TopLevel("Train", R.drawable.ic_tab_train, TrainRoute),
+    TopLevel("Body", R.drawable.ic_tab_body, BodyRoute),
+    TopLevel("Settings", R.drawable.ic_tab_settings, SettingsRoute),
 )
 
 @Composable
@@ -204,7 +208,8 @@ fun RecompNavHost(main: MainViewModel) {
                         NavigationBarItem(
                             selected = selected,
                             onClick = { nav.openTopLevel(item.route) },
-                            icon = { Text(item.glyph) },
+                            // The label names the tab, so the icon has no description of its own.
+                            icon = { Icon(painterResource(item.icon), contentDescription = null) },
                             label = { Text(item.label) },
                         )
                     }

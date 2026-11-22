@@ -29,9 +29,10 @@ object BackupRotation {
     /** Where a backup is written before it replaces [name]. Not a backup name, so rotation never counts it. */
     fun partName(name: String) = "$name.part"
 
-    private val PART = Regex("""recomp-backup-.*\.zip\.part""")
+    // A provider that makes a taken name unique may put its " (n)" before or after ".part".
+    private val PART = Regex("""recomp-backup-.*\.zip(?: \(\d+\))?\.part""")
 
-    /** A `recomp-backup-*.zip.part` an earlier run left: never a complete backup, so a run cleans it up. */
+    /** A `recomp-backup-*.zip.part` an earlier run left, or a provider's "… (n).part" copy of one: never a complete backup, so a run cleans it up. */
     fun isPart(name: String): Boolean = PART.matches(name)
 
     /** The date in one of Recomp's backup names, or null for any other file, which is never touched. */
